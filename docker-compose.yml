@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  funasr-server:
+    build: .
+    container_name: funasr_spk_server
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./models:/app/models
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config.json:/app/config.json
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - funasr-network
+
+networks:
+  funasr-network:
+    driver: bridge
