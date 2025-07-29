@@ -125,11 +125,12 @@ class FunASRServer:
 async def main():
     """主函数"""
     server = FunASRServer()
+    shutdown_event = asyncio.Event()
     
     # 设置信号处理
     def signal_handler(sig, frame):
         logger.info("收到终止信号，正在关闭服务器...")
-        asyncio.create_task(server.stop())
+        shutdown_event.set()
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -138,10 +139,9 @@ async def main():
         # 启动服务器
         await server.start()
         
-        # 保持运行
-        while server.is_running:
-            await asyncio.sleep(1)
-            
+        # 等待关闭信号
+        await shutdown_event.wait()
+        
     except Exception as e:
         logger.error(f"服务器错误: {e}")
     finally:
