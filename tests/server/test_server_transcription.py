@@ -35,13 +35,19 @@ class ServerTranscriptionTester:
         self.server_url = server_url
         self.websocket = None
         self.test_results = []
-        self.ping_task = None
         
     async def connect_to_server(self):
         """连接到服务器"""
         try:
             logger.info(f"连接到服务器: {self.server_url}")
-            self.websocket = await websockets.connect(self.server_url)
+            # 增加 ping_interval 和 ping_timeout 避免长时间任务断开连接
+            self.websocket = await websockets.connect(
+                self.server_url,
+                ping_interval=30,  # 每30秒发送一次 ping
+                ping_timeout=60,   # ping 响应超时60秒（给服务器更多处理时间）
+                close_timeout=60,  # 关闭连接超时60秒
+                max_size=100 * 1024 * 1024  # 最大消息大小100MB
+            )
             
             # 接收服务器的连接确认消息
             welcome_message = await self.receive_message(timeout=10)
@@ -52,8 +58,7 @@ class ServerTranscriptionTester:
             
             logger.info("服务器连接成功")
             
-            # 启动心跳任务
-            self.ping_task = asyncio.create_task(self._ping_loop())
+            # 不再需要自定义心跳任务，websockets 库已经内置了 ping/pong 机制
             
             return True
         except Exception as e:
@@ -62,14 +67,6 @@ class ServerTranscriptionTester:
     
     async def disconnect_from_server(self):
         """断开服务器连接"""
-        # 停止心跳任务
-        if self.ping_task:
-            self.ping_task.cancel()
-            try:
-                await self.ping_task
-            except asyncio.CancelledError:
-                pass
-        
         if self.websocket:
             await self.websocket.close()
             logger.info("已断开服务器连接")
@@ -111,21 +108,6 @@ class ServerTranscriptionTester:
                    f"总耗时 {processing_time:.2f}秒")
         
         return test_result
-    
-    async def _ping_loop(self):
-        """心跳循环，保持连接活跃"""
-        try:
-            while True:
-                await asyncio.sleep(30)  # 每30秒发送一次心跳
-                if self.websocket and not self.websocket.closed:
-                    try:
-                        await self.send_message({"type": "ping", "data": {}})
-                        logger.debug("发送心跳")
-                    except Exception as e:
-                        logger.error(f"发送心跳失败: {e}")
-                        break
-        except asyncio.CancelledError:
-            logger.debug("心跳任务已取消")
     
     async def send_message(self, message):
         """发送消息到服务器"""

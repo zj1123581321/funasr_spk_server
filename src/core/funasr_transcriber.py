@@ -85,11 +85,44 @@ class FunASRTranscriber:
             logger.info(f"开始转录: {os.path.basename(audio_path)}")
             
             # 使用与测试脚本完全相同的转录参数
-            result = self.model.generate(
-                input=audio_path,  # 直接使用原始音频文件
-                batch_size_s=300, 
-                hotword=''  # 与测试脚本保持一致
-            )
+            # 在线程池中运行同步的 model.generate，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            
+            # 创建一个任务来定期发送进度更新
+            progress_task = None
+            if progress_callback and duration > 30:  # 仅对超过30秒的音频启用
+                async def send_periodic_progress():
+                    """定期发送进度更新以保持连接活跃"""
+                    progress = 10
+                    while progress < 90:
+                        await asyncio.sleep(10)  # 每10秒更新一次
+                        progress = min(progress + 5, 85)  # 最多到85%
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(progress)
+                        else:
+                            progress_callback(progress)
+                        logger.debug(f"发送进度更新: {progress}%")
+                
+                progress_task = asyncio.create_task(send_periodic_progress())
+            
+            try:
+                # 使用 lambda 包装以正确传递关键字参数
+                result = await loop.run_in_executor(
+                    None,  # 使用默认线程池
+                    lambda: self.model.generate(
+                        input=audio_path,  # 直接使用原始音频文件
+                        batch_size_s=300,
+                        hotword=''
+                    )
+                )
+            finally:
+                # 取消进度更新任务
+                if progress_task:
+                    progress_task.cancel()
+                    try:
+                        await progress_task
+                    except asyncio.CancelledError:
+                        pass
             
             logger.debug(f"FunASR原始结果: {result}")
             

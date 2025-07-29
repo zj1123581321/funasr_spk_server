@@ -54,7 +54,10 @@ class FunASRServer:
                 config.server.host,
                 config.server.port,
                 max_size=config.server.max_file_size_mb * 1024 * 1024,
-                max_queue=config.server.max_connections
+                max_queue=config.server.max_connections,
+                ping_interval=30,  # 每30秒发送一次 ping
+                ping_timeout=60,   # ping 响应超时60秒（给客户端更多处理时间）
+                close_timeout=60   # 关闭连接超时60秒
             )
             
             self.is_running = True
