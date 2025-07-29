@@ -4,13 +4,20 @@ FROM python:3.10-slim
 # 设置工作目录
 WORKDIR /app
 
+# 设置环境变量避免交互式安装
+ENV DEBIAN_FRONTEND=noninteractive
+
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
     wget \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    gcc \
+    g++ \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # 复制requirements.txt
 COPY requirements.txt .

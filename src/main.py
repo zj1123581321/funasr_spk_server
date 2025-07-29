@@ -19,6 +19,7 @@ from src.core.funasr_transcriber import transcriber
 logger.info("使用FunASR转录器")
 from src.api.websocket_handler import ws_handler
 from src.utils.notification import send_custom_notification
+from src.utils.platform_utils import log_platform_info, check_system_requirements
 
 
 class FunASRServer:
@@ -124,6 +125,10 @@ class FunASRServer:
 
 async def main():
     """主函数"""
+    # 记录平台信息和检查系统要求
+    log_platform_info()
+    check_system_requirements()
+    
     server = FunASRServer()
     shutdown_event = asyncio.Event()
     
