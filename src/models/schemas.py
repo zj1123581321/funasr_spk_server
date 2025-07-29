@@ -57,6 +57,8 @@ class TranscriptionTask(BaseModel):
     error: Optional[str] = Field(None, description="错误信息")
     result: Optional[TranscriptionResult] = Field(None, description="转录结果")
     force_refresh: bool = Field(default=False, description="强制刷新缓存")
+    output_format: str = Field(default="json", description="输出格式: json 或 srt")
+    srt_content: Optional[str] = Field(None, description="SRT格式内容")
     
     model_config = {"protected_namespaces": ()}
 
@@ -93,6 +95,7 @@ class FileUploadRequest(BaseModel):
     file_size: int = Field(..., description="文件大小（字节）")
     file_hash: str = Field(..., description="文件哈希值")
     force_refresh: bool = Field(default=False, description="强制刷新缓存")
+    output_format: str = Field(default="json", description="输出格式: json 或 srt")
     
     model_config = {"protected_namespaces": ()}
 
