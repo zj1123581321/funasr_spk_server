@@ -3,7 +3,7 @@
     "filename": "spk_extract.mp3",
     "file_path": "D:\\MyFolders\\Developments\\0GithubProjectsTest\\250728_funasr\\funasr_spk_server\\samples\\spk_extract.mp3",
     "file_size_kb": 635.59,
-    "processing_time": 1753759191.20018
+    "processing_time": 1753771983.2671928
   },
   "model_config": {
     "model": "paraformer-zh",

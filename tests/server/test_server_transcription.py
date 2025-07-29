@@ -20,6 +20,7 @@ import websockets
 import hashlib
 import base64
 from pathlib import Path
+from datetime import datetime
 from loguru import logger
 
 # 添加项目根目录到Python路径
@@ -344,12 +345,15 @@ class ServerTranscriptionTester:
         output_dir = project_root / "tests" / "output"
         output_dir.mkdir(exist_ok=True)
         
-        output_path = output_dir / f"{filename}.json"
+        # 添加时间戳前缀避免文件混合
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"{timestamp}_{filename}.json"
+        output_path = output_dir / output_filename
         
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"测试结果已保存: {filename}.json")
+        logger.info(f"测试结果已保存: {output_filename}")
     
     def save_test_summary(self):
         """保存测试总结"""
@@ -363,12 +367,16 @@ class ServerTranscriptionTester:
         }
         
         output_dir = project_root / "tests" / "output"
-        output_path = output_dir / "server_test_summary.json"
+        
+        # 添加时间戳前缀避免文件混合
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"{timestamp}_server_test_summary.json"
+        output_path = output_dir / output_filename
         
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"测试总结已保存: server_test_summary.json")
+        logger.info(f"测试总结已保存: {output_filename}")
         logger.info(f"测试完成: {summary['successful_tests']}/{summary['total_tests']} 成功")
 
 
