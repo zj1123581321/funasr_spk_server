@@ -1,8 +1,9 @@
 """
-FunASR转录核心模块 - 改进版
+FunASR转录核心模块 - 与测试脚本完全一致的实现
 """
 import os
 import time
+import asyncio
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -13,54 +14,43 @@ from src.utils.file_utils import convert_to_wav, get_audio_duration
 
 
 class FunASRTranscriber:
-    """FunASR转录器 - 改进版"""
+    """FunASR转录器 - 与测试脚本完全一致的实现"""
     
     def __init__(self):
         self.model = None
-        self.model_with_spk = None
         self.is_initialized = False
+        self.cache_dir = "./models"  # 模型缓存目录
         
     async def initialize(self):
-        """初始化模型"""
+        """初始化模型 - 使用与测试脚本完全相同的配置"""
         if self.is_initialized:
             return
         
         try:
-            logger.info("开始加载FunASR模型...")
+            logger.info("开始加载FunASR完整模型（包含说话人识别）...")
             
-            # 加载基础模型（不含说话人识别，更稳定）
-            try:
-                logger.info("加载基础ASR模型...")
-                self.model = AutoModel(
-                    model="paraformer-zh",
-                    device="cpu",
-                    disable_update=True,
-                    disable_pbar=True
-                )
-                logger.info("基础ASR模型加载成功")
-            except Exception as e:
-                logger.error(f"基础模型加载失败: {e}")
-                raise
+            # 确保缓存目录存在
+            Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
             
-            # 尝试加载带说话人识别的模型
-            try:
-                logger.info("尝试加载带说话人识别的模型...")
-                self.model_with_spk = AutoModel(
-                    model="paraformer-zh",
-                    vad_model="fsmn-vad",
-                    punc_model="ct-punc",
-                    spk_model="cam++",
-                    device="cpu",
-                    disable_update=True,
-                    disable_pbar=True
-                )
-                logger.info("说话人识别模型加载成功")
-            except Exception as e:
-                logger.warning(f"说话人识别模型加载失败，将使用基础模型: {e}")
-                self.model_with_spk = None
+            # 使用与测试脚本完全相同的模型配置
+            self.model = AutoModel(
+                model="paraformer-zh", 
+                model_revision="v2.0.4",
+                vad_model="fsmn-vad", 
+                vad_model_revision="v2.0.4",
+                punc_model="ct-punc-c", 
+                punc_model_revision="v2.0.4",
+                spk_model="cam++", 
+                spk_model_revision="v2.0.2",
+                # 添加缓存配置避免重复下载
+                cache_dir=self.cache_dir,
+                device="cpu",
+                disable_update=True,  # 禁用自动更新
+                disable_pbar=True     # 禁用进度条
+            )
             
             self.is_initialized = True
-            logger.info("FunASR模型初始化完成")
+            logger.info("FunASR完整模型加载成功")
             
         except Exception as e:
             logger.error(f"加载FunASR模型失败: {e}")
@@ -73,64 +63,45 @@ class FunASRTranscriber:
         progress_callback: Optional[callable] = None,
         enable_speaker: bool = True
     ) -> TranscriptionResult:
-        """转录音频文件"""
+        """转录音频文件 - 使用与测试脚本相同的方法"""
         if not self.is_initialized:
             await self.initialize()
         
         start_time = time.time()
-        wav_path = audio_path
+        original_path = audio_path
         
         try:
-            # 转换为WAV格式
-            if not audio_path.endswith('.wav'):
-                logger.debug(f"转换音频格式: {audio_path}")
-                wav_path = convert_to_wav(audio_path)
+            # 更新进度
+            if progress_callback:
+                if asyncio.iscoroutinefunction(progress_callback):
+                    await progress_callback(10)
+                else:
+                    progress_callback(10)
             
-            # 获取音频时长
-            duration = get_audio_duration(wav_path)
+            # 获取音频时长（直接使用原文件）
+            duration = get_audio_duration(audio_path)
             logger.info(f"音频时长: {duration:.2f}秒")
             
+            logger.info(f"开始转录: {os.path.basename(audio_path)}")
+            
+            # 使用与测试脚本完全相同的转录参数
+            result = self.model.generate(
+                input=audio_path,  # 直接使用原始音频文件
+                batch_size_s=300, 
+                hotword=''  # 与测试脚本保持一致
+            )
+            
+            logger.debug(f"FunASR原始结果: {result}")
+            
             # 更新进度
             if progress_callback:
-                await progress_callback(10)
-            
-            # 选择使用的模型
-            use_spk_model = enable_speaker and self.model_with_spk is not None
-            model = self.model_with_spk if use_spk_model else self.model
-            
-            logger.info(f"开始转录: {os.path.basename(audio_path)} (使用{'说话人识别' if use_spk_model else '基础'}模型)")
-            
-            # 执行转录
-            try:
-                # 对于较长的音频，使用更大的batch_size_s
-                batch_size_s = 300 if duration > 60 else 100
-                
-                result = model.generate(
-                    input=wav_path,
-                    batch_size_s=batch_size_s,
-                    hotword="",  # 避免热词相关的问题
-                    disable_pbar=True
-                )
-                
-            except Exception as e:
-                # 如果说话人识别模型失败，回退到基础模型
-                if use_spk_model and "math domain error" in str(e):
-                    logger.warning(f"说话人识别模型失败，回退到基础模型: {e}")
-                    result = self.model.generate(
-                        input=wav_path,
-                        batch_size_s=300,
-                        disable_pbar=True
-                    )
-                    use_spk_model = False
+                if asyncio.iscoroutinefunction(progress_callback):
+                    await progress_callback(90)
                 else:
-                    raise
+                    progress_callback(90)
             
-            # 更新进度
-            if progress_callback:
-                await progress_callback(90)
-            
-            # 解析结果
-            segments = self._parse_result(result, use_spk_model)
+            # 解析结果并合并相同说话人的连续句子
+            segments = self._parse_and_merge_segments(result)
             
             # 提取说话人列表
             speakers = sorted(list(set(seg.speaker for seg in segments)))
@@ -154,7 +125,10 @@ class FunASRTranscriber:
             
             # 更新进度
             if progress_callback:
-                await progress_callback(100)
+                if asyncio.iscoroutinefunction(progress_callback):
+                    await progress_callback(100)
+                else:
+                    progress_callback(100)
             
             logger.info(f"转录完成: {len(segments)}个片段, {len(speakers)}个说话人, 耗时{processing_time:.2f}秒")
             
@@ -163,19 +137,14 @@ class FunASRTranscriber:
         except Exception as e:
             logger.error(f"转录失败: {e}")
             raise Exception(f"转录失败: {str(e)}")
-        finally:
-            # 清理临时文件
-            if wav_path != audio_path and os.path.exists(wav_path):
-                try:
-                    os.remove(wav_path)
-                except:
-                    pass
     
-    def _parse_result(self, result: Any, has_speaker_info: bool = True) -> List[TranscriptionSegment]:
-        """解析FunASR返回的结果"""
+    def _parse_and_merge_segments(self, result: Any) -> List[TranscriptionSegment]:
+        """解析FunASR结果并合并相同说话人的连续句子"""
         segments = []
         
-        # 处理不同的结果格式
+        logger.debug(f"解析结果 - 输入类型: {type(result)}")
+        
+        # 处理结果格式
         if isinstance(result, list) and len(result) > 0:
             result_data = result[0]
         elif isinstance(result, dict):
@@ -184,90 +153,97 @@ class FunASRTranscriber:
             logger.warning(f"未知的结果格式: {type(result)}")
             return segments
         
-        # 首先尝试从sentence_info获取
-        if has_speaker_info and 'sentence_info' in result_data:
-            sentences = result_data.get('sentence_info', [])
+        logger.debug(f"使用数据，键: {list(result_data.keys()) if isinstance(result_data, dict) else 'N/A'}")
+        
+        # 检查是否有sentence_info（这是成功转录的标志）
+        if 'sentence_info' not in result_data:
+            logger.warning("结果中没有sentence_info字段，可能转录失败")
+            return segments
+        
+        sentences = result_data.get('sentence_info', [])
+        logger.info(f"找到 {len(sentences)} 个句子片段")
+        
+        # 解析每个句子
+        raw_segments = []
+        for sentence in sentences:
+            # 提取时间戳（毫秒转秒）
+            start_time = sentence.get('start', 0) / 1000.0
+            end_time = sentence.get('end', 0) / 1000.0
             
-            for idx, sentence in enumerate(sentences):
-                # 提取时间戳（毫秒转秒）
-                start_time = sentence.get('start', 0) / 1000.0
-                end_time = sentence.get('end', 0) / 1000.0
-                
-                # 提取文本
-                text = sentence.get('text', '').strip()
-                
-                # 提取说话人
-                speaker = sentence.get('spk', f"Speaker1")
-                if isinstance(speaker, int):
-                    speaker = f"Speaker{speaker + 1}"
-                elif speaker == "" or speaker is None:
-                    speaker = "Speaker1"
-                
-                if text:  # 只添加非空文本
-                    segment = TranscriptionSegment(
-                        start_time=round(start_time, 2),
-                        end_time=round(end_time, 2),
-                        text=text,
-                        speaker=speaker
-                    )
-                    segments.append(segment)
-        
-        # 如果没有sentence_info或segments为空，尝试从text和timestamp解析
-        if not segments and 'text' in result_data:
-            text = result_data.get('text', '')
-            timestamps = result_data.get('timestamp', [])
+            # 提取文本
+            text = sentence.get('text', '').strip()
             
-            if isinstance(text, str) and text:
-                # 如果是单一文本，创建一个segment
-                if not timestamps:
-                    segment = TranscriptionSegment(
-                        start_time=0.0,
-                        end_time=0.0,
-                        text=text,
-                        speaker="Speaker1"
-                    )
-                    segments.append(segment)
-                else:
-                    # 尝试按标点符号分割文本
-                    import re
-                    sentences = re.split(r'[。！？；]', text)
-                    sentences = [s.strip() for s in sentences if s.strip()]
-                    
-                    # 分配时间戳
-                    for idx, sent in enumerate(sentences):
-                        if idx < len(timestamps):
-                            ts = timestamps[idx]
-                            start_time = ts[0] / 1000.0 if isinstance(ts, list) and len(ts) > 0 else 0
-                            end_time = ts[1] / 1000.0 if isinstance(ts, list) and len(ts) > 1 else start_time + 1
-                        else:
-                            start_time = 0
-                            end_time = 0
-                        
-                        segment = TranscriptionSegment(
-                            start_time=round(start_time, 2),
-                            end_time=round(end_time, 2),
-                            text=sent,
-                            speaker="Speaker1"
-                        )
-                        segments.append(segment)
+            # 提取说话人 - 使用 Speaker1, Speaker2 格式
+            speaker_id = sentence.get('spk', 0)
+            if isinstance(speaker_id, int):
+                speaker = f"Speaker{speaker_id + 1}"
+            else:
+                speaker = "Speaker1"
+            
+            if text:  # 只添加非空文本
+                segment = TranscriptionSegment(
+                    start_time=round(start_time, 2),
+                    end_time=round(end_time, 2),
+                    text=text,
+                    speaker=speaker
+                )
+                raw_segments.append(segment)
         
-        # 如果还是没有segments，尝试其他字段
-        if not segments:
-            # 尝试从其他可能的字段获取
-            for key in ['result', 'recognition_result', 'transcript']:
-                if key in result_data:
-                    text = str(result_data[key])
-                    if text and text != 'None':
-                        segment = TranscriptionSegment(
-                            start_time=0.0,
-                            end_time=0.0,
-                            text=text,
-                            speaker="Speaker1"
-                        )
-                        segments.append(segment)
-                        break
+        # 合并相同说话人的连续句子（可选，根据需求）
+        if self._should_merge_segments():
+            segments = self._merge_consecutive_segments(raw_segments)
+        else:
+            segments = raw_segments
         
+        logger.info(f"最终生成 {len(segments)} 个转录片段")
         return segments
+    
+    def _should_merge_segments(self) -> bool:
+        """判断是否应该合并片段 - 启用相同说话人连续句子的合并"""
+        # 启用合并功能，将相同说话人的连续句子合并
+        return True
+    
+    def _merge_consecutive_segments(self, segments: List[TranscriptionSegment]) -> List[TranscriptionSegment]:
+        """合并相同说话人的连续句子"""
+        if not segments:
+            return segments
+        
+        merged = []
+        current = segments[0]
+        
+        logger.debug(f"开始合并 {len(segments)} 个片段")
+        
+        for i in range(1, len(segments)):
+            next_seg = segments[i]
+            
+            # 检查是否为同一说话人且时间间隔较短（小于3秒）
+            time_gap = next_seg.start_time - current.end_time
+            
+            logger.debug(f"片段 {i}: {current.speaker} -> {next_seg.speaker}, 时间间隔: {time_gap:.2f}s")
+            
+            if (current.speaker == next_seg.speaker and 
+                time_gap < 3.0):  # 增加到3秒的间隔阈值
+                # 合并文本和时间 - 保留所有标点符号
+                merged_text = current.text + next_seg.text
+                current = TranscriptionSegment(
+                    start_time=current.start_time,
+                    end_time=next_seg.end_time,
+                    text=merged_text,
+                    speaker=current.speaker
+                )
+                logger.debug(f"合并片段: {merged_text[:20]}...")
+            else:
+                # 添加当前片段，开始新的片段
+                merged.append(current)
+                logger.debug(f"完成片段: [{current.speaker}] {current.text[:20]}...")
+                current = next_seg
+        
+        # 添加最后一个片段
+        merged.append(current)
+        logger.debug(f"完成片段: [{current.speaker}] {current.text[:20]}...")
+        
+        logger.info(f"合并完成: {len(segments)} -> {len(merged)} 个片段")
+        return merged
 
 
 # 全局转录器实例
