@@ -6,7 +6,7 @@ import websockets
 import json
 
 async def test_connection():
-    uri = "ws://localhost:8766"
+    uri = "ws://localhost:8767"
     try:
         print(f"连接到: {uri}")
         websocket = await websockets.connect(uri)
