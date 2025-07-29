@@ -22,7 +22,6 @@ class TranscriptionSegment(BaseModel):
     end_time: float = Field(..., description="结束时间（秒）")
     text: str = Field(..., description="转录文本")
     speaker: str = Field(..., description="说话人标识")
-    confidence: Optional[float] = Field(None, description="置信度")
     
     model_config = {"protected_namespaces": ()}
 
