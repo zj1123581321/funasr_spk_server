@@ -45,6 +45,14 @@ Thumbs.db
 # 配置文件（生产环境）
 config.prod.json
 .env
+.env.local
+.env.*.local
+
+# macOS 特定文件
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
 
 # 音视频文件（开发环境）
 *.wav

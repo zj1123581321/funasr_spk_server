@@ -45,7 +45,7 @@ async def save_uploaded_file(file_data: bytes, filename: str) -> Tuple[str, str]
     file_hash = hashlib.md5(file_data).hexdigest()
     ext = get_file_extension(filename)
     safe_filename = f"{file_hash}{ext}"
-    file_path = os.path.join(config.server.upload_dir, safe_filename)
+    file_path = str(Path(config.server.upload_dir) / safe_filename)
     
     # 保存文件
     async with aiofiles.open(file_path, 'wb') as f:
@@ -68,10 +68,7 @@ async def delete_file(file_path: str):
 def convert_to_wav(input_path: str, output_path: Optional[str] = None) -> str:
     """将音视频文件转换为WAV格式"""
     if output_path is None:
-        output_path = os.path.join(
-            config.server.temp_dir,
-            f"{Path(input_path).stem}.wav"
-        )
+        output_path = str(Path(config.server.temp_dir) / f"{Path(input_path).stem}.wav")
     
     # 确保临时目录存在
     Path(config.server.temp_dir).mkdir(parents=True, exist_ok=True)
