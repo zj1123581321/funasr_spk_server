@@ -133,7 +133,7 @@ class ServerTranscriptionTester:
         except asyncio.TimeoutError:
             raise Exception(f"接收消息超时 ({timeout}秒)")
     
-    async def upload_file_and_transcribe(self, audio_path, force_refresh=False):
+    async def upload_file_and_transcribe(self, audio_path, force_refresh=False, output_format="json"):
         """上传文件并进行转录"""
         logger.info(f"开始转录测试: {os.path.basename(audio_path)}")
         start_time = time.time()
@@ -156,7 +156,8 @@ class ServerTranscriptionTester:
                 "file_name": file_name,
                 "file_size": file_size,
                 "file_hash": file_hash,
-                "force_refresh": force_refresh
+                "force_refresh": force_refresh,
+                "output_format": output_format
             }
         }
         
@@ -351,6 +352,42 @@ class ServerTranscriptionTester:
         
         return validation_errors
     
+    async def test_srt_format(self, audio_path):
+        """测试SRT格式输出"""
+        logger.info(f"测试SRT格式输出: {os.path.basename(audio_path)}")
+        
+        try:
+            # 测试SRT格式转录
+            result = await self.upload_file_and_transcribe(str(audio_path), output_format="srt")
+            
+            # 验证SRT格式结果
+            transcription_data = result.get("transcription_result", {})
+            
+            if transcription_data.get("format") == "srt":
+                srt_content = transcription_data.get("content", "")
+                logger.info(f"✓ 成功获得SRT格式结果，长度: {len(srt_content)} 字符")
+                
+                # 保存SRT文件
+                output_dir = project_root / "tests" / "output"
+                output_dir.mkdir(exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                srt_filename = f"{timestamp}_srt_test_{audio_path.stem}.srt"
+                srt_path = output_dir / srt_filename
+                
+                with open(srt_path, "w", encoding="utf-8") as f:
+                    f.write(srt_content)
+                
+                logger.info(f"SRT文件已保存: {srt_filename}")
+                return True
+            else:
+                logger.error("未收到SRT格式结果")
+                return False
+                
+        except Exception as e:
+            logger.error(f"SRT格式测试失败: {e}")
+            return False
+    
     async def run_test_suite(self):
         """运行完整的测试套件"""
         logger.info("=== 开始服务器转录功能测试 ===")
@@ -378,7 +415,7 @@ class ServerTranscriptionTester:
                 logger.info(f"\n=== 测试文件 {i}/{len(audio_files)}: {audio_file.name} ===")
                 
                 try:
-                    # 测试转录
+                    # 测试JSON格式转录
                     result = await self.upload_file_and_transcribe(str(audio_file))
                     
                     # 验证结果
@@ -392,6 +429,11 @@ class ServerTranscriptionTester:
                     
                     # 保存单个测试结果
                     self.save_test_result(result, f"server_test_{audio_file.stem}")
+                    
+                    # 测试SRT格式（仅对第一个文件）
+                    if i == 4:
+                        logger.info("\n=== 测试SRT格式输出 ===")
+                        await self.test_srt_format(audio_file)
                     
                 except Exception as e:
                     logger.error(f"✗ 测试失败: {e}")

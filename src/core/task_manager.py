@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from src.core.config import config
 from src.core.database import db_manager
-from src.models.schemas import TranscriptionTask, TaskStatus, FileUploadRequest
+from src.models.schemas import TranscriptionTask, TaskStatus, FileUploadRequest, TranscriptionResult
 
 
 class TaskManager:
@@ -64,7 +64,8 @@ class TaskManager:
             file_path="",  # 文件路径在上传完成后设置
             file_size=request.file_size,
             file_hash=request.file_hash,
-            force_refresh=request.force_refresh
+            force_refresh=request.force_refresh,
+            output_format=request.output_format
         )
         
         # 保存任务
@@ -89,11 +90,31 @@ class TaskManager:
         
         # 检查缓存
         if not task.force_refresh:
-            cached_result = await db_manager.get_cached_result(task.file_hash)
+            cached_result = await db_manager.get_cached_result(task.file_hash, task.output_format)
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
                 task.status = TaskStatus.COMPLETED
-                task.result = cached_result
+                
+                if task.output_format == "srt":
+                    # SRT格式缓存结果
+                    if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                        task.srt_content = cached_result["content"]
+                        # 创建简化的结果对象
+                        from src.models.schemas import TranscriptionResult
+                        task.result = TranscriptionResult(
+                            task_id=task_id,
+                            file_name=task.file_name,
+                            file_hash=task.file_hash,
+                            duration=cached_result.get("duration", 0),
+                            segments=[],
+                            speakers=[],
+                            processing_time=0,
+                            error=None
+                        )
+                else:
+                    # JSON格式缓存结果
+                    task.result = cached_result
+                
                 task.completed_at = datetime.now()
                 
                 # 通知完成
@@ -115,8 +136,22 @@ class TaskManager:
         
         task.status = TaskStatus.CANCELLED
         task.error = "用户取消"
-        logger.info(f"任务已取消: {task_id}")
+        task.completed_at = datetime.now()
         
+        # 删除文件（如果配置了且没有其他任务使用）
+        if config.transcription.delete_after_transcription and task.file_path:
+            has_pending_tasks = any(
+                t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
+                for t in self.tasks.values()
+                if t.task_id != task.task_id
+            )
+            
+            if not has_pending_tasks:
+                from src.utils.file_utils import delete_file
+                await delete_file(task.file_path)
+                logger.debug(f"任务取消，文件已删除: {task.file_path}")
+        
+        logger.info(f"任务已取消: {task_id}")
         return True
     
     async def _worker(self, worker_id: int):
@@ -169,25 +204,61 @@ class TaskManager:
             result = await transcriber.transcribe(
                 audio_path=task.file_path,
                 task_id=task_id,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                output_format=task.output_format
             )
             
             # 更新任务结果
             task.status = TaskStatus.COMPLETED
-            task.result = result
+            if task.output_format == "srt":
+                # SRT格式结果
+                task.srt_content = result["content"]
+                
+                # 创建转录结果对象用于缓存
+                from src.models.schemas import TranscriptionResult
+                transcription_result = TranscriptionResult(
+                    task_id=task_id,
+                    file_name=result["file_name"],
+                    file_hash=result["file_hash"],
+                    duration=result["duration"],
+                    segments=[],  # SRT格式不存储片段信息
+                    speakers=[],  # SRT格式不存储说话人列表
+                    processing_time=result["processing_time"],
+                    error=None
+                )
+                task.result = transcription_result
+                
+                # 保存到缓存（包含原始结果）
+                await db_manager.save_result(transcription_result, result["raw_result"])
+            else:
+                # JSON格式结果
+                transcription_result, raw_result = result
+                task.result = transcription_result
+                
+                # 保存到缓存（包含原始结果）
+                await db_manager.save_result(transcription_result, raw_result)
+            
             task.completed_at = datetime.now()
             task.progress = 100
-            
-            # 保存到缓存
-            await db_manager.save_result(result)
             
             # 通知完成
             await self._notify_task_complete(task)
             
-            # 删除文件（如果配置了）
+            # 删除文件（如果配置了），但要检查是否还有其他任务使用这个文件
             if config.transcription.delete_after_transcription:
-                from src.utils.file_utils import delete_file
-                await delete_file(task.file_path)
+                # 检查是否还有其他任务使用相同的文件哈希
+                has_pending_tasks = any(
+                    t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
+                    for t in self.tasks.values()
+                    if t.task_id != task.task_id
+                )
+                
+                if not has_pending_tasks:
+                    from src.utils.file_utils import delete_file
+                    await delete_file(task.file_path)
+                    logger.debug(f"文件已删除: {task.file_path}")
+                else:
+                    logger.debug(f"保留文件，还有其他任务使用: {task.file_path}")
             
             logger.info(f"任务完成: {task_id}")
             
@@ -208,6 +279,19 @@ class TaskManager:
             else:
                 # 通知失败
                 await self._notify_task_failed(task)
+                
+                # 删除文件（如果配置了且没有其他任务使用）
+                if config.transcription.delete_after_transcription and task.file_path:
+                    has_pending_tasks = any(
+                        t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
+                        for t in self.tasks.values()
+                        if t.task_id != task.task_id
+                    )
+                    
+                    if not has_pending_tasks:
+                        from src.utils.file_utils import delete_file
+                        await delete_file(task.file_path)
+                        logger.debug(f"任务失败，文件已删除: {task.file_path}")
                 
                 # 发送企微通知
                 await self._send_wework_notification(task, "failed")
@@ -231,9 +315,21 @@ class TaskManager:
         """通知任务完成"""
         try:
             from src.api.websocket_handler import ws_handler
+            
+            # 根据输出格式准备结果
+            if task.output_format == "srt":
+                result_data = {
+                    "format": "srt",
+                    "content": task.srt_content,
+                    "file_name": task.file_name,
+                    "file_hash": task.file_hash
+                }
+            else:
+                result_data = task.result.dict() if task.result else None
+            
             await ws_handler.notify_task_complete(
                 task_id=task.task_id,
-                result=task.result.dict() if task.result else None
+                result=result_data
             )
             
             # 发送企微通知
@@ -254,6 +350,32 @@ class TaskManager:
             )
         except Exception as e:
             logger.error(f"通知任务失败失败: {e}")
+    
+    def _convert_json_to_srt(self, result: TranscriptionResult) -> str:
+        """将JSON格式的转录结果转换为SRT格式"""
+        srt_lines = []
+        
+        for idx, segment in enumerate(result.segments, 1):
+            # 转换时间格式
+            start_time = self._seconds_to_srt_time(segment.start_time)
+            end_time = self._seconds_to_srt_time(segment.end_time)
+            
+            # SRT格式：序号 -> 时间 -> 文本
+            srt_lines.append(f"{idx}")
+            srt_lines.append(f"{start_time} --> {end_time}")
+            srt_lines.append(f"{segment.speaker}:{segment.text}")
+            srt_lines.append("")  # 空行分隔
+        
+        return "\n".join(srt_lines)
+    
+    def _seconds_to_srt_time(self, seconds: float) -> str:
+        """将秒数转换为SRT时间格式 (HH:MM:SS,mmm)"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
     
     async def _send_wework_notification(self, task: TranscriptionTask, event_type: str):
         """发送企微通知"""

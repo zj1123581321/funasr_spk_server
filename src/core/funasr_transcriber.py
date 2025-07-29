@@ -5,8 +5,8 @@ import os
 import time
 import asyncio
 import json
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Optional, Dict, Any, Union
+from datetime import datetime, timedelta
 from pathlib import Path
 from loguru import logger
 from funasr import AutoModel
@@ -89,8 +89,9 @@ class FunASRTranscriber:
         audio_path: str,
         task_id: str,
         progress_callback: Optional[callable] = None,
-        enable_speaker: bool = True
-    ) -> TranscriptionResult:
+        enable_speaker: bool = True,
+        output_format: str = "json"
+    ) -> Union[TranscriptionResult, str, Dict[str, Any]]:
         """转录音频文件 - 使用与测试脚本相同的方法"""
         if not self.is_initialized:
             await self.initialize()
@@ -161,39 +162,65 @@ class FunASRTranscriber:
                 else:
                     progress_callback(90)
             
-            # 解析结果并合并相同说话人的连续句子
-            segments = self._parse_and_merge_segments(result)
-            
-            # 提取说话人列表
-            speakers = sorted(list(set(seg.speaker for seg in segments)))
-            
             # 计算文件哈希
             from src.utils.file_utils import calculate_file_hash
             file_hash = await calculate_file_hash(audio_path)
             
             processing_time = time.time() - start_time
             
-            # 构建转录结果
-            transcription_result = TranscriptionResult(
-                task_id=task_id,
-                file_name=os.path.basename(audio_path),
-                file_hash=file_hash,
-                duration=duration,
-                segments=segments,
-                speakers=speakers,
-                processing_time=processing_time
-            )
-            
-            # 更新进度
-            if progress_callback:
-                if asyncio.iscoroutinefunction(progress_callback):
-                    await progress_callback(100)
-                else:
-                    progress_callback(100)
-            
-            logger.info(f"转录完成: {len(segments)}个片段, {len(speakers)}个说话人, 耗时{processing_time:.2f}秒")
-            
-            return transcription_result
+            # 根据输出格式处理结果
+            if output_format == "srt":
+                # SRT格式：不合并说话人，直接转换原始结果
+                srt_content = self._generate_srt_from_raw_result(result)
+                
+                # 更新进度
+                if progress_callback:
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(100)
+                    else:
+                        progress_callback(100)
+                
+                logger.info(f"转录完成(SRT格式): 耗时{processing_time:.2f}秒")
+                
+                # 返回包含原始结果的字典，以便调用者可以保存缓存
+                return {
+                    "format": "srt",
+                    "content": srt_content,
+                    "file_name": os.path.basename(audio_path),
+                    "file_hash": file_hash,
+                    "duration": duration,
+                    "processing_time": processing_time,
+                    "raw_result": result  # 保存原始结果用于缓存
+                }
+            else:
+                # JSON格式：原有逻辑，合并相同说话人的连续句子
+                segments = self._parse_and_merge_segments(result)
+                
+                # 提取说话人列表
+                speakers = sorted(list(set(seg.speaker for seg in segments)))
+                
+                # 构建转录结果
+                transcription_result = TranscriptionResult(
+                    task_id=task_id,
+                    file_name=os.path.basename(audio_path),
+                    file_hash=file_hash,
+                    duration=duration,
+                    segments=segments,
+                    speakers=speakers,
+                    processing_time=processing_time
+                )
+                
+                # 更新进度
+                if progress_callback:
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(100)
+                    else:
+                        progress_callback(100)
+                
+                logger.info(f"转录完成: {len(segments)}个片段, {len(speakers)}个说话人, 耗时{processing_time:.2f}秒")
+                
+                # 返回包含原始结果的元组，以便调用者可以保存缓存
+                return (transcription_result, result)
             
         except Exception as e:
             logger.error(f"转录失败: {e}")
@@ -305,6 +332,66 @@ class FunASRTranscriber:
         
         logger.info(f"合并完成: {len(segments)} -> {len(merged)} 个片段")
         return merged
+    
+    def _generate_srt_from_raw_result(self, result: Any) -> str:
+        """从原始FunASR结果生成SRT格式字符串"""
+        srt_lines = []
+        
+        # 处理结果格式
+        if isinstance(result, list) and len(result) > 0:
+            result_data = result[0]
+        elif isinstance(result, dict):
+            result_data = result
+        else:
+            logger.warning(f"未知的结果格式: {type(result)}")
+            return ""
+        
+        # 检查是否有sentence_info
+        if 'sentence_info' not in result_data:
+            logger.warning("结果中没有sentence_info字段，可能转录失败")
+            return ""
+        
+        sentences = result_data.get('sentence_info', [])
+        logger.info(f"生成SRT: {len(sentences)} 个句子片段")
+        
+        # 生成SRT格式
+        for idx, sentence in enumerate(sentences, 1):
+            # 提取时间戳（毫秒转秒）
+            start_ms = sentence.get('start', 0)
+            end_ms = sentence.get('end', 0)
+            
+            # 转换为SRT时间格式 (HH:MM:SS,mmm)
+            start_time = self._ms_to_srt_time(start_ms)
+            end_time = self._ms_to_srt_time(end_ms)
+            
+            # 提取文本
+            text = sentence.get('text', '').strip()
+            
+            # 提取说话人
+            speaker_id = sentence.get('spk', 0)
+            if isinstance(speaker_id, int):
+                speaker = f"Speaker{speaker_id + 1}"
+            else:
+                speaker = "Speaker1"
+            
+            if text:  # 只添加非空文本
+                # SRT格式：序号 -> 时间 -> 文本
+                srt_lines.append(f"{idx}")
+                srt_lines.append(f"{start_time} --> {end_time}")
+                srt_lines.append(f"{speaker}:{text}")
+                srt_lines.append("")  # 空行分隔
+        
+        return "\n".join(srt_lines)
+    
+    def _ms_to_srt_time(self, milliseconds: int) -> str:
+        """将毫秒转换为SRT时间格式 (HH:MM:SS,mmm)"""
+        seconds = milliseconds / 1000
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        ms = int((seconds % 1) * 1000)
+        
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
 # 全局转录器实例
