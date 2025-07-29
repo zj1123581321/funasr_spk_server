@@ -225,15 +225,11 @@ class FunASRTranscriber:
         return segments
 
 
-# 优先使用本地模型版本
+# 直接使用改进版FunASR转录器
 try:
-    from src.core.local_transcriber import transcriber
-    logger.info("使用本地模型FunASR转录器")
+    from src.core.funasr_transcriber import transcriber
+    logger.info("使用改进版FunASR转录器")
 except ImportError:
-    try:
-        from src.core.funasr_transcriber import transcriber
-        logger.info("使用改进版FunASR转录器")
-    except ImportError:
-        # 如果导入失败，使用原版
-        transcriber = FunASRTranscriber()
-        logger.warning("使用原版转录器")
+    # 如果导入失败，使用原版
+    transcriber = FunASRTranscriber()
+    logger.warning("使用原版转录器")
