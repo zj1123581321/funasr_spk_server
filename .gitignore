@@ -22,6 +22,7 @@ venv.bak/
 ref_codes/
 models
 /tests/output/
+/sampels
 
 # 测试文件
 .pytest_cache/
