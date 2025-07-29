@@ -35,6 +35,7 @@ class ServerTranscriptionTester:
         self.server_url = server_url
         self.websocket = None
         self.test_results = []
+        self.ping_task = None
         
     async def connect_to_server(self):
         """连接到服务器"""
@@ -50,6 +51,10 @@ class ServerTranscriptionTester:
                 logger.debug(f"接收到服务器欢迎消息: {welcome_message.get('data', {}).get('message', '')}")
             
             logger.info("服务器连接成功")
+            
+            # 启动心跳任务
+            self.ping_task = asyncio.create_task(self._ping_loop())
+            
             return True
         except Exception as e:
             logger.error(f"连接服务器失败: {e}")
@@ -57,6 +62,14 @@ class ServerTranscriptionTester:
     
     async def disconnect_from_server(self):
         """断开服务器连接"""
+        # 停止心跳任务
+        if self.ping_task:
+            self.ping_task.cancel()
+            try:
+                await self.ping_task
+            except asyncio.CancelledError:
+                pass
+        
         if self.websocket:
             await self.websocket.close()
             logger.info("已断开服务器连接")
@@ -68,6 +81,51 @@ class ServerTranscriptionTester:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+    
+    def _process_cached_result(self, response, file_name, file_size, file_hash, start_time):
+        """处理缓存结果"""
+        transcription_result = response["data"]["result"]
+        processing_time = time.time() - start_time
+        
+        # 验证结果
+        if not transcription_result:
+            raise Exception("未收到转录结果")
+        
+        # 记录测试结果
+        test_result = {
+            "file_name": file_name,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "task_id": response["data"].get("task_id", "cached"),
+            "processing_time": processing_time,
+            "server_processing_time": transcription_result.get("processing_time", 0),
+            "transcription_result": transcription_result,
+            "test_success": True,
+            "cached_result": True
+        }
+        
+        self.test_results.append(test_result)
+        
+        logger.info(f"转录测试完成(缓存): {len(transcription_result.get('segments', []))} 个片段, "
+                   f"{len(transcription_result.get('speakers', []))} 个说话人, "
+                   f"总耗时 {processing_time:.2f}秒")
+        
+        return test_result
+    
+    async def _ping_loop(self):
+        """心跳循环，保持连接活跃"""
+        try:
+            while True:
+                await asyncio.sleep(30)  # 每30秒发送一次心跳
+                if self.websocket and not self.websocket.closed:
+                    try:
+                        await self.send_message({"type": "ping", "data": {}})
+                        logger.debug("发送心跳")
+                    except Exception as e:
+                        logger.error(f"发送心跳失败: {e}")
+                        break
+        except asyncio.CancelledError:
+            logger.debug("心跳任务已取消")
     
     async def send_message(self, message):
         """发送消息到服务器"""
@@ -126,62 +184,92 @@ class ServerTranscriptionTester:
         if response["type"] == "error":
             raise Exception(f"上传请求失败: {response['data']['message']}")
         
-        if response["type"] != "upload_ready":
+        # 处理不同的响应类型
+        if response["type"] == "upload_ready":
+            task_id = response["data"]["task_id"]
+            logger.info(f"获得任务ID: {task_id}")
+        elif response["type"] == "task_complete":
+            # 直接返回缓存结果的情况
+            logger.info("直接使用缓存结果")
+            return self._process_cached_result(response, file_name, file_size, file_hash, start_time)
+        elif response["type"] == "upload_complete":
+            # 某些情况下可能直接收到 upload_complete（例如服务器快速处理了请求）
+            logger.info("收到 upload_complete，继续等待转录结果")
+            # 获取 task_id（如果响应中包含）
+            task_id = response["data"].get("task_id", "unknown")
+            # 直接跳到等待转录结果的部分
+            # 不需要再上传文件数据
+        else:
             raise Exception(f"意外的响应类型: {response['type']}")
         
-        task_id = response["data"]["task_id"]
-        logger.info(f"获得任务ID: {task_id}")
-        
-        # 2. 上传文件数据
-        upload_data = {
-            "type": "upload_data",
-            "data": {
-                "task_id": task_id,
-                "file_data": file_data_b64
-            }
-        }
-        
-        await self.send_message(upload_data)
-        response = await self.receive_message()
-        
-        if response["type"] == "error":
-            raise Exception(f"文件上传失败: {response['data']['message']}")
-        
-        # 检查是否是缓存结果（直接完成）
-        if response["type"] == "task_complete":
-            transcription_result = response["data"]["result"]
-            logger.info("使用缓存结果，转录完成")
-            processing_time = time.time() - start_time
-            
-            # 验证结果
-            if not transcription_result:
-                raise Exception("未收到转录结果")
-            
-            # 记录测试结果
-            test_result = {
-                "file_name": file_name,
-                "file_size": file_size,
-                "file_hash": file_hash,
-                "task_id": response["data"]["task_id"],
-                "processing_time": processing_time,
-                "server_processing_time": transcription_result.get("processing_time", 0),
-                "transcription_result": transcription_result,
-                "test_success": True,
-                "cached_result": True
+        # 2. 上传文件数据（仅在需要时）
+        if response["type"] == "upload_ready":
+            upload_data = {
+                "type": "upload_data",
+                "data": {
+                    "task_id": task_id,
+                    "file_data": file_data_b64
+                }
             }
             
-            self.test_results.append(test_result)
+            await self.send_message(upload_data)
+            response = await self.receive_message()
             
-            logger.info(f"转录测试完成(缓存): {len(transcription_result.get('segments', []))} 个片段, "
-                       f"{len(transcription_result.get('speakers', []))} 个说话人, "
-                       f"总耗时 {processing_time:.2f}秒")
-            
-            return test_result
+            if response["type"] == "error":
+                raise Exception(f"文件上传失败: {response['data']['message']}")
         
-        if response["type"] != "upload_complete":
-            raise Exception(f"意外的响应类型: {response['type']}")
-        
-        logger.info("文件上传成功，开始转录...")
+        # 处理响应（仅在上传文件数据后需要）
+        if response["type"] == "upload_ready":
+            while True:
+                # 检查是否是缓存结果（直接完成）
+                if response["type"] == "task_complete":
+                    transcription_result = response["data"]["result"]
+                    logger.info("使用缓存结果，转录完成")
+                    processing_time = time.time() - start_time
+                    
+                    # 验证结果
+                    if not transcription_result:
+                        raise Exception("未收到转录结果")
+                    
+                    # 记录测试结果
+                    test_result = {
+                        "file_name": file_name,
+                        "file_size": file_size,
+                        "file_hash": file_hash,
+                        "task_id": response["data"]["task_id"],
+                        "processing_time": processing_time,
+                        "server_processing_time": transcription_result.get("processing_time", 0),
+                        "transcription_result": transcription_result,
+                        "test_success": True,
+                        "cached_result": True
+                    }
+                    
+                    self.test_results.append(test_result)
+                    
+                    logger.info(f"转录测试完成(缓存): {len(transcription_result.get('segments', []))} 个片段, "
+                               f"{len(transcription_result.get('speakers', []))} 个说话人, "
+                               f"总耗时 {processing_time:.2f}秒")
+                    
+                    return test_result
+                
+                # 处理 upload_complete 响应
+                elif response["type"] == "upload_complete":
+                    logger.info("文件上传成功，开始转录...")
+                    break
+                
+                # 处理意外的 upload_ready 重复响应 
+                elif response["type"] == "upload_ready":
+                    logger.warning("收到重复的 upload_ready 响应，继续等待...")
+                    response = await self.receive_message()
+                    continue
+                
+                # 处理错误响应
+                elif response["type"] == "error":
+                    error_msg = response["data"].get("message", "未知错误")
+                    raise Exception(f"服务器错误: {error_msg}")
+                
+                else:
+                    raise Exception(f"意外的响应类型: {response['type']}")
         
         # 3. 等待转录结果
         transcription_result = None
