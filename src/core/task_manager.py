@@ -165,7 +165,7 @@ class TaskManager:
                 await self._notify_task_progress(task, progress, f"转录进度: {progress:.1f}%")
             
             # 执行转录
-            from src.core.transcriber import transcriber
+            from src.core.funasr_transcriber import transcriber
             result = await transcriber.transcribe(
                 audio_path=task.file_path,
                 task_id=task_id,
