@@ -5,7 +5,7 @@ services:
     build: .
     container_name: funasr_spk_server
     ports:
-      - "8765:8765"
+      - "${PORT:-8765}:8765"
     volumes:
       - ./models:/app/models
       - ./uploads:/app/uploads
@@ -14,9 +14,27 @@ services:
       - ./config.json:/app/config.json
     environment:
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      # 针对不同平台的优化
+      - OMP_NUM_THREADS=4
+      - MALLOC_MMAP_THRESHOLD_=65536
     restart: unless-stopped
     networks:
       - funasr-network
+    # 内存和 CPU 限制
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "python", "-c", "import websockets; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   funasr-network:
