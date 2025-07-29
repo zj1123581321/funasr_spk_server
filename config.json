@@ -18,7 +18,7 @@
     "punc_model_revision": "v2.0.4",
     "spk_model": "cam++",
     "spk_model_revision": "v2.0.2",
-    "model_dir": "./models",
+    "model_dir": "models",
     "batch_size_s": 300,
     "device": "cpu",
     "disable_update": true,
