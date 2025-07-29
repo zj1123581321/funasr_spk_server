@@ -8,9 +8,10 @@ import os
 import sys
 import time
 from pathlib import Path
+from datetime import datetime
 
 # 添加项目根目录到Python路径
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from funasr import AutoModel
@@ -129,9 +130,15 @@ def main():
                     if len(timestamps) > 0:
                         print(f"- 时间戳示例: {timestamps[:3]}...")
             
-            # 导出JSON结果
-            output_filename = f"transcription_result_{audio_file.stem}.json"
-            output_path = project_root / "tests" / output_filename
+            # 导出JSON结果 - 添加时间戳前缀避免文件混合
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"{timestamp}_transcription_result_{audio_file.stem}.json"
+            output_dir = project_root / "tests" / "output"
+            
+            # 确保输出目录存在
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            output_path = output_dir / output_filename
             
             try:
                 # 创建导出数据结构
