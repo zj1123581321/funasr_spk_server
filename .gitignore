@@ -21,6 +21,7 @@ venv.bak/
 *.sqlite
 ref_codes/
 models
+/tests/output/
 
 # 测试文件
 .pytest_cache/
