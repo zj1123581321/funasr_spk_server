@@ -4,6 +4,7 @@ FunASR转录核心模块 - 与测试脚本完全一致的实现
 import os
 import time
 import asyncio
+import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
@@ -16,10 +17,37 @@ from src.utils.file_utils import convert_to_wav, get_audio_duration
 class FunASRTranscriber:
     """FunASR转录器 - 与测试脚本完全一致的实现"""
     
-    def __init__(self):
+    def __init__(self, config_path: str = "config.json"):
         self.model = None
         self.is_initialized = False
-        self.cache_dir = "./models"  # 模型缓存目录
+        self.config = self._load_config(config_path)
+        self.cache_dir = self.config["funasr"]["model_dir"]
+    
+    def _load_config(self, config_path: str) -> dict:
+        """加载配置文件"""
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {e}")
+            # 返回默认配置
+            return {
+                "funasr": {
+                    "model": "paraformer-zh",
+                    "model_revision": "v2.0.4",
+                    "vad_model": "fsmn-vad",
+                    "vad_model_revision": "v2.0.4",
+                    "punc_model": "ct-punc-c",
+                    "punc_model_revision": "v2.0.4",
+                    "spk_model": "cam++",
+                    "spk_model_revision": "v2.0.2",
+                    "model_dir": "./models",
+                    "batch_size_s": 300,
+                    "device": "cpu",
+                    "disable_update": True,
+                    "disable_pbar": True
+                }
+            }
         
     async def initialize(self):
         """初始化模型 - 使用与测试脚本完全相同的配置"""
@@ -32,21 +60,21 @@ class FunASRTranscriber:
             # 确保缓存目录存在
             Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
             
-            # 使用与测试脚本完全相同的模型配置
+            # 从配置文件加载模型配置
+            funasr_config = self.config["funasr"]
             self.model = AutoModel(
-                model="paraformer-zh", 
-                model_revision="v2.0.4",
-                vad_model="fsmn-vad", 
-                vad_model_revision="v2.0.4",
-                punc_model="ct-punc-c", 
-                punc_model_revision="v2.0.4",
-                spk_model="cam++", 
-                spk_model_revision="v2.0.2",
-                # 添加缓存配置避免重复下载
+                model=funasr_config["model"], 
+                model_revision=funasr_config["model_revision"],
+                vad_model=funasr_config["vad_model"], 
+                vad_model_revision=funasr_config["vad_model_revision"],
+                punc_model=funasr_config["punc_model"], 
+                punc_model_revision=funasr_config["punc_model_revision"],
+                spk_model=funasr_config["spk_model"], 
+                spk_model_revision=funasr_config["spk_model_revision"],
                 cache_dir=self.cache_dir,
-                device="cpu",
-                disable_update=True,  # 禁用自动更新
-                disable_pbar=True     # 禁用进度条
+                device=funasr_config["device"],
+                disable_update=funasr_config.get("disable_update", True),
+                disable_pbar=funasr_config.get("disable_pbar", True)
             )
             
             self.is_initialized = True
@@ -111,7 +139,7 @@ class FunASRTranscriber:
                     None,  # 使用默认线程池
                     lambda: self.model.generate(
                         input=audio_path,  # 直接使用原始音频文件
-                        batch_size_s=300,
+                        batch_size_s=self.config["funasr"]["batch_size_s"],
                         hotword=''
                     )
                 )
