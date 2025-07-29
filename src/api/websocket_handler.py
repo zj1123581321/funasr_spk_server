@@ -142,6 +142,13 @@ class WebSocketHandler:
     async def _handle_upload_request(self, websocket: WebSocketServerProtocol, connection_id: str, data: dict):
         """处理文件上传请求"""
         try:
+            # 提取输出格式（默认为json）
+            output_format = data.get("output_format", "json")
+            if output_format not in ["json", "srt"]:
+                await self._send_error(websocket, "invalid_format", 
+                                     "不支持的输出格式，支持: json, srt")
+                return
+            
             # 验证请求数据
             request = FileUploadRequest(**data)
             
@@ -171,15 +178,29 @@ class WebSocketHandler:
             # 检查缓存（如果不强制刷新）
             if not request.force_refresh:
                 from src.core.database import db_manager
-                cached_result = await db_manager.get_cached_result(request.file_hash)
+                cached_result = await db_manager.get_cached_result(request.file_hash, output_format)
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
-                    # 直接返回缓存结果
-                    await self._send_message(websocket, "task_complete", {
-                        "task_id": task.task_id,
-                        "result": cached_result
-                    })
-                    return
+                    
+                    # 根据输出格式准备结果
+                    if output_format == "srt":
+                        if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                            result_data = cached_result
+                        else:
+                            # 如果缓存中没有SRT格式，跳过缓存
+                            logger.info("缓存中没有SRT格式，继续处理")
+                            result_data = None
+                    else:
+                        # JSON格式
+                        result_data = cached_result.dict() if cached_result else None
+                    
+                    if result_data:
+                        # 直接返回缓存结果
+                        await self._send_message(websocket, "task_complete", {
+                            "task_id": task.task_id,
+                            "result": result_data
+                        })
+                        return
             
             # 发送响应
             await self._send_message(websocket, "upload_ready", {
