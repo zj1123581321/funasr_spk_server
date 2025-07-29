@@ -1,0 +1,247 @@
+{
+  "file_info": {
+    "filename": "asr_example.wav",
+    "file_path": "D:\\MyFolders\\Developments\\0GithubProjectsTest\\250728_funasr\\funasr_spk_server\\samples\\asr_example.wav",
+    "file_size_kb": 173.41,
+    "processing_time": 1753771968.1997666
+  },
+  "model_config": {
+    "model": "paraformer-zh",
+    "model_revision": "v2.0.4",
+    "vad_model": "fsmn-vad",
+    "vad_model_revision": "v2.0.4",
+    "punc_model": "ct-punc-c",
+    "punc_model_revision": "v2.0.4",
+    "spk_model": "cam++",
+    "spk_model_revision": "v2.0.2"
+  },
+  "raw_result": [
+    {
+      "key": "asr_example",
+      "text": "欢迎大家来体验达摩院推出的语音识别模型。",
+      "timestamp": [
+        [
+          880,
+          1120
+        ],
+        [
+          1120,
+          1360
+        ],
+        [
+          1380,
+          1540
+        ],
+        [
+          1540,
+          1780
+        ],
+        [
+          1780,
+          2020
+        ],
+        [
+          2020,
+          2180
+        ],
+        [
+          2180,
+          2420
+        ],
+        [
+          2480,
+          2600
+        ],
+        [
+          2600,
+          2780
+        ],
+        [
+          2780,
+          3020
+        ],
+        [
+          3040,
+          3240
+        ],
+        [
+          3240,
+          3480
+        ],
+        [
+          3480,
+          3700
+        ],
+        [
+          3700,
+          3900
+        ],
+        [
+          3900,
+          4140
+        ],
+        [
+          4180,
+          4420
+        ],
+        [
+          4420,
+          4620
+        ],
+        [
+          4620,
+          4780
+        ],
+        [
+          4780,
+          5195
+        ]
+      ],
+      "sentence_info": [
+        {
+          "text": "欢迎大家来体验达摩院推出的语音识别模型。",
+          "start": 880,
+          "end": 5195,
+          "timestamp": [
+            [
+              880,
+              1120
+            ],
+            [
+              1120,
+              1360
+            ],
+            [
+              1380,
+              1540
+            ],
+            [
+              1540,
+              1780
+            ],
+            [
+              1780,
+              2020
+            ],
+            [
+              2020,
+              2180
+            ],
+            [
+              2180,
+              2420
+            ],
+            [
+              2480,
+              2600
+            ],
+            [
+              2600,
+              2780
+            ],
+            [
+              2780,
+              3020
+            ],
+            [
+              3040,
+              3240
+            ],
+            [
+              3240,
+              3480
+            ],
+            [
+              3480,
+              3700
+            ],
+            [
+              3700,
+              3900
+            ],
+            [
+              3900,
+              4140
+            ],
+            [
+              4180,
+              4420
+            ],
+            [
+              4420,
+              4620
+            ],
+            [
+              4620,
+              4780
+            ],
+            [
+              4780,
+              5195
+            ]
+          ],
+          "spk": 0
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "result_type": "<class 'list'>",
+    "data_keys": [
+      "key",
+      "text",
+      "timestamp",
+      "sentence_info"
+    ],
+    "has_text": true,
+    "has_sentence_info": true,
+    "has_timestamp": true,
+    "text_length": 20,
+    "full_text": "欢迎大家来体验达摩院推出的语音识别模型。",
+    "sentence_count": 1,
+    "speakers": {
+      "detected_speakers": [
+        "0"
+      ],
+      "speaker_statistics": {
+        "0": 1
+      },
+      "total_speakers": 1
+    },
+    "sentences": [
+      {
+        "index": 1,
+        "speaker": 0,
+        "text": "欢迎大家来体验达摩院推出的语音识别模型。",
+        "start_ms": 880,
+        "end_ms": 5195,
+        "start_seconds": 0.88,
+        "end_seconds": 5.2,
+        "duration_seconds": 4.32
+      }
+    ],
+    "timestamp_count": 19,
+    "timestamp_sample": [
+      [
+        880,
+        1120
+      ],
+      [
+        1120,
+        1360
+      ],
+      [
+        1380,
+        1540
+      ],
+      [
+        1540,
+        1780
+      ],
+      [
+        1780,
+        2020
+      ]
+    ]
+  }
+}
