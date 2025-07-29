@@ -168,6 +168,19 @@ class WebSocketHandler:
                 self.task_connections[task.task_id] = set()
             self.task_connections[task.task_id].add(connection_id)
             
+            # 检查缓存（如果不强制刷新）
+            if not request.force_refresh:
+                from src.core.database import db_manager
+                cached_result = await db_manager.get_cached_result(request.file_hash)
+                if cached_result:
+                    logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
+                    # 直接返回缓存结果
+                    await self._send_message(websocket, "task_complete", {
+                        "task_id": task.task_id,
+                        "result": cached_result
+                    })
+                    return
+            
             # 发送响应
             await self._send_message(websocket, "upload_ready", {
                 "task_id": task.task_id,
