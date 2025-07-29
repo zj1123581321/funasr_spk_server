@@ -6,6 +6,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # 添加项目根目录到Python路径
@@ -127,6 +128,98 @@ def main():
                     print(f"- 时间戳信息: {len(timestamps)} 个")
                     if len(timestamps) > 0:
                         print(f"- 时间戳示例: {timestamps[:3]}...")
+            
+            # 导出JSON结果
+            output_filename = f"transcription_result_{audio_file.stem}.json"
+            output_path = project_root / "tests" / output_filename
+            
+            try:
+                # 创建导出数据结构
+                export_data = {
+                    "file_info": {
+                        "filename": audio_file.name,
+                        "file_path": str(audio_file),
+                        "file_size_kb": round(audio_file.stat().st_size / 1024, 2),
+                        "processing_time": time.time()
+                    },
+                    "model_config": {
+                        "model": "paraformer-zh",
+                        "model_revision": "v2.0.4",
+                        "vad_model": "fsmn-vad",
+                        "vad_model_revision": "v2.0.4", 
+                        "punc_model": "ct-punc-c",
+                        "punc_model_revision": "v2.0.4",
+                        "spk_model": "cam++",
+                        "spk_model_revision": "v2.0.2"
+                    },
+                    "raw_result": result,
+                    "analysis": {}
+                }
+                
+                # 分析结果并添加到导出数据
+                if isinstance(result, list) and len(result) > 0:
+                    data = result[0]
+                    
+                    export_data["analysis"] = {
+                        "result_type": str(type(result)),
+                        "data_keys": list(data.keys()) if isinstance(data, dict) else [],
+                        "has_text": 'text' in data,
+                        "has_sentence_info": 'sentence_info' in data,
+                        "has_timestamp": 'timestamp' in data
+                    }
+                    
+                    if 'text' in data:
+                        export_data["analysis"]["text_length"] = len(data['text'])
+                        export_data["analysis"]["full_text"] = data['text']
+                    
+                    if 'sentence_info' in data:
+                        sentences = data['sentence_info']
+                        export_data["analysis"]["sentence_count"] = len(sentences)
+                        
+                        # 提取说话人信息
+                        speakers = {}
+                        speaker_list = []
+                        for sent in sentences:
+                            if 'spk' in sent:
+                                spk = sent['spk']
+                                speaker_list.append(spk)
+                                speakers[str(spk)] = speakers.get(str(spk), 0) + 1
+                        
+                        export_data["analysis"]["speakers"] = {
+                            "detected_speakers": list(speakers.keys()),
+                            "speaker_statistics": speakers,
+                            "total_speakers": len(speakers)
+                        }
+                        
+                        # 添加句子详细信息
+                        export_data["analysis"]["sentences"] = []
+                        for i, sent in enumerate(sentences):
+                            sentence_info = {
+                                "index": i + 1,
+                                "speaker": sent.get('spk', 'Unknown'),
+                                "text": sent.get('text', ''),
+                                "start_ms": sent.get('start', 0),
+                                "end_ms": sent.get('end', 0),
+                                "start_seconds": round(sent.get('start', 0) / 1000, 2),
+                                "end_seconds": round(sent.get('end', 0) / 1000, 2),
+                                "duration_seconds": round((sent.get('end', 0) - sent.get('start', 0)) / 1000, 2)
+                            }
+                            export_data["analysis"]["sentences"].append(sentence_info)
+                    
+                    if 'timestamp' in data:
+                        timestamps = data['timestamp']
+                        export_data["analysis"]["timestamp_count"] = len(timestamps)
+                        export_data["analysis"]["timestamp_sample"] = timestamps[:5] if len(timestamps) > 5 else timestamps
+                
+                # 保存JSON文件
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(export_data, f, ensure_ascii=False, indent=2)
+                
+                print(f"\n[OK] 转录结果已导出到: {output_filename}")
+                print(f"  完整路径: {output_path}")
+                
+            except Exception as export_error:
+                print(f"[ERROR] 导出JSON失败: {export_error}")
             
             print("-" * 60)
             
