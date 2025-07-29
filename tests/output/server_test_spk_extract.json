@@ -2,8 +2,8 @@
   "file_name": "spk_extract.mp3",
   "file_size": 650842,
   "file_hash": "5e06014621b265556822403cba11e9d0",
-  "task_id": "84e6600f-4c67-4486-a3de-8157ad8ca0ee",
-  "processing_time": 5.937583923339844,
+  "task_id": "6ab50efe-9634-4991-bc58-86e43555f474",
+  "processing_time": 0.06726551055908203,
   "server_processing_time": 5.821092844009399,
   "transcription_result": {
     "task_id": "84e6600f-4c67-4486-a3de-8157ad8ca0ee",
@@ -44,5 +44,6 @@
     "processing_time": 5.821092844009399,
     "error": null
   },
-  "test_success": true
+  "test_success": true,
+  "cached_result": true
 }
