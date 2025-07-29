@@ -14,7 +14,7 @@ from loguru import logger
 class FunASRClient:
     """FunASR客户端"""
     
-    def __init__(self, server_url: str = "ws://localhost:8765"):
+    def __init__(self, server_url: str = "ws://localhost:8767"):
         self.server_url = server_url
         self.websocket = None
         self.auth_token = None
@@ -25,11 +25,13 @@ class FunASRClient:
             self.websocket = await websockets.connect(self.server_url)
             logger.info(f"已连接到服务器: {self.server_url}")
             
-            # 等待认证请求
+            # 接收第一条消息，可能是认证请求或欢迎消息
             message = await self.websocket.recv()
             data = json.loads(message)
             
             if data.get("type") == "auth_required":
+                # 需要认证
+                logger.info("服务器要求认证")
                 # 获取认证令牌
                 self.auth_token = await self._get_auth_token(username, password)
                 
@@ -42,16 +44,18 @@ class FunASRClient:
                 
                 if data.get("type") == "auth_success":
                     logger.success("认证成功")
+                    # 等待欢迎消息
+                    message = await self.websocket.recv()
+                    data = json.loads(message)
                 else:
                     raise Exception("认证失败")
             
-            # 接收欢迎消息
-            message = await self.websocket.recv()
-            data = json.loads(message)
-            
+            # 处理欢迎消息
             if data.get("type") == "connected":
                 logger.info(f"连接成功: {data['data']['message']}")
                 return True
+            else:
+                raise Exception(f"意外的消息类型: {data.get('type')}")
             
         except Exception as e:
             logger.error(f"连接失败: {e}")
@@ -59,6 +63,10 @@ class FunASRClient:
     
     async def _get_auth_token(self, username: str, password: str) -> str:
         """获取认证令牌（简化版，实际应该调用认证API）"""
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        
         from src.utils.auth import authenticate_user, create_access_token
         
         user = authenticate_user(username, password)

@@ -19,6 +19,7 @@ venv.bak/
 /logs/
 *.db
 *.sqlite
+ref_codes/
 
 # 测试文件
 .pytest_cache/

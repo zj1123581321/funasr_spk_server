@@ -14,7 +14,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.core.config import config
 from src.core.database import db_manager
 from src.core.task_manager import task_manager
-from src.core.transcriber import transcriber
+# 使用真实FunASR转录器
+try:
+    from src.core.transcriber import transcriber
+    logger.info("使用真实FunASR转录器")
+except Exception as e:
+    logger.warning(f"FunASR转录器不可用: {e}")
+    logger.info("回退到Mock转录器")
+    from src.core.mock_transcriber import mock_transcriber as transcriber
 from src.api.websocket_handler import ws_handler
 from src.utils.notification import send_custom_notification
 
