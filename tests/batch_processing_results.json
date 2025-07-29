@@ -1,0 +1,29 @@
+{
+  "summary": {
+    "total_files": 3,
+    "success_count": 3,
+    "fail_count": 0,
+    "total_time": 20.909697771072388,
+    "average_time": 6.969899257024129
+  },
+  "results": [
+    {
+      "file": "asr_example.wav",
+      "text_length": 183,
+      "processing_time": 2.227715492248535,
+      "success": true
+    },
+    {
+      "file": "test_extract.mp3",
+      "text_length": 1161,
+      "processing_time": 10.13676905632019,
+      "success": true
+    },
+    {
+      "file": "test.mp4",
+      "text_length": 1041,
+      "processing_time": 8.545213222503662,
+      "success": true
+    }
+  ]
+}

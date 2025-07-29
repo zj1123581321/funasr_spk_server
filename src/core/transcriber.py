@@ -31,20 +31,57 @@ class FunASRTranscriber:
             # 确保模型目录存在
             Path(config.funasr.model_dir).mkdir(parents=True, exist_ok=True)
             
-            # 加载模型
-            self.model = AutoModel(
-                model=config.funasr.model,
-                model_revision="v2.0.4",  # 修改为有效版本
-                vad_model=config.funasr.vad_model,
-                vad_model_revision="v2.0.4",
-                punc_model=config.funasr.punc_model,
-                punc_model_revision="v2.0.4",
-                spk_model="cam++",
-                spk_model_revision="v2.0.2",
-                device=config.funasr.device,
-                model_hub="ms",  # 使用ModelScope
-                disable_update=True  # 禁用版本检查以加快启动
-            )
+            # 加载模型 - 尝试使用基础模型名称
+            try:
+                # 先尝试基础模型名称
+                logger.info("尝试加载基础paraformer模型...")
+                self.model = AutoModel(
+                    model="paraformer-zh",
+                    model_revision="v2.0.4",
+                    vad_model="fsmn-vad",
+                    vad_model_revision="v2.0.4", 
+                    punc_model="ct-punc-c",
+                    punc_model_revision="v2.0.4",
+                    spk_model="cam++",
+                    spk_model_revision="v2.0.2",
+                    device=config.funasr.device,
+                    model_hub="ms",
+                    cache_dir=config.funasr.model_dir,
+                    disable_update=True
+                )
+                logger.info("使用基础paraformer模型加载成功")
+                
+            except Exception as e1:
+                logger.warning(f"基础模型加载失败: {e1}")
+                try:
+                    # 尝试不带说话人识别的简化版本
+                    logger.info("尝试加载简化模型...")
+                    self.model = AutoModel(
+                        model="paraformer-zh",
+                        model_revision="v2.0.4",
+                        vad_model="fsmn-vad", 
+                        vad_model_revision="v2.0.4",
+                        punc_model="ct-punc-c",
+                        punc_model_revision="v2.0.4",
+                        device=config.funasr.device,
+                        model_hub="ms",
+                        cache_dir=config.funasr.model_dir,
+                        disable_update=True
+                    )
+                    logger.info("使用简化模型加载成功")
+                    
+                except Exception as e2:
+                    logger.error(f"简化模型也加载失败: {e2}")
+                    # 最后尝试只用基础ASR模型
+                    logger.info("尝试仅使用ASR模型...")
+                    self.model = AutoModel(
+                        model="paraformer-zh",
+                        device=config.funasr.device,
+                        model_hub="ms",
+                        cache_dir=config.funasr.model_dir,
+                        disable_update=True
+                    )
+                    logger.info("仅ASR模型加载成功")
             
             self.is_initialized = True
             logger.info("FunASR模型加载完成")
@@ -188,5 +225,15 @@ class FunASRTranscriber:
         return segments
 
 
-# 全局转录器实例
-transcriber = FunASRTranscriber()
+# 优先使用本地模型版本
+try:
+    from src.core.local_transcriber import transcriber
+    logger.info("使用本地模型FunASR转录器")
+except ImportError:
+    try:
+        from src.core.funasr_transcriber import transcriber
+        logger.info("使用改进版FunASR转录器")
+    except ImportError:
+        # 如果导入失败，使用原版
+        transcriber = FunASRTranscriber()
+        logger.warning("使用原版转录器")
