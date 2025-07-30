@@ -19,7 +19,8 @@
     "spk_model": "cam++",
     "spk_model_revision": "v2.0.2",
     "model_dir": "models",
-    "batch_size_s": 300,
+    "batch_size_s": 500,
+    "ncpu": 16,
     "device": "cpu",
     "disable_update": true,
     "disable_pbar": true
