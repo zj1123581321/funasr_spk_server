@@ -129,6 +129,20 @@ async def main():
     log_platform_info()
     check_system_requirements()
     
+    # 输出性能相关配置
+    logger.info("========== 性能相关配置 ==========")
+    logger.info(f"FunASR配置:")
+    logger.info(f"  - CPU核心数 (ncpu): {getattr(config.funasr, 'ncpu', 8)}")
+    logger.info(f"  - 批处理大小 (batch_size_s): {config.funasr.batch_size_s}秒")
+    logger.info(f"  - 设备类型 (device): {config.funasr.device}")
+    logger.info(f"转录配置:")
+    logger.info(f"  - 最大并发任务数: {config.transcription.max_concurrent_tasks}")
+    logger.info(f"  - 任务超时时间: {config.transcription.task_timeout_minutes}分钟")
+    logger.info(f"服务器配置:")
+    logger.info(f"  - 最大连接数: {config.server.max_connections}")
+    logger.info(f"  - 最大文件大小: {config.server.max_file_size_mb}MB")
+    logger.info("=====================================")
+    
     server = FunASRServer()
     shutdown_event = asyncio.Event()
     

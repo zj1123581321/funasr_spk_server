@@ -1,0 +1,114 @@
+╭───────────────────────────────────────────────────────────────────────────────────────╮
+│ ✻ Welcome to Claude Code!                                                             │
+│                                                                                       │
+│   /help for help, /status for your current setup                                      │
+│                                                                                       │
+│   cwd: D:\MyFolders\Developments\0GithubProjectsTest\250728_funasr\funasr_spk_server  │
+╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+> yzsrc\core\funasr_transcriber.@src\core\funasr_transcriber.py\
+  怎样才能尽可能地提升 cpu 利用率？
+
+● 我来分析 funasr_transcriber.py 文件，看看如何提升 CPU 利用率。
+
+● Read(src\core\funasr_transcriber.py)
+  ⎿  Read 398 lines (ctrl+r to expand)
+
+● Update Todos
+  ⎿  ☐ 分析当前CPU利用率瓶颈
+     ☐ 实现多进程并行转录
+     ☐ 优化批处理参数
+     ☐ 实现异步并发处理
+     ☐ 测试性能提升效果
+
+● 基于代码分析，当前 CPU 利用率较低的主要原因：
+
+  1. 单线程执行：虽然使用了 run_in_executor，但每次只处理一个音频文件
+  2. 模型加载开销：模型只初始化一次，但转录是串行的
+  3. 批处理未充分利用：batch_size_s=300 只对单个文件内部批处理有效
+
+  提升 CPU 利用率的方案：
+
+● Write(src\core\funasr_transcriber_optimized.py)
+  ⎿  Wrote 1 lines to src\core\funasr_transcriber_optimized.py             
+     """
+     优化版FunASR转录器 - 提升CPU利用率
+     """
+     import os
+     import time
+     import asyncio
+     import json
+     import multiprocessing as mp
+     from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+     from typing import List, Optional, Dict, Any, Union
+
+● Update Todos
+  ⎿  ☒ 分析当前CPU利用率瓶颈
+     ☒ 实现多进程并行转录
+     ☐ 优化批处理参数
+     ☐ 实现异步并发处理
+     ☐ 测试性能提升效果
+
+● Update(config.json)
+  ⎿  Error: File has not been read yet. Read it first before writing to it.
+
+● Read(config.json)
+  ⎿  Read 62 lines (ctrl+r to expand)
+
+● Update(config.json)
+  ⎿  Updated config.json with 12 additions and 1 removal
+       22        "batch_size_s": 300,
+       23        "device": "cpu",
+       24        "disable_update": true,
+       25 -      "disable_pbar": true
+       25 +      "disable_pbar": true,
+       26 +      "ncpu": 0
+       27      },
+       28      
+       29 +    "optimization": {
+       30 +      "num_workers": 0,
+       31 +      "batch_size": 4,
+       32 +      "use_multiprocessing": true,
+       33 +      "prefetch_size": 2,
+       34 +      "chunk_size": 600,
+       35 +      "enable_gpu_acceleration": false,
+       36 +      "memory_limit_gb": 8
+       37 +    },
+       38 +    
+       39      "transcription": {
+       40        "max_concurrent_tasks": 4,
+       41        "task_timeout_minutes": 30,
+
+● 主要优化方案已实现：
+
+  1. 多进程并行处理
+  - 创建了 funasr_transcriber_optimized.py，支持多进程并行转录
+  - 每个进程独立加载模型，避免 GIL 限制
+  - 使用 ProcessPoolExecutor 管理进程池
+
+  2. 配置优化
+  - 添加了 optimization 配置节
+  - num_workers: 工作进程数（0 表示使用所有 CPU 核心）
+  - batch_size: 批处理大小
+  - use_multiprocessing: 启用多进程（建议保持 true）
+  - chunk_size: 音频分块大小（秒）
+
+  3. CPU 利用率提升方法
+  - 批量处理: 使用 transcribe_batch() 方法同时处理多个文件
+  - 进程池: 充分利用多核 CPU，每个核心运行独立进程
+  - 异步 I/O: 避免 I/O 阻塞，提高吞吐量
+  - 预取机制: 提前加载下一批数据
+
+  使用建议：
+  1. 将 num_workers 设置为 CPU 核心数 - 1
+  2. 根据内存大小调整 batch_size
+  3. 对长音频使用分块处理以减少内存占用
+  4. 监控系统资源，避免内存溢出
+
+● Update Todos
+  ⎿  ☒ 分析当前CPU利用率瓶颈
+     ☒ 实现多进程并行转录
+     ☒ 优化批处理参数
+     ☒ 实现异步并发处理
+     ☐ 测试性能提升效果
+
