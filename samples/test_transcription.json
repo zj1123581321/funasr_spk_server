@@ -2,10 +2,10 @@
   "file_name": "test.m4a",
   "file_size": 15324412,
   "file_hash": "a0b1a9b532859831e4ec0a3edc0df9ac",
-  "task_id": "d4c2e7d1-4970-477c-89b5-d34ad2e541cb",
-  "processing_time": 245.43678498268127,
+  "task_id": "1cb8705f-c17d-46bf-9543-d381f3eb1ae6",
+  "processing_time": 150.98890662193298,
   "transcription_result": {
-    "task_id": "d4c2e7d1-4970-477c-89b5-d34ad2e541cb",
+    "task_id": "1cb8705f-c17d-46bf-9543-d381f3eb1ae6",
     "file_name": "a0b1a9b532859831e4ec0a3edc0df9ac.m4a",
     "file_hash": "a0b1a9b532859831e4ec0a3edc0df9ac",
     "duration": 1892.910998,
@@ -357,10 +357,10 @@
       "Speaker1",
       "Speaker2"
     ],
-    "created_at": "2025-07-30T13:04:38.249596",
-    "processing_time": 243.9926257133484,
+    "created_at": "2025-07-30T14:40:46.120430",
+    "processing_time": 147.53339219093323,
     "error": null
   },
   "cached_result": false,
-  "transcription_time": "2025-07-30 13:04:38"
+  "transcription_time": "2025-07-30 14:40:45"
 }
