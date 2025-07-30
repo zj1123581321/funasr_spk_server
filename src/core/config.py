@@ -24,13 +24,20 @@ class ServerConfig(BaseModel):
 
 class FunASRConfig(BaseModel):
     """FunASR模型配置"""
-    model: str = "Jieer2024/speech_paraformer-large-vad-punc-spk_asr_nat-zh-cn-onnx"
+    model: str = "paraformer-zh"
+    model_revision: str = "v2.0.4"
+    vad_model: str = "fsmn-vad"
+    vad_model_revision: str = "v2.0.4"
+    punc_model: str = "ct-punc-c"
+    punc_model_revision: str = "v2.0.4"
+    spk_model: str = "cam++"
+    spk_model_revision: str = "v2.0.2"
     model_dir: str = "./models"
-    vad_model: str = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
-    punc_model: str = "iic/punc_ct-transformer_cn-en-common-vocab471067-large"
     batch_size_s: int = 300
-    batch_size_token_threshold_s: int = 40
+    ncpu: int = 8  # 添加 ncpu 属性
     device: str = "cpu"
+    disable_update: bool = True
+    disable_pbar: bool = True
     
     model_config = {"protected_namespaces": ()}
 
