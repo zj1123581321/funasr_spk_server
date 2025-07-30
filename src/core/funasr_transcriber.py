@@ -72,6 +72,7 @@ class FunASRTranscriber:
                 spk_model=funasr_config["spk_model"], 
                 spk_model_revision=funasr_config["spk_model_revision"],
                 cache_dir=self.cache_dir,
+                ncpu=funasr_config.get("ncpu", 8),  # 添加 ncpu 参数，默认值为 8
                 device=funasr_config["device"],
                 disable_update=funasr_config.get("disable_update", True),
                 disable_pbar=funasr_config.get("disable_pbar", True)
