@@ -112,6 +112,11 @@ class FunASRTranscriber:
             duration = get_audio_duration(audio_path)
             logger.info(f"音频时长: {duration:.2f}秒")
             
+            # 验证音频文件
+            if duration < 0.5:
+                logger.error(f"音频时长过短: {duration}秒，无法进行转录")
+                raise Exception("音频时长过短，至少需要0.5秒的音频")
+            
             logger.info(f"开始转录: {os.path.basename(audio_path)}")
             
             # 使用与测试脚本完全相同的转录参数
@@ -145,6 +150,15 @@ class FunASRTranscriber:
                         hotword=''
                     )
                 )
+            except Exception as model_error:
+                error_msg = str(model_error)
+                if "window size" in error_msg:
+                    logger.error(f"音频处理窗口大小错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频文件损坏、格式不支持或音频过短")
+                    raise Exception("音频处理失败：窗口大小计算错误，请检查音频文件是否完整")
+                else:
+                    raise
             finally:
                 # 取消进度更新任务
                 if progress_task:
@@ -154,7 +168,15 @@ class FunASRTranscriber:
                     except asyncio.CancelledError:
                         pass
             
-            logger.debug(f"FunASR原始结果: {result}")
+            # 记录结果类型和结构，但不记录完整内容（避免日志过大）
+            if isinstance(result, list):
+                logger.debug(f"FunASR返回列表，长度: {len(result)}")
+                if len(result) > 0:
+                    logger.debug(f"第一个元素类型: {type(result[0])}")
+            elif isinstance(result, dict):
+                logger.debug(f"FunASR返回字典，键: {list(result.keys())}")
+            else:
+                logger.debug(f"FunASR返回未知类型: {type(result)}")
             
             # 更新进度
             if progress_callback:
@@ -231,11 +253,15 @@ class FunASRTranscriber:
         """解析FunASR结果并合并相同说话人的连续句子"""
         segments = []
         
-        logger.debug(f"解析结果 - 输入类型: {type(result)}")
+        logger.debug(f"解析结果 - 输入类型: {type(result)}, 内容: {result}")
         
         # 处理结果格式
-        if isinstance(result, list) and len(result) > 0:
-            result_data = result[0]
+        if isinstance(result, list):
+            if len(result) > 0:
+                result_data = result[0]
+            else:
+                logger.warning("FunASR返回了空列表，可能是音频处理失败")
+                return segments
         elif isinstance(result, dict):
             result_data = result
         else:
