@@ -152,12 +152,31 @@ class FunASRTranscriber:
                 )
             except Exception as model_error:
                 error_msg = str(model_error)
-                if "window size" in error_msg:
+                
+                # 详细记录不同类型的错误
+                if "VAD algorithm" in error_msg:
+                    logger.error(f"VAD算法错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频质量问题、静音过多或格式不兼容")
+                    raise Exception(f"VAD算法处理失败，音频可能存在质量问题")
+                elif "index" in error_msg and "out of bounds" in error_msg:
+                    logger.error(f"索引越界错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频分段异常或模型状态不一致")
+                    raise Exception(f"音频分段处理失败，索引越界")
+                elif "window size" in error_msg:
                     logger.error(f"音频处理窗口大小错误: {error_msg}")
                     logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
                     logger.error("可能原因: 音频文件损坏、格式不支持或音频过短")
                     raise Exception("音频处理失败：窗口大小计算错误，请检查音频文件是否完整")
+                elif "list index out of range" in error_msg:
+                    logger.error(f"列表索引错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 模型返回结果异常或音频无法识别")
+                    raise Exception("音频识别失败，无法获取有效结果")
                 else:
+                    logger.error(f"模型处理错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
                     raise
             finally:
                 # 取消进度更新任务
