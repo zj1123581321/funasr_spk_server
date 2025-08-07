@@ -311,11 +311,26 @@ class WebSocketHandler:
         """通知任务进度"""
         connection_ids = self.task_connections.get(task_id, set())
         
+        # 对于失败状态，提供更详细的错误分类
+        error_type = None
+        if status == "failed" and message:
+            if "VAD" in message:
+                error_type = "vad_error"
+            elif "索引" in message or "index" in message:
+                error_type = "index_error"
+            elif "音频" in message:
+                error_type = "audio_error"
+            elif "模型" in message:
+                error_type = "model_error"
+            else:
+                error_type = "unknown_error"
+        
         data = {
             "task_id": task_id,
             "progress": progress,
             "status": status,
             "message": message,
+            "error_type": error_type,
             "timestamp": datetime.now().isoformat()
         }
         
