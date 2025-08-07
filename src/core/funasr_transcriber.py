@@ -119,34 +119,61 @@ class FunASRTranscriber:
             
             logger.info(f"开始转录: {os.path.basename(audio_path)}")
             
-            # 选择使用的模型
-            use_spk_model = enable_speaker and self.model_with_spk is not None
-            model = self.model_with_spk if use_spk_model else self.model
+            # 使用与测试脚本完全相同的转录参数
+            # 在线程池中运行同步的 model.generate，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
             
-            logger.info(f"开始转录: {os.path.basename(audio_path)} (使用{'说话人识别' if use_spk_model else '基础'}模型)")
+            # 创建一个任务来定期发送进度更新
+            progress_task = None
+            if progress_callback and duration > 30:  # 仅对超过30秒的音频启用
+                async def send_periodic_progress():
+                    """定期发送进度更新以保持连接活跃"""
+                    progress = 10
+                    while progress < 90:
+                        await asyncio.sleep(10)  # 每10秒更新一次
+                        progress = min(progress + 5, 85)  # 最多到85%
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(progress)
+                        else:
+                            progress_callback(progress)
+                        logger.debug(f"发送进度更新: {progress}%")
+                
+                progress_task = asyncio.create_task(send_periodic_progress())
             
-            # 执行转录
             try:
-                # 对于较长的音频，使用更大的batch_size_s
-                batch_size_s = 300 if duration > 60 else 100
-                
-                result = model.generate(
-                    input=wav_path,
-                    batch_size_s=batch_size_s,
-                    hotword="",  # 避免热词相关的问题
-                    disable_pbar=True
-                )
-                
-            except Exception as e:
-                # 如果说话人识别模型失败，回退到基础模型
-                if use_spk_model and "math domain error" in str(e):
-                    logger.warning(f"说话人识别模型失败，回退到基础模型: {e}")
-                    result = self.model.generate(
-                        input=wav_path,
-                        batch_size_s=300,
-                        disable_pbar=True
+                # 使用 lambda 包装以正确传递关键字参数
+                result = await loop.run_in_executor(
+                    None,  # 使用默认线程池
+                    lambda: self.model.generate(
+                        input=audio_path,  # 直接使用原始音频文件
+                        batch_size_s=self.config["funasr"]["batch_size_s"],
+                        hotword=''
                     )
-                    use_spk_model = False
+                )
+            except Exception as model_error:
+                error_msg = str(model_error)
+                
+                # 详细记录不同类型的错误
+                if "VAD algorithm" in error_msg:
+                    logger.error(f"VAD算法错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频质量问题、静音过多或格式不兼容")
+                    raise Exception(f"VAD算法处理失败，音频可能存在质量问题")
+                elif "index" in error_msg and "out of bounds" in error_msg:
+                    logger.error(f"索引越界错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频分段异常或模型状态不一致")
+                    raise Exception(f"音频分段处理失败，索引越界")
+                elif "window size" in error_msg:
+                    logger.error(f"音频处理窗口大小错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 音频文件损坏、格式不支持或音频过短")
+                    raise Exception("音频处理失败：窗口大小计算错误，请检查音频文件是否完整")
+                elif "list index out of range" in error_msg:
+                    logger.error(f"列表索引错误: {error_msg}")
+                    logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
+                    logger.error("可能原因: 模型返回结果异常或音频无法识别")
+                    raise Exception("音频识别失败，无法获取有效结果")
                 else:
                     logger.error(f"模型处理错误: {error_msg}")
                     logger.error(f"音频文件: {audio_path}, 时长: {duration}秒")
