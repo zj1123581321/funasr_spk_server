@@ -263,20 +263,34 @@ class TaskManager:
             logger.info(f"任务完成: {task_id}")
             
         except Exception as e:
-            logger.error(f"任务处理失败 {task_id}: {e}")
+            error_msg = str(e)
+            logger.error(f"任务处理失败 {task_id}: {error_msg}")
             
             # 更新任务状态
             task.status = TaskStatus.FAILED
-            task.error = str(e)
+            task.error = error_msg
             task.completed_at = datetime.now()
             
-            # 重试
-            if task.retry_count < config.transcription.retry_times:
+            # 判断是否需要重试（某些错误不应重试）
+            should_retry = self._should_retry_error(error_msg)
+            
+            # 重试逻辑
+            if should_retry and task.retry_count < config.transcription.retry_times:
                 task.retry_count += 1
                 task.status = TaskStatus.PENDING
                 logger.info(f"任务重试 {task_id}: 第{task.retry_count}次")
+                
+                # 对于模型相关错误，尝试重置模型状态
+                if self._is_model_error(error_msg):
+                    await self._try_reset_model()
+                    # 添加短暂延迟，让模型有时间恢复
+                    await asyncio.sleep(2)
+                
                 await self.task_queue.put(task_id)
             else:
+                # 不重试或重试次数已达上限
+                if not should_retry:
+                    logger.warning(f"任务 {task_id} 遇到不可重试的错误: {error_msg}")
                 # 通知失败
                 await self._notify_task_failed(task)
                 
@@ -387,6 +401,69 @@ class TaskManager:
             await send_wework_notification(task, event_type)
         except Exception as e:
             logger.error(f"发送企微通知失败: {e}")
+    
+    def _should_retry_error(self, error_msg: str) -> bool:
+        """判断错误是否应该重试"""
+        # 不应重试的错误类型
+        non_retryable_errors = [
+            "音频时长过短",  # 音频文件本身的问题
+            "文件不存在",
+            "不支持的文件格式",
+            "文件太大",
+            "认证失败",
+        ]
+        
+        for error in non_retryable_errors:
+            if error in error_msg:
+                return False
+        
+        # VAD和索引错误可能是临时问题，允许重试
+        return True
+    
+    def _is_model_error(self, error_msg: str) -> bool:
+        """判断是否是模型相关错误"""
+        model_errors = [
+            "VAD algorithm",
+            "index .* out of bounds",
+            "list index out of range",
+            "window size",
+            "dimension",
+        ]
+        
+        import re
+        for error_pattern in model_errors:
+            if re.search(error_pattern, error_msg, re.IGNORECASE):
+                return True
+        return False
+    
+    async def _try_reset_model(self):
+        """尝试重置模型状态"""
+        try:
+            logger.warning("检测到模型错误，尝试重置模型状态...")
+            from src.core.funasr_transcriber import transcriber
+            
+            # 如果模型已初始化，尝试重新初始化
+            if transcriber.is_initialized:
+                # 清理现有模型
+                if hasattr(transcriber, 'model') and transcriber.model:
+                    try:
+                        # 尝试清理模型资源
+                        del transcriber.model
+                        transcriber.model = None
+                    except:
+                        pass
+                
+                # 重置初始化标志
+                transcriber.is_initialized = False
+                
+                # 重新初始化模型
+                await transcriber.initialize()
+                logger.info("模型状态重置成功")
+            else:
+                logger.info("模型未初始化，跳过重置")
+                
+        except Exception as e:
+            logger.error(f"重置模型失败: {e}")
     
     def get_stats(self) -> dict:
         """获取统计信息"""
