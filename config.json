@@ -4,11 +4,19 @@
     "port": 8767,
     "max_connections": 100,
     "max_file_size_mb": 5000,
-    "allowed_extensions": [".wav", ".mp3", ".mp4", ".m4a", ".flac", ".aac", ".ogg", ".opus"],
+    "allowed_extensions": [
+      ".wav",
+      ".mp3",
+      ".mp4",
+      ".m4a",
+      ".flac",
+      ".aac",
+      ".ogg",
+      ".opus"
+    ],
     "temp_dir": "./temp",
     "upload_dir": "./uploads"
   },
-  
   "funasr": {
     "model": "paraformer-zh",
     "model_revision": "v2.0.4",
@@ -25,34 +33,30 @@
     "disable_update": true,
     "disable_pbar": true
   },
-  
   "transcription": {
     "max_concurrent_tasks": 4,
+    "concurrency_mode": "lock",
     "task_timeout_minutes": 30,
     "retry_times": 2,
     "cache_enabled": true,
     "delete_after_transcription": true
   },
-  
   "database": {
     "path": "./data/transcription_cache.db",
     "max_cache_days": 30
   },
-  
   "notification": {
     "enabled": true,
     "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=043a2a1a-4dc9-40f2-a082-5037a875979e",
     "retry_times": 3,
     "timeout_seconds": 10
   },
-  
   "auth": {
     "enabled": false,
     "secret_key": "your-secret-key-change-this-in-production",
     "algorithm": "HS256",
     "access_token_expire_minutes": 1440
   },
-  
   "logging": {
     "level": "DEBUG",
     "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}",
