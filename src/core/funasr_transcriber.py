@@ -5,6 +5,7 @@ import os
 import time
 import asyncio
 import json
+import threading
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,13 +16,32 @@ from src.utils.file_utils import convert_to_wav, get_audio_duration
 
 
 class FunASRTranscriber:
-    """FunASR转录器 - 与测试脚本完全一致的实现"""
+    """FunASR转录器 - 支持并发安全的实现"""
     
     def __init__(self, config_path: str = "config.json"):
         self.model = None
+        self.model_pool = None
         self.is_initialized = False
         self.config = self._load_config(config_path)
         self.cache_dir = self.config["funasr"]["model_dir"]
+        
+        # 获取并发模式配置：lock（线程锁）或 pool（模型池）
+        self.concurrency_mode = self.config.get("transcription", {}).get("concurrency_mode", "lock")
+        
+        if self.concurrency_mode == "lock":
+            # 使用线程锁模式（默认）
+            self._model_lock = threading.Lock()
+            logger.info("FunASR转录器使用线程锁模式，序列化模型访问")
+        elif self.concurrency_mode == "pool":
+            # 使用模型池模式
+            from src.core.model_pool import ModelPool
+            self.model_pool = ModelPool(config_path)
+            logger.info("FunASR转录器使用模型池模式，支持真正并发")
+        else:
+            # 降级到线程锁模式
+            logger.warning(f"未知的并发模式: {self.concurrency_mode}，使用默认线程锁模式")
+            self.concurrency_mode = "lock"
+            self._model_lock = threading.Lock()
     
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -50,39 +70,47 @@ class FunASRTranscriber:
             }
         
     async def initialize(self):
-        """初始化模型 - 使用与测试脚本完全相同的配置"""
+        """初始化模型 - 根据并发模式选择初始化方式"""
         if self.is_initialized:
             return
         
         try:
-            logger.info("开始加载FunASR完整模型（包含说话人识别）...")
-            
-            # 确保缓存目录存在
-            Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-            
-            # 从配置文件加载模型配置
-            funasr_config = self.config["funasr"]
-            self.model = AutoModel(
-                model=funasr_config["model"], 
-                model_revision=funasr_config["model_revision"],
-                vad_model=funasr_config["vad_model"], 
-                vad_model_revision=funasr_config["vad_model_revision"],
-                punc_model=funasr_config["punc_model"], 
-                punc_model_revision=funasr_config["punc_model_revision"],
-                spk_model=funasr_config["spk_model"], 
-                spk_model_revision=funasr_config["spk_model_revision"],
-                cache_dir=self.cache_dir,
-                ncpu=funasr_config.get("ncpu", 8),  # 添加 ncpu 参数，默认值为 8
-                device=funasr_config["device"],
-                disable_update=funasr_config.get("disable_update", True),
-                disable_pbar=funasr_config.get("disable_pbar", True)
-            )
-            
-            self.is_initialized = True
-            logger.info("FunASR完整模型加载成功")
+            if self.concurrency_mode == "pool":
+                # 模型池模式：初始化模型池
+                logger.info("初始化模型池...")
+                await self.model_pool.initialize()
+                self.is_initialized = True
+                logger.info("模型池初始化成功")
+            else:
+                # 线程锁模式：初始化单个模型
+                logger.info("开始加载FunASR完整模型（包含说话人识别）...")
+                
+                # 确保缓存目录存在
+                Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+                
+                # 从配置文件加载模型配置
+                funasr_config = self.config["funasr"]
+                self.model = AutoModel(
+                    model=funasr_config["model"], 
+                    model_revision=funasr_config["model_revision"],
+                    vad_model=funasr_config["vad_model"], 
+                    vad_model_revision=funasr_config["vad_model_revision"],
+                    punc_model=funasr_config["punc_model"], 
+                    punc_model_revision=funasr_config["punc_model_revision"],
+                    spk_model=funasr_config["spk_model"], 
+                    spk_model_revision=funasr_config["spk_model_revision"],
+                    cache_dir=self.cache_dir,
+                    ncpu=funasr_config.get("ncpu", 8),  # 添加 ncpu 参数，默认值为 8
+                    device=funasr_config["device"],
+                    disable_update=funasr_config.get("disable_update", True),
+                    disable_pbar=funasr_config.get("disable_pbar", True)
+                )
+                
+                self.is_initialized = True
+                logger.info("FunASR完整模型加载成功")
             
         except Exception as e:
-            logger.error(f"加载FunASR模型失败: {e}")
+            logger.error(f"模型初始化失败: {e}")
             raise Exception(f"模型初始化失败: {e}")
     
     async def transcribe(
@@ -141,15 +169,33 @@ class FunASRTranscriber:
                 progress_task = asyncio.create_task(send_periodic_progress())
             
             try:
-                # 使用 lambda 包装以正确传递关键字参数
-                result = await loop.run_in_executor(
-                    None,  # 使用默认线程池
-                    lambda: self.model.generate(
-                        input=audio_path,  # 直接使用原始音频文件
+                if self.concurrency_mode == "pool":
+                    # 使用模型池进行推理
+                    logger.debug(f"使用模型池处理: {os.path.basename(audio_path)}")
+                    result = await self.model_pool.generate_with_pool(
+                        audio_path=audio_path,
                         batch_size_s=self.config["funasr"]["batch_size_s"],
                         hotword=''
                     )
-                )
+                else:
+                    # 使用线程锁保护模型访问，解决并发VAD错误
+                    # Python版本的FunASR VAD不支持并发，需要序列化访问
+                    def _generate_with_lock():
+                        with self._model_lock:
+                            logger.debug(f"获取模型锁，开始处理: {os.path.basename(audio_path)}")
+                            result = self.model.generate(
+                                input=audio_path,  # 直接使用原始音频文件
+                                batch_size_s=self.config["funasr"]["batch_size_s"],
+                                hotword=''
+                            )
+                            logger.debug(f"释放模型锁，处理完成: {os.path.basename(audio_path)}")
+                            return result
+                    
+                    # 在线程池中执行，但使用锁保护
+                    result = await loop.run_in_executor(
+                        None,  # 使用默认线程池
+                        _generate_with_lock
+                    )
             except Exception as model_error:
                 error_msg = str(model_error)
                 
