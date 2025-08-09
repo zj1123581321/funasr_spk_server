@@ -23,6 +23,9 @@ ref_codes/
 models
 /tests/output/
 sampels
+src/cpp
+version_backup/
+
 # 测试文件
 .pytest_cache/
 .coverage

@@ -34,8 +34,8 @@
     "disable_pbar": true
   },
   "transcription": {
-    "max_concurrent_tasks": 4,
-    "concurrency_mode": "lock",
+    "max_concurrent_tasks": 2,
+    "concurrency_mode": "pool",
     "task_timeout_minutes": 30,
     "retry_times": 2,
     "cache_enabled": true,

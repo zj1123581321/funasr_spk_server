@@ -25,7 +25,7 @@ class FunASRTranscriber:
         self.config = self._load_config(config_path)
         self.cache_dir = self.config["funasr"]["model_dir"]
         
-        # 获取并发模式配置：lock（线程锁）或 pool（模型池）
+        # 获取并发模式配置：lock（线程锁）、pool（进程池）或 thread_pool（线程池，已废弃）
         self.concurrency_mode = self.config.get("transcription", {}).get("concurrency_mode", "lock")
         
         if self.concurrency_mode == "lock":
@@ -33,10 +33,15 @@ class FunASRTranscriber:
             self._model_lock = threading.Lock()
             logger.info("FunASR转录器使用线程锁模式，序列化模型访问")
         elif self.concurrency_mode == "pool":
-            # 使用模型池模式
-            from src.core.model_pool import ModelPool
-            self.model_pool = ModelPool(config_path)
-            logger.info("FunASR转录器使用模型池模式，支持真正并发")
+            # 使用文件系统进程池模式（推荐用于生产环境）
+            from src.core.file_based_process_pool import FileBasedProcessPool
+            self.model_pool = FileBasedProcessPool(config_path)
+            logger.info("FunASR转录器使用文件系统进程池模式，支持真正并发")
+        elif self.concurrency_mode == "thread_pool":
+            # 线程池模式已废弃，降级到线程锁
+            logger.warning("线程池模式已废弃（存在并发问题），自动切换到线程锁模式")
+            self.concurrency_mode = "lock"
+            self._model_lock = threading.Lock()
         else:
             # 降级到线程锁模式
             logger.warning(f"未知的并发模式: {self.concurrency_mode}，使用默认线程锁模式")
@@ -135,6 +140,7 @@ class FunASRTranscriber:
                     await progress_callback(10)
                 else:
                     progress_callback(10)
+                logger.debug(f"[{task_id}] 发送进度更新: 10%")
             
             # 获取音频时长（直接使用原文件）
             duration = get_audio_duration(audio_path)
@@ -164,7 +170,7 @@ class FunASRTranscriber:
                             await progress_callback(progress)
                         else:
                             progress_callback(progress)
-                        logger.debug(f"发送进度更新: {progress}%")
+                        logger.debug(f"[{task_id}] 发送进度更新: {progress}%")
                 
                 progress_task = asyncio.create_task(send_periodic_progress())
             
@@ -249,6 +255,7 @@ class FunASRTranscriber:
                     await progress_callback(90)
                 else:
                     progress_callback(90)
+                logger.debug(f"[{task_id}] 发送进度更新: 90%")
             
             # 计算文件哈希
             from src.utils.file_utils import calculate_file_hash
@@ -267,6 +274,7 @@ class FunASRTranscriber:
                         await progress_callback(100)
                     else:
                         progress_callback(100)
+                    logger.debug(f"[{task_id}] 发送进度更新: 100% (SRT格式)")
                 
                 logger.info(f"转录完成(SRT格式): 耗时{processing_time:.2f}秒")
                 
@@ -304,6 +312,7 @@ class FunASRTranscriber:
                         await progress_callback(100)
                     else:
                         progress_callback(100)
+                    logger.debug(f"[{task_id}] 发送进度更新: 100% (JSON格式)")
                 
                 logger.info(f"转录完成: {len(segments)}个片段, {len(speakers)}个说话人, 耗时{processing_time:.2f}秒")
                 
@@ -486,5 +495,12 @@ class FunASRTranscriber:
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-# 全局转录器实例
-transcriber = FunASRTranscriber()
+# 全局转录器实例（延迟初始化）
+transcriber = None
+
+def get_transcriber():
+    """获取全局转录器实例（延迟初始化）"""
+    global transcriber
+    if transcriber is None:
+        transcriber = FunASRTranscriber()
+    return transcriber
