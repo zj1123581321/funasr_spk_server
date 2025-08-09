@@ -1,10 +1,10 @@
 """
-独立的工作进程 - 处理转录任务
-每个进程完全独立，通过文件系统通信
+FunASR工作进程 - 支持pickle序列化处理大型结果
 """
 import os
 import sys
 import json
+import pickle
 import time
 import argparse
 import traceback
@@ -54,11 +54,15 @@ def process_task(model, task_file: str, config: dict):
     audio_path = task['audio_path']
     batch_size_s = task.get('batch_size_s', config["funasr"].get("batch_size_s", 300))
     hotword = task.get('hotword', '')
+    use_pickle = task.get('use_pickle', True)  # 默认使用pickle
     
     print(f"[Worker] 处理任务 {task_id}: {os.path.basename(audio_path)}")
     
     # 结果文件路径
-    result_file = task_file.replace('.task', '.result')
+    if use_pickle:
+        result_file = task_file.replace('.task', '.pkl')
+    else:
+        result_file = task_file.replace('.task', '.result')
     
     try:
         # 执行模型推理
@@ -68,7 +72,7 @@ def process_task(model, task_file: str, config: dict):
             hotword=hotword
         )
         
-        # 保存结果 - 使用压缩格式减小文件大小
+        # 保存结果
         result_data = {
             'task_id': task_id,
             'success': True,
@@ -76,11 +80,23 @@ def process_task(model, task_file: str, config: dict):
             'worker_pid': os.getpid()
         }
         
-        # 使用紧凑格式，不添加额外的空格和换行
-        with open(result_file, 'w', encoding='utf-8') as f:
-            json.dump(result_data, f, ensure_ascii=False, separators=(',', ':'))
+        if use_pickle:
+            # 使用pickle保存（支持大型对象）
+            with open(result_file, 'wb') as f:
+                pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        else:
+            # 使用JSON保存（兼容性更好，但可能失败于大型结果）
+            try:
+                with open(result_file, 'w', encoding='utf-8') as f:
+                    json.dump(result_data, f, ensure_ascii=False, separators=(',', ':'))
+            except Exception as json_error:
+                print(f"[Worker] JSON保存失败，改用pickle: {json_error}")
+                # 降级到pickle
+                result_file = task_file.replace('.task', '.pkl')
+                with open(result_file, 'wb') as f:
+                    pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
         
-        print(f"[Worker] 任务 {task_id} 完成")
+        print(f"[Worker] 任务 {task_id} 完成，结果保存到: {os.path.basename(result_file)}")
         
     except Exception as e:
         error_msg = str(e)
@@ -88,14 +104,20 @@ def process_task(model, task_file: str, config: dict):
         print(f"[Worker] 任务 {task_id} 失败: {error_msg}")
         
         # 保存错误结果
-        with open(result_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                'task_id': task_id,
-                'success': False,
-                'error': error_msg,
-                'traceback': traceback_str,
-                'worker_pid': os.getpid()
-            }, f, ensure_ascii=False)
+        error_data = {
+            'task_id': task_id,
+            'success': False,
+            'error': error_msg,
+            'traceback': traceback_str,
+            'worker_pid': os.getpid()
+        }
+        
+        if use_pickle:
+            with open(result_file, 'wb') as f:
+                pickle.dump(error_data, f)
+        else:
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump(error_data, f, ensure_ascii=False)
     
     finally:
         # 删除任务文件（表示任务已处理）
