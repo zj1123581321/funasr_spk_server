@@ -39,7 +39,8 @@
     "task_timeout_minutes": 30,
     "retry_times": 2,
     "cache_enabled": true,
-    "delete_after_transcription": true
+    "delete_after_transcription": true,
+    "transcription_speed_ratio": 10
   },
   "database": {
     "path": "./data/transcription_cache.db",
