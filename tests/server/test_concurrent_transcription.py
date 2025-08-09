@@ -384,7 +384,7 @@ class ConcurrentTranscriptionTester:
         logger.info("=== 开始并发转写能力测试 ===")
         
         # 查找测试音频文件
-        samples_dir = project_root / "samples"
+        samples_dir = project_root / "samples/concurrency"
         audio_files = []
         
         for ext in ['.wav', '.mp3', '.mp4', '.m4a', '.flac']:
