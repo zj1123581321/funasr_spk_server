@@ -161,16 +161,37 @@ class FunASRTranscriber:
             progress_task = None
             if progress_callback and duration > 30:  # 仅对超过30秒的音频启用
                 async def send_periodic_progress():
-                    """定期发送进度更新以保持连接活跃"""
+                    """基于预计转录时间发送进度更新"""
+                    # 获取转录速度比例配置，默认为10（转录时间约为音频时长的1/10）
+                    speed_ratio = self.config.get("transcription", {}).get("transcription_speed_ratio", 10)
+                    
+                    # 计算预计转录时间（秒）
+                    estimated_time = duration / speed_ratio
+                    logger.info(f"[{task_id}] 预计转录时间: {estimated_time:.1f}秒 (音频时长: {duration:.1f}秒, 速度比例: 1/{speed_ratio})")
+                    
+                    # 开始时间
+                    start_time = asyncio.get_event_loop().time()
                     progress = 10
+                    
+                    # 更新间隔：每5秒或预计时间的5%，取较小值
+                    update_interval = min(5, estimated_time * 0.05)
+                    
                     while progress < 90:
-                        await asyncio.sleep(10)  # 每10秒更新一次
-                        progress = min(progress + 5, 85)  # 最多到85%
+                        await asyncio.sleep(update_interval)
+                        
+                        # 根据已用时间计算进度
+                        elapsed_time = asyncio.get_event_loop().time() - start_time
+                        # 基于预计时间的进度（10%~90%之间）
+                        time_based_progress = min(10 + (elapsed_time / estimated_time) * 80, 90)
+                        
+                        # 平滑进度增长，避免进度突变
+                        progress = min(progress + 5, time_based_progress, 85)
+                        
                         if asyncio.iscoroutinefunction(progress_callback):
-                            await progress_callback(progress)
+                            await progress_callback(int(progress))
                         else:
-                            progress_callback(progress)
-                        logger.debug(f"[{task_id}] 发送进度更新: {progress}%")
+                            progress_callback(int(progress))
+                        logger.debug(f"[{task_id}] 发送进度更新: {int(progress)}% (已用时: {elapsed_time:.1f}秒)")
                 
                 progress_task = asyncio.create_task(send_periodic_progress())
             
