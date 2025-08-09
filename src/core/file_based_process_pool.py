@@ -69,14 +69,10 @@ class FileBasedProcessPool:
         try:
             # 启动工作进程
             for i in range(self.pool_size):
-                # 构建命令 - 使用改进版工作进程
-                worker_script = "src/core/worker_process_improved.py"
-                if not Path(worker_script).exists():
-                    worker_script = "src/core/worker_process.py"  # 降级到原版
-                    
+                # 构建命令
                 cmd = [
                     sys.executable,  # Python解释器
-                    worker_script,
+                    "src/core/worker_process.py",
                     "--worker-id", str(i),
                     "--config", self.config_path,
                     "--task-dir", str(self.task_dir)
