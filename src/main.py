@@ -15,7 +15,7 @@ from src.core.config import config
 from src.core.database import db_manager
 from src.core.task_manager import task_manager
 # 使用FunASR转录器
-from src.core.funasr_transcriber import transcriber
+from src.core.funasr_transcriber import get_transcriber
 logger.info("使用FunASR转录器")
 from src.api.websocket_handler import ws_handler
 from src.utils.notification import send_custom_notification
@@ -39,6 +39,7 @@ class FunASRServer:
             
             # 初始化转录器
             logger.info("初始化FunASR模型...")
+            transcriber = get_transcriber()
             await transcriber.initialize()
             
             # 启动任务管理器

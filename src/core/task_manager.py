@@ -200,7 +200,8 @@ class TaskManager:
                 await self._notify_task_progress(task, progress, f"转录进度: {progress:.1f}%")
             
             # 执行转录
-            from src.core.funasr_transcriber import transcriber
+            from src.core.funasr_transcriber import get_transcriber
+            transcriber = get_transcriber()
             result = await transcriber.transcribe(
                 audio_path=task.file_path,
                 task_id=task_id,
@@ -440,7 +441,8 @@ class TaskManager:
         """尝试重置模型状态"""
         try:
             logger.warning("检测到模型错误，尝试重置模型状态...")
-            from src.core.funasr_transcriber import transcriber
+            from src.core.funasr_transcriber import get_transcriber
+            transcriber = get_transcriber()
             
             # 如果模型已初始化，尝试重新初始化
             if transcriber.is_initialized:
