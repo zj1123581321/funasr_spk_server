@@ -34,7 +34,7 @@
     "disable_pbar": true
   },
   "transcription": {
-    "max_concurrent_tasks": 2,
+    "max_concurrent_tasks": 3,
     "concurrency_mode": "pool",
     "task_timeout_minutes": 30,
     "retry_times": 2,
@@ -48,7 +48,7 @@
   },
   "notification": {
     "enabled": true,
-    "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=043a2a1a-4dc9-40f2-a082-5037a875979e",
+    "webhook_url": "",
     "retry_times": 3,
     "timeout_seconds": 10
   },

@@ -4,6 +4,10 @@
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 # 添加项目目录到Python路径
 project_dir = Path(__file__).parent
