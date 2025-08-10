@@ -25,7 +25,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 10G
         reservations:
           memory: 2G
     # 健康检查

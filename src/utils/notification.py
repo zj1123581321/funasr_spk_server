@@ -8,6 +8,7 @@ from typing import Dict, Any
 from loguru import logger
 from src.core.config import config
 from src.models.schemas import TranscriptionTask
+from src.utils.device_info import get_cached_device_identifier
 
 
 async def send_wework_notification(task: TranscriptionTask, event_type: str):
@@ -50,9 +51,13 @@ async def send_wework_notification(task: TranscriptionTask, event_type: str):
 
 def _build_message(task: TranscriptionTask, event_type: str) -> Dict[str, Any]:
     """构建企微消息"""
+    # 获取设备信息
+    device_info = get_cached_device_identifier()
+    
     if event_type == "completed":
         title = "✅ 转录任务完成"
-        content = f"""任务ID: {task.task_id}
+        content = f"""设备: {device_info}
+任务ID: {task.task_id}
 文件名: {task.file_name}
 文件大小: {task.file_size / 1024 / 1024:.2f}MB
 处理时长: {task.result.processing_time:.2f}秒
@@ -62,14 +67,16 @@ def _build_message(task: TranscriptionTask, event_type: str) -> Dict[str, Any]:
 完成时间: {task.completed_at.strftime("%Y-%m-%d %H:%M:%S")}"""
     elif event_type == "failed":
         title = "❌ 转录任务失败"
-        content = f"""任务ID: {task.task_id}
+        content = f"""设备: {device_info}
+任务ID: {task.task_id}
 文件名: {task.file_name}
 错误信息: {task.error}
 重试次数: {task.retry_count}
 失败时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
     else:
         title = f"📢 转录任务通知 - {event_type}"
-        content = f"""任务ID: {task.task_id}
+        content = f"""设备: {device_info}
+任务ID: {task.task_id}
 文件名: {task.file_name}
 状态: {task.status.value}
 时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
@@ -91,11 +98,14 @@ async def send_custom_notification(title: str, content: str, msg_type: str = "te
         return
     
     try:
-        # 强制使用text模式
+        # 获取设备信息
+        device_info = get_cached_device_identifier()
+        
+        # 强制使用text模式，添加设备信息
         message = {
             "msgtype": "text",
             "text": {
-                "content": f"{title}\n\n{content}"
+                "content": f"{title}\n\n设备: {device_info}\n{content}"
             }
         }
         
