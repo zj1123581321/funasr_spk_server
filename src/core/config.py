@@ -114,6 +114,15 @@ class Config(BaseModel):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            
+            # 从环境变量读取敏感信息
+            if "notification" in data:
+                webhook_url_env = os.getenv("WEBHOOK_URL")
+                if webhook_url_env:
+                    data["notification"]["webhook_url"] = webhook_url_env
+                elif not data["notification"].get("webhook_url"):
+                    logger.warning("未设置 WEBHOOK_URL 环境变量，通知功能可能无法正常工作")
+            
             return cls(**data)
         except Exception as e:
             logger.error(f"加载配置文件失败: {e}")

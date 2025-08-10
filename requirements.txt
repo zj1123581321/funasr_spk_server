@@ -18,6 +18,7 @@ aiosqlite==0.19.0
 pydantic==2.5.3
 loguru==0.7.2
 python-multipart==0.0.6
+python-dotenv==1.0.0
 
 # Audio/Video processing
 ffmpeg-python==0.2.0
