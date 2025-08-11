@@ -13,11 +13,13 @@ class ServerConfig(BaseModel):
     """服务器配置"""
     host: str = "0.0.0.0"
     port: int = 8765
-    max_connections: int = 100
+    max_connections: int = 200  # 增加连接数，支持更多并发客户端
     max_file_size_mb: int = 5000
     allowed_extensions: list[str] = [".wav", ".mp3", ".mp4", ".m4a", ".flac", ".aac", ".ogg", ".opus"]
     temp_dir: str = "./temp"
     upload_dir: str = "./uploads"
+    connection_timeout_seconds: int = 300  # WebSocket 连接超时时间
+    heartbeat_interval_seconds: int = 30  # 心跳间隔
     
     model_config = {"protected_namespaces": ()}
 
@@ -44,11 +46,14 @@ class FunASRConfig(BaseModel):
 
 class TranscriptionConfig(BaseModel):
     """转录配置"""
-    max_concurrent_tasks: int = 4
-    task_timeout_minutes: int = 30
+    max_concurrent_tasks: int = 8  # 根据CPU核心数调整，通常为核心数的一半
+    max_queue_size: int = 50  # 任务队列最大长度，防止内存溢出
+    task_timeout_minutes: int = 60  # 增加到60分钟，配合动态超时机制
     retry_times: int = 2
     cache_enabled: bool = True
     delete_after_transcription: bool = True
+    queue_status_enabled: bool = True  # 启用排队状态通知
+    load_balancing_enabled: bool = True  # 启用动态负载均衡
     
     model_config = {"protected_namespaces": ()}
 

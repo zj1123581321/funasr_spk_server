@@ -17,10 +17,12 @@ class TaskManager:
     
     def __init__(self):
         self.tasks: Dict[str, TranscriptionTask] = {}
-        self.task_queue = asyncio.Queue()
+        self.task_queue = asyncio.Queue(maxsize=config.transcription.max_queue_size)
         self.workers = []
         self.executor = ThreadPoolExecutor(max_workers=config.transcription.max_concurrent_tasks)
         self.is_running = False
+        self.processing_tasks = 0  # 当前正在处理的任务数
+        self._queue_lock = asyncio.Lock()  # 队列操作锁
     
     async def start(self):
         """启动任务管理器"""
@@ -28,13 +30,14 @@ class TaskManager:
             return
         
         self.is_running = True
+        self.processing_tasks = 0
         
         # 启动工作线程
         for i in range(config.transcription.max_concurrent_tasks):
             worker = asyncio.create_task(self._worker(i))
             self.workers.append(worker)
         
-        logger.info(f"任务管理器已启动，{config.transcription.max_concurrent_tasks}个工作线程")
+        logger.info(f"任务管理器已启动，{config.transcription.max_concurrent_tasks}个工作线程，队列最大容量: {config.transcription.max_queue_size}")
     
     async def stop(self):
         """停止任务管理器"""
@@ -119,11 +122,37 @@ class TaskManager:
                 
                 # 通知完成
                 await self._notify_task_complete(task)
-                return
+                return None
         
-        # 将任务加入队列
-        await self.task_queue.put(task_id)
-        logger.info(f"任务已加入队列: {task_id}")
+        # 检查队列是否已满
+        async with self._queue_lock:
+            queue_size = self.task_queue.qsize()
+            if queue_size >= config.transcription.max_queue_size:
+                raise Exception(f"任务队列已满，最大容量: {config.transcription.max_queue_size}")
+            
+            # 将任务加入队列
+            try:
+                self.task_queue.put_nowait(task_id)
+                logger.info(f"任务已加入队列: {task_id}")
+                
+                # 返回排队信息
+                queue_info = None
+                if config.transcription.queue_status_enabled:
+                    # 计算排队位置和预估等待时间
+                    position = queue_size + 1
+                    # 预估每个任务平均处理时间为2分钟
+                    estimated_wait = max(0, (position - self.processing_tasks) * 2)
+                    
+                    queue_info = {
+                        "queued": position > config.transcription.max_concurrent_tasks,
+                        "position": position,
+                        "estimated_wait": estimated_wait
+                    }
+                
+                return queue_info
+                
+            except asyncio.QueueFull:
+                raise Exception("任务队列已满")
     
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
@@ -186,6 +215,10 @@ class TaskManager:
         if task.status == TaskStatus.CANCELLED:
             logger.info(f"任务已取消，跳过处理: {task_id}")
             return
+        
+        # 增加处理任务计数
+        async with self._queue_lock:
+            self.processing_tasks += 1
         
         try:
             # 更新任务状态
@@ -310,6 +343,10 @@ class TaskManager:
                 
                 # 发送企微通知
                 await self._send_wework_notification(task, "failed")
+        finally:
+            # 减少处理任务计数
+            async with self._queue_lock:
+                self.processing_tasks = max(0, self.processing_tasks - 1)
     
     async def _notify_task_progress(self, task: TranscriptionTask, progress: float, message: str):
         """通知任务进度"""
@@ -472,12 +509,36 @@ class TaskManager:
         stats = {
             "total_tasks": len(self.tasks),
             "pending_tasks": sum(1 for t in self.tasks.values() if t.status == TaskStatus.PENDING),
-            "processing_tasks": sum(1 for t in self.tasks.values() if t.status == TaskStatus.PROCESSING),
+            "processing_tasks": self.processing_tasks,
             "completed_tasks": sum(1 for t in self.tasks.values() if t.status == TaskStatus.COMPLETED),
             "failed_tasks": sum(1 for t in self.tasks.values() if t.status == TaskStatus.FAILED),
-            "queue_size": self.task_queue.qsize()
+            "cancelled_tasks": sum(1 for t in self.tasks.values() if t.status == TaskStatus.CANCELLED),
+            "queue_size": self.task_queue.qsize(),
+            "max_queue_size": config.transcription.max_queue_size,
+            "max_concurrent_tasks": config.transcription.max_concurrent_tasks
         }
         return stats
+    
+    async def adjust_concurrency(self, new_max_tasks: int):
+        """动态调整并发任务数"""
+        if new_max_tasks <= 0 or new_max_tasks > 32:  # 限制最大并发数
+            raise ValueError("并发任务数必须在1-32之间")
+        
+        logger.info(f"调整并发任务数: {config.transcription.max_concurrent_tasks} -> {new_max_tasks}")
+        
+        # 更新配置
+        config.transcription.max_concurrent_tasks = new_max_tasks
+        
+        # 如果需要增加worker
+        current_workers = len(self.workers)
+        if new_max_tasks > current_workers:
+            for i in range(current_workers, new_max_tasks):
+                worker = asyncio.create_task(self._worker(i))
+                self.workers.append(worker)
+        # 如果需要减少worker，让多余的worker自然结束
+        # 这里不主动取消worker，而是通过减少配置让它们自然减少工作负载
+        
+        logger.info(f"并发调整完成，当前worker数: {len(self.workers)}")
 
 
 # 全局任务管理器实例

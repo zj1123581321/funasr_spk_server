@@ -252,14 +252,28 @@ class WebSocketHandler:
             from src.utils.file_utils import save_uploaded_file
             file_path, _ = await save_uploaded_file(file_data, task.file_name)
             
-            # 提交任务到队列
-            await task_manager.submit_task(task_id, file_path)
+            # 提交任务到队列，获取排队信息
+            queue_info = await task_manager.submit_task(task_id, file_path)
             
-            # 发送响应
-            await self._send_message(websocket, "upload_complete", {
+            # 发送响应，包含排队信息
+            response_data = {
                 "task_id": task_id,
                 "message": "文件上传成功，开始处理"
-            })
+            }
+            
+            # 如果启用了排队状态通知且任务在排队
+            if config.transcription.queue_status_enabled and queue_info:
+                if queue_info.get("queued", False):
+                    response_data.update({
+                        "queue_position": queue_info["position"],
+                        "estimated_wait_minutes": queue_info["estimated_wait"],
+                        "message": f"文件上传成功，排队位置: {queue_info['position']}"
+                    })
+                    # 发送排队状态
+                    await self._send_message(websocket, "task_queued", response_data)
+                    return
+            
+            await self._send_message(websocket, "upload_complete", response_data)
             
         except Exception as e:
             logger.error(f"处理文件数据失败: {e}")
