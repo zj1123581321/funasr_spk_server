@@ -196,9 +196,10 @@ class FileBasedProcessPool:
         
         logger.debug(f"任务 {task_id} 分配给工作进程 {worker_id}")
         
-        # 异步等待结果
-        max_wait_time = 600  # 最长等待10分钟
+        # 根据音频时长动态计算超时时间
+        max_wait_time = self._calculate_timeout(audio_path)
         start_time = time.time()
+        logger.info(f"任务 {task_id} 设置超时时间: {max_wait_time/60:.1f} 分钟")
         
         while time.time() - start_time < max_wait_time:
             # 检查结果文件
@@ -289,6 +290,31 @@ class FileBasedProcessPool:
         if task_file.exists():
             task_file.unlink()
         raise TimeoutError(f"任务处理超时（{max_wait_time}秒）")
+    
+    def _calculate_timeout(self, audio_path: str) -> int:
+        """根据音频时长动态计算超时时间"""
+        try:
+            # 获取音频时长
+            import librosa
+            duration = librosa.get_duration(filename=audio_path)
+            
+            # 计算超时时间：基础时间 + 音频时长系数
+            base_timeout = 300  # 基础5分钟
+            duration_factor = 0.3  # 每秒音频需要0.3秒处理时间
+            calculated_timeout = int(base_timeout + duration * duration_factor)
+            
+            # 设置合理的上下限
+            min_timeout = 600   # 最少10分钟
+            max_timeout = 3600  # 最多60分钟
+            
+            timeout = max(min_timeout, min(calculated_timeout, max_timeout))
+            
+            logger.info(f"音频时长: {duration:.1f}s ({duration/60:.1f}分钟), 计算超时: {timeout}s ({timeout/60:.1f}分钟)")
+            return timeout
+            
+        except Exception as e:
+            logger.warning(f"无法获取音频时长，使用默认超时: {e}")
+            return 1200  # 默认20分钟
     
     def _is_worker_alive(self, worker_id: int) -> bool:
         """检查工作进程是否存活"""
