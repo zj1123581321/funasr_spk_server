@@ -109,6 +109,18 @@ class ConcurrentClient:
         
         logger.info(f"客户端 {self.client_id} 开始转写: {file_name}")
         
+        # 初始化结果结构
+        result_data = {
+            "client_id": self.client_id,
+            "file_name": file_name,
+            "queued": False,
+            "queue_position": None,
+            "estimated_wait_minutes": None,
+            "queue_full_error": False,
+            "cached": False,
+            "success": True
+        }
+        
         # 读取文件
         with open(audio_path, 'rb') as f:
             file_data = f.read()
@@ -116,6 +128,11 @@ class ConcurrentClient:
         file_size = len(file_data)
         file_hash = self.calculate_file_hash(audio_path)
         file_data_b64 = base64.b64encode(file_data).decode('utf-8')
+        
+        result_data.update({
+            "file_size": file_size,
+            "file_hash": file_hash
+        })
         
         # 1. 发送上传请求
         await self.send_message({
@@ -131,24 +148,32 @@ class ConcurrentClient:
         response = await self.receive_message()
         
         if response["type"] == "error":
-            raise Exception(f"上传请求失败: {response['data']['message']}")
+            # 检查是否是队列满错误
+            error_msg = response['data']['message']
+            if "队列已满" in error_msg:
+                logger.warning(f"客户端 {self.client_id} 遇到队列满错误: {file_name}")
+                result_data.update({
+                    "queue_full_error": True,
+                    "success": False,
+                    "error": error_msg
+                })
+                return result_data
+            else:
+                raise Exception(f"上传请求失败: {error_msg}")
         
         # 处理缓存结果
         if response["type"] == "task_complete":
             logger.info(f"客户端 {self.client_id} 使用缓存结果: {file_name}")
             processing_time = time.time() - start_time
-            return {
-                "client_id": self.client_id,
-                "file_name": file_name,
-                "file_size": file_size,
+            result_data.update({
                 "task_id": response["data"].get("task_id", "cached"),
                 "processing_time": processing_time,
                 "server_processing_time": response["data"]["result"].get("processing_time", 0),
                 "cached": True,
-                "success": True,
                 "segments_count": len(response["data"]["result"].get("segments", [])),
                 "speakers_count": len(response["data"]["result"].get("speakers", []))
-            }
+            })
+            return result_data
         
         # 2. 上传文件数据
         task_id = response["data"]["task_id"]
@@ -164,7 +189,29 @@ class ConcurrentClient:
         response = await self.receive_message()
         
         if response["type"] == "error":
-            raise Exception(f"文件上传失败: {response['data']['message']}")
+            error_msg = response['data']['message']
+            if "队列已满" in error_msg:
+                logger.warning(f"客户端 {self.client_id} 上传阶段遇到队列满错误: {file_name}")
+                result_data.update({
+                    "queue_full_error": True,
+                    "success": False,
+                    "error": error_msg
+                })
+                return result_data
+            else:
+                raise Exception(f"文件上传失败: {error_msg}")
+        
+        # 检查是否收到排队通知
+        if response["type"] == "task_queued":
+            queue_data = response["data"]
+            logger.info(f"客户端 {self.client_id} 任务排队: {file_name} - 位置 {queue_data.get('queue_position')}, 预估等待 {queue_data.get('estimated_wait_minutes')} 分钟")
+            result_data.update({
+                "queued": True,
+                "queue_position": queue_data.get("queue_position"),
+                "estimated_wait_minutes": queue_data.get("estimated_wait_minutes")
+            })
+        elif response["type"] == "upload_complete":
+            logger.info(f"客户端 {self.client_id} 文件上传完成，立即开始处理: {file_name}")
         
         # 3. 等待转写结果
         while True:
@@ -180,21 +227,23 @@ class ConcurrentClient:
                 
                 logger.info(f"客户端 {self.client_id} 转写完成: {file_name} (耗时: {processing_time:.2f}s)")
                 
-                return {
-                    "client_id": self.client_id,
-                    "file_name": file_name,
-                    "file_size": file_size,
+                result_data.update({
                     "task_id": task_id,
                     "processing_time": processing_time,
                     "server_processing_time": result.get("processing_time", 0),
-                    "cached": False,
-                    "success": True,
                     "segments_count": len(result.get("segments", [])),
                     "speakers_count": len(result.get("speakers", []))
-                }
+                })
+                return result_data
                 
             elif response["type"] == "error":
-                raise Exception(f"转写失败: {response['data']['message']}")
+                error_msg = response['data']['message']
+                logger.error(f"客户端 {self.client_id} 转写失败: {file_name} - {error_msg}")
+                result_data.update({
+                    "success": False,
+                    "error": error_msg
+                })
+                return result_data
 
 
 class ConcurrentTranscriptionTester:
@@ -251,19 +300,32 @@ class ConcurrentTranscriptionTester:
         ]
         await asyncio.gather(*disconnect_tasks, return_exceptions=True)
     
+    async def _process_single_file(self, audio_file: Path, client_id: str):
+        """处理单个文件，使用独立客户端"""
+        client = ConcurrentClient(client_id, self.server_url)
+        try:
+            # 连接客户端
+            if await client.connect():
+                # 执行转写
+                result = await client.transcribe_file(str(audio_file))
+                return result
+            else:
+                return {"success": False, "error": "连接失败", "file_name": audio_file.name}
+        except Exception as e:
+            return {"success": False, "error": str(e), "file_name": audio_file.name}
+        finally:
+            # 确保断开连接
+            await client.disconnect()
+    
     async def run_concurrent_transcriptions(self, audio_files: List[Path]):
         """并发运行转写任务"""
         logger.info(f"开始并发转写 {len(audio_files)} 个文件...")
         
-        # 为每个客户端分配文件
+        # 为每个文件创建独立的处理任务
         transcription_tasks = []
         for i, audio_file in enumerate(audio_files):
-            client_idx = i % len(self.clients)
-            client = self.clients[client_idx]
-            
-            if client.websocket:  # 只使用已连接的客户端
-                task = client.transcribe_file(str(audio_file))
-                transcription_tasks.append(task)
+            task = self._process_single_file(audio_file, f"file_{i+1}")
+            transcription_tasks.append(task)
         
         # 并发执行所有转写任务
         start_time = time.time()
@@ -459,9 +521,34 @@ class ConcurrentTranscriptionTester:
         print(f"总耗时: {transcription_summary['total_time']:.2f}s")
         print(f"平均耗时: {transcription_summary['average_time']:.2f}s/任务")
         
+        # 队列状态分析
+        queued_tasks = [r for r in self.test_results['transcription_results'] if r.get('queued', False)]
+        queue_full_errors = [r for r in self.test_results['transcription_results'] if r.get('queue_full_error', False)]
+        
+        if queued_tasks or queue_full_errors:
+            print(f"\n=== 排队状态分析 ===")
+            print(f"排队任务数: {len(queued_tasks)}")
+            print(f"队列满错误: {len(queue_full_errors)}")
+            
+            if queued_tasks:
+                positions = [r['queue_position'] for r in queued_tasks if r['queue_position']]
+                wait_times = [r['estimated_wait_minutes'] for r in queued_tasks if r['estimated_wait_minutes']]
+                
+                if positions:
+                    print(f"排队位置范围: {min(positions)} - {max(positions)}")
+                if wait_times:
+                    print(f"预估等待时间范围: {min(wait_times)} - {max(wait_times)} 分钟")
+            
+            # 验证排队通知功能
+            if queued_tasks:
+                print("√ 排队状态通知功能正常工作")
+            if queue_full_errors:
+                print("√ 队列容量保护机制正常工作")
+        
         if analysis["transcription_analysis"]:
             trans_analysis = analysis["transcription_analysis"]
-            print(f"\n缓存命中率: {trans_analysis['cache_hit_rate']:.1f}%")
+            print(f"\n=== 转录性能分析 ===")
+            print(f"缓存命中率: {trans_analysis['cache_hit_rate']:.1f}%")
             print(f"平均处理时间: {trans_analysis['average_processing_time']:.2f}s")
             print(f"最快处理时间: {trans_analysis['min_processing_time']:.2f}s")
             print(f"最慢处理时间: {trans_analysis['max_processing_time']:.2f}s")
@@ -497,9 +584,9 @@ async def main():
     try:
         success = await tester.run_test()
         if success:
-            print("\n✓ 并发测试完成")
+            print("\n√ 并发测试完成")
         else:
-            print("\n✗ 并发测试失败")
+            print("\n× 并发测试失败")
             return 1
     
     except KeyboardInterrupt:
