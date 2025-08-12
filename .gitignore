@@ -10,6 +10,7 @@ ENV/
 env.bak/
 venv.bak/
 .venv/
+nul
 
 # 项目相关
 /temp/
