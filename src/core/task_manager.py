@@ -55,10 +55,11 @@ class TaskManager:
         
         logger.info("任务管理器已停止")
     
-    async def create_task(self, request: FileUploadRequest) -> TranscriptionTask:
+    async def create_task(self, request: FileUploadRequest, task_id: str = None) -> TranscriptionTask:
         """创建新任务"""
-        # 生成任务ID
-        task_id = str(uuid.uuid4())
+        # 生成或使用提供的任务ID
+        if task_id is None:
+            task_id = str(uuid.uuid4())
         
         # 创建任务对象
         task = TranscriptionTask(

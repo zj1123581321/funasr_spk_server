@@ -45,16 +45,20 @@ class FunASRServer:
             # 启动任务管理器
             await task_manager.start()
             
-            # 启动WebSocket服务器
+            # 启动WebSocket服务器（优化大文件传输配置）
             self.server = await websockets.serve(
                 ws_handler.handle_connection,
                 config.server.host,
                 config.server.port,
                 max_size=config.server.max_file_size_mb * 1024 * 1024,
                 max_queue=config.server.max_connections,
-                ping_interval=30,  # 每30秒发送一次 ping
-                ping_timeout=60,   # ping 响应超时60秒（给客户端更多处理时间）
-                close_timeout=60   # 关闭连接超时60秒
+                ping_interval=60,   # 增加到60秒发送一次 ping（避免大文件传输时超时）
+                ping_timeout=120,   # ping 响应超时120秒（给客户端更多处理时间）
+                close_timeout=60,   # 关闭连接超时60秒
+                # 增加读写缓冲区大小以支持大文件传输
+                read_limit=2**20,   # 1MB读缓冲
+                write_limit=2**20,  # 1MB写缓冲
+                compression=None    # 禁用压缩以减少CPU负载
             )
             
             self.is_running = True

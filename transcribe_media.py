@@ -49,13 +49,16 @@ class MediaTranscriber:
         try:
             logger.info(f"正在连接到转录服务器: {self.server_url}")
             
-            # 连接 WebSocket 服务器
+            # 连接 WebSocket 服务器（优化大文件传输配置）
             self.websocket = await websockets.connect(
                 self.server_url,
-                ping_interval=30,  # 30秒发送一次 ping
-                ping_timeout=60,   # ping 响应超时60秒
-                close_timeout=60,  # 关闭连接超时60秒
-                max_size=100 * 1024 * 1024  # 最大消息大小100MB
+                ping_interval=60,   # 60秒发送一次心跳
+                ping_timeout=120,   # 心跳响应超时120秒
+                close_timeout=60,   # 关闭连接超时60秒
+                max_size=10 * 1024 * 1024,  # 单消息最大10MB
+                # 增加读写缓冲区
+                read_limit=2**20,   # 1MB读缓冲
+                write_limit=2**20   # 1MB写缓冲
             )
             
             # 接收服务器连接确认消息
@@ -149,16 +152,32 @@ class MediaTranscriber:
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"文件不存在: {audio_path}")
         
+        file_name = os.path.basename(audio_path)
+        file_size = os.path.getsize(audio_path)
+        file_hash = self.calculate_file_hash(audio_path)
+        
+        logger.info(f"文件信息: {file_name}, 大小: {file_size/1024/1024:.2f}MB, 哈希: {file_hash[:8]}...")
+        
+        # 判断是否使用分片上传（大于5MB的文件）
+        chunk_threshold = 5 * 1024 * 1024  # 5MB
+        use_chunked_upload = file_size > chunk_threshold
+        
+        if use_chunked_upload:
+            logger.info(f"文件较大（{file_size/1024/1024:.2f}MB），使用分片上传")
+            return await self._transcribe_file_chunked(audio_path, file_name, file_size, file_hash, output_format, force_refresh, start_time)
+        else:
+            logger.info(f"文件较小（{file_size/1024/1024:.2f}MB），使用单文件上传")
+            return await self._transcribe_file_single(audio_path, file_name, file_size, file_hash, output_format, force_refresh, start_time)
+    
+    async def _transcribe_file_single(self, audio_path, file_name, file_size, file_hash, output_format, force_refresh, start_time):
+        """
+        单文件上传转录
+        """
         # 读取音频文件
         with open(audio_path, 'rb') as f:
             file_data = f.read()
         
-        file_name = os.path.basename(audio_path)
-        file_size = len(file_data)
-        file_hash = self.calculate_file_hash(audio_path)
         file_data_b64 = base64.b64encode(file_data).decode('utf-8')
-        
-        logger.info(f"文件信息: {file_name}, 大小: {file_size/1024:.2f}KB, 哈希: {file_hash[:8]}...")
         
         # 1. 发送上传请求
         upload_request = {
@@ -242,6 +261,158 @@ class MediaTranscriber:
                     transcription_result = response["data"]
                     logger.info("转录完成")
                     break
+                
+                elif response["type"] == "error":
+                    raise Exception(f"转录失败: {response['data']['message']}")
+                
+            except Exception as e:
+                logger.error(f"等待转录结果时出错: {e}")
+                raise
+        
+        processing_time = time.time() - start_time
+        
+        # 验证结果
+        if not transcription_result:
+            raise Exception("未收到转录结果")
+        
+        logger.info(f"转录完成: {len(transcription_result.get('segments', []))} 个片段, "
+                   f"{len(transcription_result.get('speakers', []))} 个说话人, "
+                   f"总耗时 {processing_time:.2f}秒")
+        
+        return {
+            "file_name": file_name,
+            "file_size": file_size,
+            "file_hash": file_hash,
+            "task_id": task_id,
+            "processing_time": processing_time,
+            "transcription_result": transcription_result,
+            "cached_result": False
+        }
+    
+    async def _transcribe_file_chunked(self, audio_path, file_name, file_size, file_hash, output_format, force_refresh, start_time):
+        """
+        分片上传转录大文件
+        """
+        chunk_size = 1024 * 1024  # 1MB分片大小
+        total_chunks = (file_size + chunk_size - 1) // chunk_size
+        
+        logger.info(f"分片信息: 分片大小={chunk_size/1024/1024:.2f}MB, 总分片数={total_chunks}")
+        
+        # 1. 发送分片上传请求
+        upload_request = {
+            "type": "upload_request",
+            "data": {
+                "file_name": file_name,
+                "file_size": file_size,
+                "file_hash": file_hash,
+                "chunk_size": chunk_size,
+                "total_chunks": total_chunks,
+                "upload_mode": "chunked",  # 标识分片上传
+                "output_format": output_format,
+                "force_refresh": force_refresh
+            }
+        }
+        
+        await self.send_message(upload_request)
+        response = await self.receive_message()
+        
+        if response["type"] == "error":
+            raise Exception(f"上传请求失败: {response['data']['message']}")
+        
+        # 处理不同的响应类型
+        task_id = None
+        
+        if response["type"] == "task_complete":
+            # 直接返回缓存结果
+            logger.info("使用缓存结果，转录完成")
+            transcription_result = response["data"]["result"]
+            processing_time = time.time() - start_time
+            
+            return {
+                "file_name": file_name,
+                "file_size": file_size,
+                "file_hash": file_hash,
+                "task_id": response["data"].get("task_id", "cached"),
+                "processing_time": processing_time,
+                "transcription_result": transcription_result,
+                "cached_result": True
+            }
+        
+        if response["type"] != "upload_ready":
+            raise Exception(f"未知的响应类型: {response['type']}")
+        
+        task_id = response["data"]["task_id"]
+        logger.info(f"获得任务ID: {task_id}，开始分片上传")
+        
+        # 2. 分片读取和上传
+        with open(audio_path, 'rb') as f:
+            for chunk_index in range(total_chunks):
+                # 读取分片数据
+                chunk_data = f.read(chunk_size)
+                chunk_hash = hashlib.md5(chunk_data).hexdigest()
+                
+                # 发送分片
+                chunk_message = {
+                    "type": "upload_chunk",
+                    "data": {
+                        "task_id": task_id,
+                        "chunk_index": chunk_index,
+                        "chunk_size": len(chunk_data),
+                        "chunk_hash": chunk_hash,
+                        "chunk_data": base64.b64encode(chunk_data).decode(),
+                        "is_last": chunk_index == total_chunks - 1
+                    }
+                }
+                
+                await self.send_message(chunk_message)
+                
+                # 等待分片确认
+                chunk_response = await self.receive_message(timeout=60)  # 60秒超时
+                if chunk_response["type"] != "chunk_received":
+                    raise Exception(f"分片 {chunk_index} 上传失败: {chunk_response.get('type', 'unknown')}")
+                
+                # 显示进度
+                progress = (chunk_index + 1) / total_chunks * 100
+                logger.info(f"上传进度: {progress:.1f}% ({chunk_index + 1}/{total_chunks})")
+        
+        logger.info("文件分片上传完成，等待处理结果...")
+        
+        # 3. 等待转录结果
+        transcription_result = None
+        
+        while True:
+            try:
+                response = await self.receive_message(timeout=300)  # 5分钟超时
+                
+                if response["type"] == "task_progress":
+                    progress = response["data"]["progress"]
+                    logger.info(f"转录进度: {progress}%")
+                
+                elif response["type"] == "transcription_progress":
+                    progress = response["data"]["progress"]
+                    logger.info(f"转录进度: {progress}%")
+                
+                elif response["type"] == "task_complete":
+                    transcription_result = response["data"]["result"]
+                    logger.info("转录完成")
+                    break
+                
+                elif response["type"] == "transcription_complete":
+                    transcription_result = response["data"]
+                    logger.info("转录完成")
+                    break
+                
+                elif response["type"] == "upload_complete":
+                    # 文件上传完成，继续等待转录结果
+                    logger.info("文件上传完成，开始转录...")
+                    continue
+                
+                elif response["type"] == "task_queued":
+                    # 任务排队中
+                    queue_position = response["data"].get("queue_position", "N/A")
+                    estimated_wait = response["data"].get("estimated_wait_minutes", "N/A")
+                    logger.info(f"任务排队中，位置: {queue_position}，预计等待: {estimated_wait}分钟")
+                    continue
                 
                 elif response["type"] == "error":
                     raise Exception(f"转录失败: {response['data']['message']}")
