@@ -26,6 +26,7 @@ models
 sampels
 src/cpp
 version_backup/
+tests/performance/output
 
 # 测试文件
 .pytest_cache/

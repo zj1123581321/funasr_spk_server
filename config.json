@@ -29,12 +29,14 @@
     "model_dir": "models",
     "batch_size_s": 500,
     "ncpu": 16,
-    "device": "cpu",
+    "device": "auto",
+    "device_priority": ["mps", "cpu"],
+    "fallback_on_error": true,
     "disable_update": true,
     "disable_pbar": true
   },
   "transcription": {
-    "max_concurrent_tasks": 3,
+    "max_concurrent_tasks": 2,
     "concurrency_mode": "pool",
     "task_timeout_minutes": 30,
     "retry_times": 2,
@@ -48,7 +50,7 @@
   },
   "notification": {
     "enabled": true,
-    "webhook_url": "",
+    "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f1fa66dd-a1b0-4893-af75-5dab9d993182",
     "retry_times": 3,
     "timeout_seconds": 10
   },

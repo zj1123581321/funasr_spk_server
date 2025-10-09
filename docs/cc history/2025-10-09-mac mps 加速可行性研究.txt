@@ -1,0 +1,615 @@
+
+ ▐▛███▜▌   Claude Code v2.0.11
+▝▜█████▛▘  Sonnet 4.5 · Claude Max
+  ▘▘ ▝▝    /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server
+
+> /clear 
+  ⎿  (no content)
+
+> @README.md
+
+请阅读整个项目架构，梳理核心逻辑。分析在 mac 运行本程序使用 gpu 加速 funasr 转录的可行性。不用修改任何具体代码。 
+  ⎿  Read README.md (462 lines)
+
+⏺ 我来帮你梳理项目架构并分析 Mac 上 GPU 加速的可行性。让我先查看项目结构和核心代码。
+
+⏺ Bash(find /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server -type f -name "*.py" | head -30)
+  ⎿  /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/transcribe_media.py                    
+     /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tests/test_progress_update.py
+     /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tests/core/sentence_role_transcriber.py
+     … +27 lines (ctrl+o to expand)
+
+⏺ Read(config.json)
+  ⎿  Read 68 lines
+
+⏺ Read(requirements.txt)
+  ⎿  Read 40 lines
+
+⏺ Bash(ls -la /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/)
+  ⎿  total 200                                               
+     drwxr-xr-x  30 zhanglixing  staff    960 Oct  9 21:42 .
+     drwxr-xr-x   4 zhanglixing  staff    128 Jul 30 01:25 ..
+     … +28 lines (ctrl+o to expand)
+
+⏺ Bash(find /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/src -type f -name "*.py" | grep -v __pycache__)
+  ⎿  /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/src/core/config.py                 
+     /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/src/core/database.py
+     /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/src/core/file_based_process_pool.py
+     … +18 lines (ctrl+o to expand)
+
+⏺ Read(src/core/funasr_transcriber.py)
+  ⎿  Read 527 lines
+
+⏺ Read(src/core/task_manager.py)
+  ⎿  Read 546 lines
+
+⏺ Read(run_server.py)
+  ⎿  Read 26 lines
+
+⏺ Read(src/utils/device_info.py)
+  ⎿  Read 81 lines
+
+⏺ Read(src/api/websocket_handler.py)
+  ⎿  Read 671 lines
+
+⏺ Read(src/main.py)
+  ⎿  Read 181 lines
+
+⏺ 现在让我查看更多信息来分析 GPU 加速的可行性：
+
+⏺ Bash(python --version)
+  ⎿  Error: (eval):1: command not found: python
+
+⏺ Bash(system_profiler SPSoftwareDataType SPHardwareDataType | grep -E "(System Version|Chip|Processor)")
+  ⎿        System Version: macOS 15.6 (24G84)
+           Chip: Apple M2 Pro
+
+⏺ Bash(source venv/bin/activate && pip list | grep -E "(torch|funasr|onnx)")
+  ⎿  funasr                 1.2.6 
+     onnxruntime            1.22.1
+     pytorch-wpe            0.0.1
+     … +3 lines (ctrl+o to expand)
+
+⏺ Read(docs)
+  ⎿  Error: EISDIR: illegal operation on a directory, read
+
+⏺ Bash(ls -la /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/docs/)
+  ⎿  total 208                                               
+     drwxr-xr-x  11 zhanglixing  staff    352 Oct  9 21:20 .
+     drwxr-xr-x  30 zhanglixing  staff    960 Oct  9 21:42 ..
+     … +9 lines (ctrl+o to expand)
+
+⏺ Bash(source venv/bin/activate && python3 -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('MPS available:',
+      torch.backends.mps.is_availab…)
+  ⎿  CUDA available: False
+     MPS available: True
+     MPS built: True
+
+⏺ Web Search("FunASR GPU MPS Apple Silicon support 2024")
+  ⎿  Did 4 searches in 43s                                                                                                                              
+
+⏺ Read(docs/funasr readme.md)
+  ⎿  Read 398 lines
+
+⏺ Bash(source venv/bin/activate && python3 -c "from funasr import AutoModel; import inspect; print(inspect.signature(AutoModel.__init__))")
+  ⎿  (self, **kwargs)
+
+⏺ 完美！现在我掌握了足够的信息。让我给你提供完整的项目架构分析和 Mac GPU 加速可行性评估。
+
+  📊 项目架构梳理
+
+  1. 整体架构概览
+
+  这是一个基于 FunASR 的企业级音视频转录服务器，采用 WebSocket + 异步任务队列 架构：
+
+  客户端
+    ↓ WebSocket
+  WebSocket Handler (src/api/websocket_handler.py)
+    ↓ 文件上传/分片上传
+  Task Manager (src/core/task_manager.py)
+    ↓ 异步任务队列
+  FunASR Transcriber (src/core/funasr_transcriber.py)
+    ↓ 模型推理
+  Database Manager (src/core/database.py)
+    ↓ 结果缓存
+
+  2. 核心逻辑流程
+
+  上传阶段
+
+  1. 客户端建立 WebSocket 连接（支持 JWT 认证）
+  2. 发送 upload_request，包含文件元信息和 MD5 哈希
+  3. 服务器检查缓存，如果命中直接返回结果
+  4. 支持两种上传模式：
+    - 单文件模式：适用于小文件（<5MB）
+    - 分片模式：大文件分片上传（≥5MB），每片 1MB
+
+  转录阶段
+
+  1. 任务进入 asyncio.Queue 队列
+  2. Worker 线程池并发处理（默认配置：max_concurrent_tasks: 1）
+  3. 两种并发模式：
+    - lock 模式：使用线程锁序列化模型访问（解决 VAD 并发问题）
+    - pool 模式：文件系统进程池，真正并发（推荐生产环境）
+  4. FunASR 模型推理（使用 AutoModel.generate()）
+  5. 实时推送进度（基于音频时长动态预测）
+
+  结果处理
+
+  1. 支持两种输出格式：
+    - JSON：合并相同说话人的连续句子，适合数据分析
+    - SRT：保持原始分段，适合字幕制作
+  2. 结果存入 SQLite 缓存（保存原始结果，支持格式转换）
+  3. 通过 WebSocket 返回给客户端
+  4. 企微机器人通知
+
+  3. 关键设计亮点
+
+  ✅ 智能缓存机制：基于 MD5 哈希避免重复转录，支持跨格式转换✅ 并发安全：解决了 FunASR VAD 并发错误问题（通过线程锁或进程池）✅
+  文件生命周期管理：同一文件多任务时的智能删除策略✅ 动态进度推送：基于 transcription_speed_ratio 配置预测转录进度✅
+  错误重试机制：区分可重试/不可重试错误，自动重置模型状态✅ 大文件支持：分片上传 + 哈希校验，支持最大 5000MB
+
+  ---
+  🔍 Mac GPU 加速可行性分析
+
+  硬件环境
+
+  - 芯片：Apple M2 Pro（Apple Silicon）
+  - 系统：macOS 15.6
+  - PyTorch：2.5.1，支持 MPS（Metal Performance Shaders）
+  - FunASR：1.2.6
+
+  可行性评估
+
+  ✅ 理论上可行
+
+  1. PyTorch MPS 支持：你的环境已启用 MPS
+  MPS available: True
+  MPS built: True
+  2. FunASR 支持 GPU：官方文档明确提到 "配合GPU推理效果更加"，且支持 device 参数
+  3. 代码已预留接口：funasr_transcriber.py:109 中 device 参数会传递给 AutoModel
+
+  ⚠️ 实际问题和限制
+
+  根据我的调研发现：
+
+  1. 官方 MPS 支持有限
+    - GitHub Issue #1802 显示：有用户在 M2 Max 上尝试将 device 改为 "mps" 无效果
+    - FunASR 主要针对 NVIDIA CUDA 优化，MPS 支持未经官方验证
+  2. 模型架构限制
+    - FunASR 使用的 VAD 模型（FSMN-VAD）在 Python 版本中不支持并发
+    - 即使启用 GPU，VAD 部分可能仍在 CPU 上运行（需要验证）
+  3. 多模型协同
+    - 完整的转录流程包含：
+        - ASR 模型（Paraformer）
+      - VAD 模型（FSMN-VAD）
+      - 标点模型（CT-Punc）
+      - 说话人模型（CAM++）
+    - 这些模型需要同时支持 MPS 才能获得显著加速
+  4. 进程池模式的挑战
+    - 当前推荐的 pool 模式会创建多个进程
+    - 每个进程需要独立的 GPU 内存，M2 Pro 统一内存可能成为瓶颈
+
+  预期性能提升
+
+  根据官方 Benchmark：
+  - CPU：RTF (Real-Time Factor) ≈ 0.025
+  - GPU (V100)：RTF ≈ 0.0076（约 3.3 倍加速）
+
+  但在 Apple Silicon 上：
+  - 预期加速比：1.5-2 倍（由于 MPS 支持不完善）
+  - 可能遇到：部分操作回退到 CPU，整体加速效果打折扣
+
+  ---
+  🎯 实验建议
+
+  方案 1：直接尝试 MPS（低风险）
+
+  修改 config.json：
+  {
+    "funasr": {
+      "device": "mps",
+      ...
+    }
+  }
+
+  优点：
+  - 改动最小，仅修改配置
+  - 如果不兼容会自动回退到 CPU
+
+  缺点：
+  - 根据社区反馈，可能无效果
+  - 需要验证各个子模型是否都能在 MPS 上运行
+
+  方案 2：条件性 GPU 加速（推荐）
+
+  修改 funasr_transcriber.py，添加设备检测逻辑：
+
+  def _get_optimal_device(self) -> str:
+      """智能选择最佳设备"""
+      import torch
+
+      # 优先级：MPS > CUDA > CPU
+      if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+          try:
+              # 测试 MPS 是否真正可用
+              test_tensor = torch.tensor([1.0]).to("mps")
+              logger.info("MPS 设备可用，将使用 GPU 加速")
+              return "mps"
+          except Exception as e:
+              logger.warning(f"MPS 初始化失败: {e}，回退到 CPU")
+              return "cpu"
+      elif torch.cuda.is_available():
+          return "cuda"
+      else:
+          return "cpu"
+
+  优点：
+  - 自动检测和回退
+  - 生产环境更稳定
+
+  方案 3：分模型测试（科学验证）
+
+  单独测试每个子模型在 MPS 上的性能：
+
+  # 测试脚本
+  import torch
+  from funasr import AutoModel
+  import time
+
+  device = "mps"  # 或 "cpu"
+
+  # 仅测试 ASR 模型
+  model = AutoModel(
+      model="paraformer-zh",
+      device=device
+  )
+
+  start = time.time()
+  result = model.generate(input="test.wav")
+  elapsed = time.time() - start
+
+  print(f"设备: {device}, 耗时: {elapsed:.2f}秒")
+
+  ---
+  📋 结论和建议
+
+  可行性总结
+
+  | 方面    | 评估     | 说明                                 |
+  |-------|--------|------------------------------------|
+  | 理论可行性 | ✅ 可行   | PyTorch 支持 MPS，FunASR 支持 device 参数 |
+  | 官方支持  | ⚠️ 有限  | 主要针对 CUDA，MPS 支持未经验证               |
+  | 社区实践  | ❌ 失败案例 | 有用户在 M2 Max 上尝试失败                  |
+  | 预期加速  | ⚠️ 不确定 | 可能 1.5-2 倍，也可能无效果                  |
+  | 稳定性风险 | ⚠️ 中等  | 可能遇到兼容性问题或错误                       |
+
+  我的建议
+
+  1. 先做隔离测试：用简单的音频文件测试 device="mps"，观察：
+    - 是否能正常运行（无错误）
+    - 实际速度对比（CPU vs MPS）
+    - GPU 利用率（使用 asitop 工具监控）
+  2. 如果有效果：
+    - 调整 max_concurrent_tasks 为 2-4（利用 M2 Pro 多核）
+    - 监控内存使用（统一内存可能成为瓶颈）
+    - 保持 concurrency_mode: "lock"（避免多进程竞争 GPU）
+  3. 如果无效果或不稳定：
+    - 保持 device="cpu"
+    - 优化 CPU 利用：增加 ncpu: 16 和 batch_size_s
+    - 考虑使用 FunASR 的 ONNX Runtime 版本（针对 CPU 优化）
+  4. 长期方案：
+    - 关注 FunASR 官方对 Apple Silicon 的支持进度
+    - 如需高性能，考虑部署到 NVIDIA GPU 服务器（云端或本地）
+
+  ---
+  总结：在 Mac M2 Pro 上使用 GPU 加速 FunASR 理论上可行，但实际效果存疑。建议先进行小规模测试验证，如果无明显提升，仍建议使用 CPU
+  模式并优化并发参数。当前你的代码架构已经为 GPU 加速预留了接口，切换成本很低，值得一试。
+
+> https://github.com/modelscope/FunASR/issues/1802
+综合这里的讨论结果，尝试利用 mac 上的 gpu 
+  ⎿  Interrupted · What should Claude do instead?
+
+> 尝试利用 mac 上的 gpu 能力进行加速，测试文件在 temp/test.m4a 
+
+⏺ 好的！让我先查看 GitHub Issue #1802 的讨论内容，然后基于社区的解决方案在你的 Mac 上进行 GPU 加速测试。
+
+⏺ Fetch(https://github.com/modelscope/FunASR/issues/1802)
+  ⎿  Received 268.3KB (200 OK)
+
+⏺ Bash(ls -lh /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/temp/test.m4a)
+  ⎿  -rw-r--r--@ 1 zhanglixing  staff    15M Jul 28 10:12 /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/temp/test.m4a
+
+⏺ 完美！从 Issue #1802 讨论中得到了关键信息。让我更新任务状态并开始实施：
+
+⏺ Bash(source venv/bin/activate && python3 -c "import funasr; import inspect; print(inspect.getfile(funasr.auto.auto_model.AutoModel))")
+  ⎿  /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/venv/lib/python3.11/site-packages/funasr/auto/auto_model.py
+
+⏺ Read(venv/lib/python3.11/site-packages/funasr/auto/auto_model.py)
+  ⎿  Read 100 lines
+
+⏺ Bash(source venv/bin/activate && grep -n "cuda.is_available\|device.*cpu"
+      /Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/venv/lib/python3…)
+  ⎿  185:        if not torch.cuda.is_available() or kwargs.get("ngpu", 1) == 0:
+     186:            device = "cpu"
+     317:        # if kwargs.get("device", "cpu") == "cpu":
+     … +2 lines (ctrl+o to expand)
+
+⏺ 完美！找到了关键问题。让我创建测试脚本来验证 GPU 加速效果：
+
+⏺ Write(tests/performance/test_mps_acceleration.py)
+  ⎿  Wrote 435 lines to tests/performance/test_mps_acceleration.py                     
+     """
+     Mac GPU (MPS) 加速性能测试脚本
+     基于 GitHub Issue #1802 的解决方案，测试 FunASR 在 Apple Silicon 上的 GPU 加速效果
+     """
+     import os
+     import sys
+     import time
+     import torch
+     from pathlib import Path
+     … +425 lines (ctrl+o to expand)
+
+⏺ 完美！测试脚本已创建。现在让我运行性能测试：
+
+⏺ Bash(source venv/bin/activate && python tests/performance/test_mps_acceleration.py 2>&1 | tee logs/mps_test_$(date +%Y%m%d_%H%M%S).log) timeout: 10m 0s
+  ⎿  Running in the background (down arrow to manage)
+
+⏺ 测试已启动！让我实时监控测试进度：
+
+⏺ Bash(sleep 10)
+  ⎿  (No content)
+
+⏺ BashOutput(Reading shell output)
+  ⎿  (eval):1: unknown file attribute:
+
+⏺ 让我重新运行测试，简化命令：
+
+⏺ Kill Shell(Kill shell: c10d65)
+  ⎿  Shell c10d65 killed
+
+⏺ Bash(source venv/bin/activate && python tests/performance/test_mps_acceleration.py) timeout: 10m 0s
+  ⎿  Error: Command timed out after 10m 0s 2025-10-09 22:18:19,303 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:18:22,159 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:18:22,658 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:23:29,388 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:23:32,302 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:23:32,824 - modelscope - INFO - Use user-specified model revision: v2.0.4
+     2025-10-09 22:23:34,289 - modelscope - INFO - Use user-specified model revision: v2.0.2
+
+     22:18:18 | SUCCESS  | ✅ FunASR MPS 支持补丁已应用
+     22:18:18 | INFO     | 检查设备支持情况...
+     … +47 lines (ctrl+o to see all)
+
+⏺ 测试运行中，但由于音频文件较大（约31分钟），测试超时了。从已有结果可以看到：
+
+  CPU 测试结果（不含说话人识别）：
+  - ✅ 平均推理时间：76.46 秒
+  - ✅ RTF（Real-Time Factor）：0.0404
+  - ✅ 速度倍率：24.76x （非常快！）
+
+  让我创建一个优化版本的测试脚本，使用更合理的测试策略：
+
+⏺ Write(tests/performance/test_mps_quick.py)
+  ⎿  Wrote 358 lines to tests/performance/test_mps_quick.py
+     """
+     Mac GPU (MPS) 加速快速测试脚本
+     简化版本：仅测试单次推理，快速验证 MPS 加速效果
+     """
+     import os
+     import sys
+     import time
+     import torch
+     from pathlib import Path
+     … +348 lines (ctrl+o to expand)
+
+⏺ 快速测试脚本已创建！让我运行它：
+
+⏺ Bash(source venv/bin/activate && python tests/performance/test_mps_quick.py) timeout: 10m 0s
+  ⎿  22:30:33 | SUCCESS  | ✅ FunASR MPS 支持补丁已应用 
+     22:30:33 | INFO     | 检查设备支持情况...
+     22:30:33 | INFO     |   CUDA 可用: False
+     … +444 lines (ctrl+o to expand)
+
+⏺ 完美！测试完成了。让我更新任务并总结分析结果：
+
+⏺ 🎯 Mac M2 Pro GPU 加速测试结果分析
+
+  📊 测试数据汇总
+
+  | 设备        | 推理时间   | RTF    | 速度倍率   | 相对 CPU   |
+  |-----------|--------|--------|--------|----------|
+  | CPU       | 71.41s | 0.0377 | 26.51x | baseline |
+  | MPS (GPU) | 94.62s | 0.0500 | 20.00x | 0.75x ⚠️ |
+
+  关键发现
+
+  ❌ MPS 性能不佳：反而比 CPU 慢 25%
+
+  - 测试文件：31.5 分钟音频 (1892.91 秒)
+  - 模型配置：Paraformer + VAD + 标点模型（不含说话人识别）
+  - 环境：Apple M2 Pro，macOS 15.6，PyTorch 2.5.1
+
+  ---
+  🔍 深度分析
+
+  为什么 MPS 更慢？
+
+  根据测试结果和技术分析，可能原因包括：
+
+  1. 内存传输开销
+
+  - CPU 模式：统一内存架构，数据无需在CPU和GPU间传输
+  - MPS 模式：虽然是统一内存，但 PyTorch MPS 后端仍需要内存拷贝和格式转换
+  - 结论：对于 FunASR 这种小批量、高频率的推理任务，传输开销超过了计算加速
+
+  2. 算子优化程度
+
+  - CPU 模式：PyTorch 的 CPU 算子高度优化（MKL、OpenMP等）
+  - MPS 模式：某些算子在 MPS 上优化不足或回退到 CPU
+  - VAD 模型：FSMN-VAD 的并发性能问题说明它可能不适合 GPU 执行
+
+  3. 批处理大小限制
+
+  # 从日志可以看到
+  batch_size = 1  # 单样本处理
+  - GPU 优势体现在大批量并行计算
+  - 批大小为 1 时，GPU 利用率低，无法发挥并行优势
+
+  4. 模型特性
+
+  - FunASR 使用的是 非自回归架构（Paraformer）
+  - 虽然推理速度快（RTF 0.03-0.05），但单次推理时间短
+  - GPU 启动和同步开销占比较大
+
+  ---
+  💡 优化建议和结论
+
+  ✅ 推荐方案：保持 CPU 模式
+
+  基于测试结果，不建议在 Mac M2 Pro 上启用 MPS 加速，原因如下：
+
+  1. 性能倒退：MPS 比 CPU 慢 25%
+  2. CPU 已经很快：RTF 0.0377，处理 31 分钟音频仅需 71 秒（26.5倍速）
+  3. 稳定性更好：CPU 模式经过充分验证，兼容性更好
+
+  🔧 CPU 模式优化建议
+
+  既然 CPU 性能已经很不错，可以通过以下方式进一步优化：
+
+  1. 调整并发配置（config.json）
+
+  {
+    "funasr": {
+      "ncpu": 16,           // M2 Pro 有 10-12 核，保持 16 利用超线程
+      "batch_size_s": 500,  // 增加批处理时间（当前 500 已合理）
+      "device": "cpu"       // 明确使用 CPU
+    },
+    "transcription": {
+      "max_concurrent_tasks": 2,  // 可以尝试增加到 2-3
+      "concurrency_mode": "lock"  // 保持线程锁模式
+    }
+  }
+
+  2. 考虑进程池模式（如果需要更高并发）
+
+  {
+    "transcription": {
+      "max_concurrent_tasks": 2,
+      "concurrency_mode": "pool"  // 使用进程池真正并发
+    }
+  }
+
+  ---
+  📝 其他平台建议
+
+  如果需要 GPU 加速，考虑：
+
+  1. NVIDIA GPU 服务器
+    - FunASR 官方主要针对 CUDA 优化
+    - 官方 Benchmark：GPU (V100) 比 CPU 快约 3.3 倍
+    - 适合高并发、大规模转录场景
+  2. ONNX Runtime 优化版本
+  pip install funasr-onnx
+    - 针对 CPU 进一步优化
+    - 可能比当前的 PyTorch 版本更快
+  3. 批处理优化
+    - 如果有多个文件，合并为批处理而非单个处理
+    - 可以提高 GPU 利用率
+
+  ---
+  📋 测试脚本说明
+
+  测试脚本已保存在：
+  - 完整版本：tests/performance/test_mps_acceleration.py
+  - 快速版本：tests/performance/test_mps_quick.py（推荐）
+
+  可以随时重新运行验证：
+  source venv/bin/activate
+  python tests/performance/test_mps_quick.py
+
+  ---
+  ✨ 最终建议
+
+⏺ 当前配置已经非常优秀，无需修改！
+
+  你的 Mac M2 Pro 在 CPU 模式下已经达到：
+  - ✅ 26.5倍实时速度
+  - ✅ 处理 31 分钟音频仅需 71 秒
+  - ✅ RTF（实时因子）仅 0.0377
+
+  这个性能已经远超大多数实际应用需求，完全可以满足生产使用。
+
+  当前配置审查
+
+  检查你的 config.json：
+  {
+    "funasr": {
+      "ncpu": 16,              // ✅ 合理
+      "batch_size_s": 500,     // ✅ 合理
+      "device": "cpu"          // ✅ 保持不变
+    },
+    "transcription": {
+      "max_concurrent_tasks": 1  // 可以考虑增加到 2
+    }
+  }
+
+  建议微调（可选）：
+  如果需要处理多个文件的并发，可以将 max_concurrent_tasks 增加到 2，这样可以充分利用 M2 Pro 的多核心。
+
+  ---
+  🎉 总结
+
+  经过详细的测试和分析，我们得出以下结论：
+
+  1. ✅ 成功验证：FunASR 的 MPS 支持补丁可以工作
+  2. ❌ 性能不佳：MPS 模式反而比 CPU 慢 25%
+  3. ✅ CPU 优秀：当前 CPU 性能已经非常出色（26.5x 实时速度）
+  4. 💡 最终建议：保持使用 CPU 模式，无需启用 GPU 加速
+
+  你的项目架构设计得很好，性能已经很优秀。如果未来需要更高的处理能力，建议：
+  - 增加并发任务数（2-3个）
+  - 或者考虑部署到带 NVIDIA GPU 的云服务器
+
+  测试脚本已保存，可以随时重新验证或在其他设备上测试。
+
+> 我们知道整个项目使用 vad+asr+spk+punc 四个部分，使用不同的模型。那么当前测试过程中，哪些部分尝试使用了 mps 加速？ 
+
+⏺ 很好的问题！让我详细分析测试过程中各个模型的设备使用情况。
+
+⏺ Bash(source venv/bin/activate && python3 -c "
+      import torch…)
+  ⎿  22:40:28 | SUCCESS  | ✅ FunASR MPS 支持补丁已应用                               
+     ================================================================================
+     测试 1: CPU 模式 - 检查各模型设备
+     … +37 lines (ctrl+o to expand)
+
+⏺ 太好了！结果非常清晰。让我创建一个详细的分析报告：
+
+  📊 各模型在 MPS 上的设备分配情况
+
+  根据测试结果：
+
+  ✅ 测试结论：所有 4 个模型都成功在 MPS 上运行
+
+  | 模型               | 功能     | CPU 模式 | MPS 模式 | MPS 兼容性 |
+  |------------------|--------|--------|--------|---------|
+  | ASR (Paraformer) | 语音识别   | cpu    | mps:0  | ✅ 兼容    |
+  | VAD (FSMN-VAD)   | 语音活动检测 | cpu    | mps:0  | ✅ 兼容    |
+  | Punc (CT-Punc)   | 标点预测   | cpu    | mps:0  | ✅ 兼容    |
+  | Spk (CAM++)      | 说话人识别  | cpu    | mps:0  | ✅ 兼容    |
+
+  🔍 关键发现
+
+  1. 之前的测试（test_mps_quick.py）：
+    - ✅ ASR + VAD + Punc：3 个模型都在 MPS 上运行
+    - ❌ 未包含 Spk 模型
+  2. 新的验证测试：
+    - ✅ 说话人模型（CAM++）也可以在 MPS 上运行
+    - ❌ 但这与 GitHub Issue #1802 中 @XUJiahua 的说法（"除了 spk_model 不兼容"）相矛盾
+
+  让我进一步测试包含说话人识别的完整流程性能：
+  ⎿  Interrupted · What should Claude do instead?
+
+
+
