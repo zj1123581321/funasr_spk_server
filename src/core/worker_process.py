@@ -1,5 +1,6 @@
 """
 FunASR工作进程 - 支持pickle序列化处理大型结果
+集成设备管理器，支持 MPS 加速
 """
 import os
 import sys
@@ -9,7 +10,16 @@ import time
 import argparse
 import traceback
 from pathlib import Path
+
+# 添加项目根目录到 Python 路径（worker 进程独立运行时需要）
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from funasr import AutoModel
+
+# 导入设备管理器
+from src.core.device_manager import DeviceManager
 
 
 def load_config(config_path: str) -> dict:
@@ -18,13 +28,45 @@ def load_config(config_path: str) -> dict:
         return json.load(f)
 
 
-def initialize_model(config: dict):
-    """初始化FunASR模型"""
+def setup_device(config: dict) -> str:
+    """
+    设置设备并应用必要的补丁
+
+    Args:
+        config: 配置字典
+
+    Returns:
+        选定的设备名称
+    """
+    print(f"[Worker] 检测和配置设备...")
+
+    # 选择设备
+    device = DeviceManager.select_device(config)
+    print(f"[Worker] 选定设备: {device}")
+
+    # 应用设备补丁
+    DeviceManager.apply_patches(device)
+
+    # 记录设备信息（简化版，不使用 logger）
+    device_info = DeviceManager.get_device_info(device)
+    print(f"[Worker] 设备信息: {device_info['device_name']}")
+
+    return device
+
+
+def initialize_model(config: dict, device: str):
+    """
+    初始化FunASR模型
+
+    Args:
+        config: 配置字典
+        device: 设备名称（已选定）
+    """
     funasr_config = config["funasr"]
     cache_dir = funasr_config["model_dir"]
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
-    
-    print(f"[Worker] 初始化模型...")
+
+    print(f"[Worker] 初始化模型（设备: {device}）...")
     model = AutoModel(
         model=funasr_config["model"],
         model_revision=funasr_config["model_revision"],
@@ -36,7 +78,7 @@ def initialize_model(config: dict):
         spk_model_revision=funasr_config["spk_model_revision"],
         cache_dir=cache_dir,
         ncpu=funasr_config.get("ncpu", 8),
-        device=funasr_config["device"],
+        device=device,  # 使用已选定的设备
         disable_update=funasr_config.get("disable_update", True),
         disable_pbar=funasr_config.get("disable_pbar", True)
     )
@@ -130,12 +172,15 @@ def process_task(model, task_file: str, config: dict):
 def worker_loop(worker_id: int, config_path: str, task_dir: str):
     """工作进程主循环"""
     print(f"[Worker-{worker_id}] 启动 (PID: {os.getpid()})")
-    
+
     # 加载配置
     config = load_config(config_path)
-    
+
+    # 设置设备并应用补丁
+    device = setup_device(config)
+
     # 初始化模型
-    model = initialize_model(config)
+    model = initialize_model(config, device)
     
     # 创建就绪标记文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")

@@ -1,5 +1,5 @@
 """
-FunASR转录核心模块 - 与测试脚本完全一致的实现
+FunASR转录核心模块 - 集成设备管理器，支持 MPS 加速
 """
 import os
 import time
@@ -13,6 +13,7 @@ from loguru import logger
 from funasr import AutoModel
 from src.models.schemas import TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
+from src.core.device_manager import DeviceManager
 
 
 class FunASRTranscriber:
@@ -78,10 +79,11 @@ class FunASRTranscriber:
         """初始化模型 - 根据并发模式选择初始化方式"""
         if self.is_initialized:
             return
-        
+
         try:
             if self.concurrency_mode == "pool":
                 # 模型池模式：初始化模型池
+                # 注意：设备管理器已在 worker_process.py 中集成
                 logger.info("初始化模型池...")
                 await self.model_pool.initialize()
                 self.is_initialized = True
@@ -89,31 +91,36 @@ class FunASRTranscriber:
             else:
                 # 线程锁模式：初始化单个模型
                 logger.info("开始加载FunASR完整模型（包含说话人识别）...")
-                
+
                 # 确保缓存目录存在
                 Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
-                
+
+                # 设备管理：检测、选择和应用补丁
+                device = DeviceManager.select_device(self.config)
+                DeviceManager.apply_patches(device)
+                DeviceManager.log_device_selection(device, self.config)
+
                 # 从配置文件加载模型配置
                 funasr_config = self.config["funasr"]
                 self.model = AutoModel(
-                    model=funasr_config["model"], 
+                    model=funasr_config["model"],
                     model_revision=funasr_config["model_revision"],
-                    vad_model=funasr_config["vad_model"], 
+                    vad_model=funasr_config["vad_model"],
                     vad_model_revision=funasr_config["vad_model_revision"],
-                    punc_model=funasr_config["punc_model"], 
+                    punc_model=funasr_config["punc_model"],
                     punc_model_revision=funasr_config["punc_model_revision"],
-                    spk_model=funasr_config["spk_model"], 
+                    spk_model=funasr_config["spk_model"],
                     spk_model_revision=funasr_config["spk_model_revision"],
                     cache_dir=self.cache_dir,
-                    ncpu=funasr_config.get("ncpu", 8),  # 添加 ncpu 参数，默认值为 8
-                    device=funasr_config["device"],
+                    ncpu=funasr_config.get("ncpu", 8),
+                    device=device,  # 使用设备管理器选定的设备
                     disable_update=funasr_config.get("disable_update", True),
                     disable_pbar=funasr_config.get("disable_pbar", True)
                 )
-                
+
                 self.is_initialized = True
-                logger.info("FunASR完整模型加载成功")
-            
+                logger.success(f"FunASR完整模型加载成功（设备: {device}）")
+
         except Exception as e:
             logger.error(f"模型初始化失败: {e}")
             raise Exception(f"模型初始化失败: {e}")
