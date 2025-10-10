@@ -12,6 +12,10 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.config import config
+# 初始化日志系统(必须在 config 加载之后)
+from src.utils.logger import setup_logger
+setup_logger()
+
 from src.core.database import db_manager
 from src.core.task_manager import task_manager
 # 使用FunASR转录器

@@ -207,8 +207,6 @@ class Config(BaseModel):
         device_priority = os.getenv("FUNASR_DEVICE_PRIORITY")
         if device_priority:
             config_data["funasr"]["device_priority"] = [d.strip() for d in device_priority.split(",")]
-            if os.getenv('FUNASR_WORKER_MODE') != '1':
-                logger.debug(f"环境变量覆盖: FUNASR_DEVICE_PRIORITY = {config_data['funasr']['device_priority']}")
 
         # ==================== 转录配置 ====================
         cls._override_if_set(config_data["transcription"], "max_concurrent_tasks", "FUNASR_MAX_CONCURRENT_TASKS", int)
@@ -219,8 +217,6 @@ class Config(BaseModel):
         data_dir = os.getenv("FUNASR_DATA_DIR")
         if data_dir:
             config_data["database"]["path"] = os.path.join(data_dir, "transcription_cache.db")
-            if os.getenv('FUNASR_WORKER_MODE') != '1':
-                logger.debug(f"环境变量覆盖: database.path = {config_data['database']['path']}")
 
         # ==================== 通知配置 ====================
         cls._override_if_set(config_data["notification"], "enabled", "FUNASR_NOTIFICATION_ENABLED", cls._parse_bool)
@@ -243,10 +239,9 @@ class Config(BaseModel):
         if value is not None:
             try:
                 config_dict[key] = converter(value) if converter else value
-                # Worker 模式下跳过 DEBUG 日志
-                if os.getenv('FUNASR_WORKER_MODE') != '1':
-                    logger.debug(f"环境变量覆盖: {env_var} = {config_dict[key]}")
+                # 配置加载阶段不输出日志,避免影响日志系统初始化
             except Exception as e:
+                # 错误仍需要输出
                 logger.error(f"环境变量 {env_var} 转换失败: {e}")
 
     @staticmethod
@@ -389,8 +384,7 @@ class Config(BaseModel):
         for directory in directories:
             try:
                 Path(directory).mkdir(parents=True, exist_ok=True)
-                if not is_worker:
-                    logger.debug(f"确保目录存在: {directory}")
+                # 目录创建成功时不输出日志,避免影响日志系统初始化
             except Exception as e:
                 logger.error(f"创建目录失败 {directory}: {e}")
                 sys.exit(1)

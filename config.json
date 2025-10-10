@@ -59,7 +59,7 @@
     "max_concurrent_tasks": 2,
     "_comment_max_concurrent_tasks": "可通过环境变量覆盖: FUNASR_MAX_CONCURRENT_TASKS",
 
-    "max_queue_size": 50,
+    "max_queue_size": 100,
 
     "concurrency_mode": "pool",
 
