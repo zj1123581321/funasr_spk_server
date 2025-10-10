@@ -2,6 +2,7 @@
 文件处理工具模块
 """
 import os
+import time
 import hashlib
 import aiofiles
 import ffmpeg
@@ -114,10 +115,12 @@ async def cleanup_temp_files():
         return
     
     try:
+        current_time = time.time()
         for file_path in temp_dir.glob("*"):
             if file_path.is_file():
                 # 删除超过1天的临时文件
-                if (Path.stat(file_path).st_mtime + 86400) < os.time.time():
+                file_mtime = Path.stat(file_path).st_mtime
+                if (current_time - file_mtime) > 86400:
                     file_path.unlink()
                     logger.debug(f"清理临时文件: {file_path}")
     except Exception as e:
