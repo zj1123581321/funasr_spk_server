@@ -3,21 +3,21 @@ version: '3.8'
 services:
   funasr-server:
     build: .
-    container_name: funasr_spk_server
+    container_name: ${COMPOSE_PROJECT_NAME:-funasr}_server
     ports:
-      - "${PORT:-8765}:8765"
+      - "${FUNASR_SERVER_PORT:-8767}:${FUNASR_SERVER_PORT:-8767}"
     volumes:
       - ./models:/app/models
       - ./uploads:/app/uploads
       - ./logs:/app/logs
       - ./data:/app/data
       - ./config.json:/app/config.json
+      - ./.env:/app/.env  # 挂载 .env 文件到容器
+    env_file:
+      - .env  # 从 .env 文件加载环境变量
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-      # 针对不同平台的优化
-      - OMP_NUM_THREADS=4
-      - MALLOC_MMAP_THRESHOLD_=65536
     restart: unless-stopped
     networks:
       - funasr-network

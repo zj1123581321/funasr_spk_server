@@ -14,20 +14,22 @@ from funasr import AutoModel
 from src.models.schemas import TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
 from src.core.device_manager import DeviceManager
+from src.core.config import config as global_config
 
 
 class FunASRTranscriber:
     """FunASR转录器 - 支持并发安全的实现"""
-    
+
     def __init__(self, config_path: str = "config.json"):
         self.model = None
         self.model_pool = None
         self.is_initialized = False
-        self.config = self._load_config(config_path)
-        self.cache_dir = self.config["funasr"]["model_dir"]
-        
+        # 使用全局配置对象，并转换为字典以保持兼容性
+        self.config = self._config_to_dict(global_config)
+        self.cache_dir = global_config.funasr.model_dir
+
         # 获取并发模式配置：lock（线程锁）、pool（进程池）或 thread_pool（线程池，已废弃）
-        self.concurrency_mode = self.config.get("transcription", {}).get("concurrency_mode", "lock")
+        self.concurrency_mode = global_config.transcription.concurrency_mode
         
         if self.concurrency_mode == "lock":
             # 使用线程锁模式（默认）
@@ -36,7 +38,7 @@ class FunASRTranscriber:
         elif self.concurrency_mode == "pool":
             # 使用文件系统进程池模式（推荐用于生产环境）
             from src.core.file_based_process_pool import FileBasedProcessPool
-            self.model_pool = FileBasedProcessPool(config_path)
+            self.model_pool = FileBasedProcessPool()  # 不传递 config_path，使用全局配置
             logger.info("FunASR转录器使用文件系统进程池模式，支持真正并发")
         elif self.concurrency_mode == "thread_pool":
             # 线程池模式已废弃，降级到线程锁
@@ -49,31 +51,31 @@ class FunASRTranscriber:
             self.concurrency_mode = "lock"
             self._model_lock = threading.Lock()
     
-    def _load_config(self, config_path: str) -> dict:
-        """加载配置文件"""
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"加载配置文件失败: {e}")
-            # 返回默认配置
-            return {
-                "funasr": {
-                    "model": "paraformer-zh",
-                    "model_revision": "v2.0.4",
-                    "vad_model": "fsmn-vad",
-                    "vad_model_revision": "v2.0.4",
-                    "punc_model": "ct-punc-c",
-                    "punc_model_revision": "v2.0.4",
-                    "spk_model": "cam++",
-                    "spk_model_revision": "v2.0.2",
-                    "model_dir": "./models",
-                    "batch_size_s": 300,
-                    "device": "cpu",
-                    "disable_update": True,
-                    "disable_pbar": True
-                }
+    def _config_to_dict(self, config_obj) -> dict:
+        """将 Pydantic 配置对象转换为字典（保持代码兼容性）"""
+        return {
+            "funasr": {
+                "model": config_obj.funasr.model,
+                "model_revision": config_obj.funasr.model_revision,
+                "vad_model": config_obj.funasr.vad_model,
+                "vad_model_revision": config_obj.funasr.vad_model_revision,
+                "punc_model": config_obj.funasr.punc_model,
+                "punc_model_revision": config_obj.funasr.punc_model_revision,
+                "spk_model": config_obj.funasr.spk_model,
+                "spk_model_revision": config_obj.funasr.spk_model_revision,
+                "model_dir": config_obj.funasr.model_dir,
+                "batch_size_s": config_obj.funasr.batch_size_s,
+                "ncpu": config_obj.funasr.ncpu,
+                "device": config_obj.funasr.device,
+                "device_priority": config_obj.funasr.device_priority,
+                "disable_update": config_obj.funasr.disable_update,
+                "disable_pbar": config_obj.funasr.disable_pbar
+            },
+            "transcription": {
+                "concurrency_mode": config_obj.transcription.concurrency_mode,
+                "transcription_speed_ratio": config_obj.transcription.transcription_speed_ratio
             }
+        }
         
     async def initialize(self):
         """初始化模型 - 根据并发模式选择初始化方式"""

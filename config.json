@@ -1,9 +1,17 @@
 {
+  "_comment_global": "本配置文件包含业务逻辑相关的配置项，环境相关和敏感信息请在 .env 文件中配置",
+  "_comment_env_override": "大部分配置项都可以通过环境变量覆盖，详见 .env.example 文件说明",
+
   "server": {
-    "host": "0.0.0.0",
-    "port": 8767,
+    "_comment_host_port": "服务器地址和端口请在 .env 中配置: FUNASR_SERVER_HOST, FUNASR_SERVER_PORT",
+    "_comment_directories": "所有目录路径请在 .env 中配置: FUNASR_UPLOAD_DIR, FUNASR_TEMP_DIR 等",
+
     "max_connections": 100,
+    "_comment_max_connections": "可通过环境变量覆盖: FUNASR_SERVER_MAX_CONNECTIONS",
+
     "max_file_size_mb": 5000,
+    "_comment_max_file_size_mb": "可通过环境变量覆盖: FUNASR_SERVER_MAX_FILE_SIZE_MB",
+
     "allowed_extensions": [
       ".wav",
       ".mp3",
@@ -14,57 +22,85 @@
       ".ogg",
       ".opus"
     ],
-    "temp_dir": "./temp",
-    "upload_dir": "./uploads"
+
+    "connection_timeout_seconds": 300,
+    "heartbeat_interval_seconds": 60
   },
+
   "funasr": {
+    "_comment_device": "设备配置请在 .env 中配置: FUNASR_DEVICE, FUNASR_DEVICE_PRIORITY",
+
     "model": "paraformer-zh",
     "model_revision": "v2.0.4",
+
     "vad_model": "fsmn-vad",
     "vad_model_revision": "v2.0.4",
+
     "punc_model": "ct-punc-c",
     "punc_model_revision": "v2.0.4",
+
     "spk_model": "cam++",
     "spk_model_revision": "v2.0.2",
-    "model_dir": "models",
+
+    "_comment_model_dir": "模型目录请在 .env 中配置: FUNASR_MODEL_DIR",
+
     "batch_size_s": 500,
+    "_comment_batch_size_s": "可通过环境变量覆盖: FUNASR_BATCH_SIZE_S",
+
     "ncpu": 16,
-    "device": "auto",
-    "device_priority": ["mps", "cpu"],
+    "_comment_ncpu": "可通过环境变量覆盖: FUNASR_NCPU",
+
     "fallback_on_error": true,
     "disable_update": true,
     "disable_pbar": true
   },
+
   "transcription": {
     "max_concurrent_tasks": 2,
+    "_comment_max_concurrent_tasks": "可通过环境变量覆盖: FUNASR_MAX_CONCURRENT_TASKS",
+
+    "max_queue_size": 50,
+
     "concurrency_mode": "pool",
+
     "task_timeout_minutes": 30,
+    "_comment_task_timeout_minutes": "可通过环境变量覆盖: FUNASR_TASK_TIMEOUT_MINUTES",
+
     "retry_times": 2,
     "cache_enabled": true,
     "delete_after_transcription": true,
-    "transcription_speed_ratio": 10
+    "transcription_speed_ratio": 10,
+    "queue_status_enabled": true,
+    "load_balancing_enabled": true
   },
+
   "database": {
-    "path": "./data/transcription_cache.db",
+    "_comment_path": "数据库路径通过 .env 中的 FUNASR_DATA_DIR 构建",
     "max_cache_days": 30
   },
+
   "notification": {
-    "enabled": true,
-    "webhook_url": "",
+    "_comment_enabled": "是否启用通知请在 .env 中配置: FUNASR_NOTIFICATION_ENABLED",
+    "_comment_webhook_url": "企业微信 Webhook URL 请在 .env 中配置: FUNASR_WEBHOOK_URL (必填)",
+
     "retry_times": 3,
     "timeout_seconds": 10
   },
+
   "auth": {
-    "enabled": false,
-    "secret_key": "your-secret-key-change-this-in-production",
+    "_comment_enabled": "是否启用认证请在 .env 中配置: FUNASR_AUTH_ENABLED",
+    "_comment_secret_key": "JWT 密钥请在 .env 中配置: FUNASR_AUTH_SECRET_KEY (必填)",
+
     "algorithm": "HS256",
     "access_token_expire_minutes": 1440
   },
+
   "logging": {
-    "level": "DEBUG",
+    "_comment_level": "日志级别请在 .env 中配置: FUNASR_LOG_LEVEL",
+    "_comment_log_dir": "日志目录请在 .env 中配置: FUNASR_LOG_DIR",
+
     "format": "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}",
     "rotation": "100 MB",
-    "retention": "7 days",
-    "log_dir": "./logs"
+    "retention": "7 days"
   }
 }

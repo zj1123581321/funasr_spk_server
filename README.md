@@ -90,11 +90,25 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. 配置服务器
-编辑 `config.json` 文件，设置相关参数：
-- 企微webhook地址
-- 认证密钥
-- 并发数等
+4. 配置环境变量
+复制 `.env.example` 为 `.env` 并编辑：
+```bash
+cp .env.example .env
+# 编辑 .env 文件，配置必需的环境变量
+```
+
+**必需配置项：**
+- `FUNASR_WEBHOOK_URL`: 企业微信机器人 Webhook 地址（如果启用通知）
+- `FUNASR_AUTH_SECRET_KEY`: JWT 认证密钥（如果启用认证，生产环境必须修改）
+
+**可选配置项：**
+- 服务器地址和端口
+- 日志级别
+- 目录路径
+- FunASR 设备配置
+- 性能参数
+
+详细配置说明见 `.env.example` 文件注释。
 
 5. 启动服务器
 ```bash
@@ -287,44 +301,90 @@ Speaker1:欢迎大家来体验达摩院推出的语音识别模型。
 
 ## 配置说明
 
-### 主要配置项
+### 配置文件说明
 
-编辑 `config.json` 文件：
+本项目采用**双配置文件**架构：
 
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": 8767,
-    "max_connections": 100,
-    "max_file_size_mb": 5000,
-    "allowed_extensions": [".wav", ".mp3", ".mp4", ".m4a", ".flac"]
-  },
-  "funasr": {
-    "model": "paraformer-zh",
-    "model_dir": "models",
-    "batch_size_s": 300,
-    "device": "cpu"
-  },
-  "transcription": {
-    "max_concurrent_tasks": 4,
-    "task_timeout_minutes": 30,
-    "retry_times": 2,
-    "cache_enabled": true,
-    "delete_after_transcription": true
-  }
-}
+1. **`.env`** - 环境变量配置（敏感信息和环境相关）
+   - 企业微信 Webhook URL
+   - JWT 认证密钥
+   - 服务器地址和端口
+   - 目录路径
+   - 日志级别
+   - FunASR 设备配置
+   - 性能参数覆盖
+
+2. **`config.json`** - 业务逻辑配置（无敏感信息）
+   - FunASR 模型配置
+   - 转录任务配置
+   - 缓存策略
+   - WebSocket 连接参数
+
+### 配置优先级
+
+**环境变量 (.env) > config.json > 代码默认值**
+
+### 快速配置步骤
+
+1. **复制环境变量模板**
+```bash
+cp .env.example .env
 ```
 
-### 配置说明
+2. **编辑 `.env` 文件，配置必需项**
+```env
+# 如果启用通知功能，必须配置 Webhook URL
+FUNASR_NOTIFICATION_ENABLED=true
+FUNASR_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=your-key
 
-- **server**: WebSocket服务器配置
-- **funasr**: FunASR模型和引擎配置
-- **transcription**: 转录任务管理配置
-- **database**: 结果缓存数据库配置
-- **notification**: 企微机器人通知配置
-- **auth**: JWT认证配置
-- **logging**: 日志系统配置
+# 如果启用认证功能，必须修改密钥（生产环境）
+FUNASR_AUTH_ENABLED=false
+FUNASR_AUTH_SECRET_KEY=your-secret-key-change-this-in-production
+```
+
+3. **根据需要调整性能参数**
+```env
+# 并发任务数（建议为 CPU 核心数的一半）
+FUNASR_MAX_CONCURRENT_TASKS=4
+
+# 设备配置（Mac GPU 加速）
+FUNASR_DEVICE=auto
+FUNASR_DEVICE_PRIORITY=mps,cpu
+```
+
+### 主要配置项
+
+#### 环境变量配置 (.env)
+
+| 配置项 | 说明 | 默认值 | 必需 |
+|--------|------|--------|------|
+| `FUNASR_SERVER_HOST` | 服务器监听地址 | 0.0.0.0 | 否 |
+| `FUNASR_SERVER_PORT` | 服务器监听端口 | 8767 | 否 |
+| `FUNASR_WEBHOOK_URL` | 企业微信 Webhook URL | - | 条件必需* |
+| `FUNASR_AUTH_SECRET_KEY` | JWT 认证密钥 | - | 条件必需** |
+| `FUNASR_NOTIFICATION_ENABLED` | 是否启用通知 | true | 否 |
+| `FUNASR_AUTH_ENABLED` | 是否启用认证 | false | 否 |
+| `FUNASR_LOG_LEVEL` | 日志级别 | INFO | 否 |
+| `FUNASR_DEVICE` | 计算设备 | auto | 否 |
+| `FUNASR_DEVICE_PRIORITY` | 设备优先级 | mps,cpu | 否 |
+| `FUNASR_MAX_CONCURRENT_TASKS` | 最大并发任务数 | 2 | 否 |
+
+\* 仅当 `FUNASR_NOTIFICATION_ENABLED=true` 时必需
+\** 仅当 `FUNASR_AUTH_ENABLED=true` 时必需，且生产环境必须修改默认值
+
+完整配置项说明请参考 `.env.example` 文件。
+
+#### 业务配置 (config.json)
+
+- **server**: WebSocket 服务器业务配置（连接数、文件大小限制、支持的格式等）
+- **funasr**: FunASR 模型配置（模型名称、版本等）
+- **transcription**: 转录任务管理配置（超时时间、重试次数、缓存策略等）
+- **database**: 数据库配置（缓存过期时间等）
+- **notification**: 通知配置（重试次数、超时时间等）
+- **auth**: 认证配置（算法、令牌过期时间等）
+- **logging**: 日志配置（格式、轮转、保留期等）
+
+**注意**: `config.json` 中的大部分配置都可以通过环境变量覆盖，详见文件中的 `_comment` 注释。
 
 ## 缓存机制
 

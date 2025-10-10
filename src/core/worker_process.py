@@ -16,32 +16,30 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# 设置环境变量以抑制配置打印（在导入config之前）
+os.environ['FUNASR_WORKER_MODE'] = '1'
+
 from funasr import AutoModel
 
-# 导入设备管理器
+# 导入设备管理器和全局配置
 from src.core.device_manager import DeviceManager
+from src.core.config import config as global_config
 
 
-def load_config(config_path: str) -> dict:
-    """加载配置文件"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-
-def setup_device(config: dict) -> str:
+def setup_device() -> str:
     """
     设置设备并应用必要的补丁
-
-    Args:
-        config: 配置字典
 
     Returns:
         选定的设备名称
     """
     print(f"[Worker] 检测和配置设备...")
 
+    # 将全局配置转换为字典用于设备管理器
+    config_dict = global_config.model_dump()
+
     # 选择设备
-    device = DeviceManager.select_device(config)
+    device = DeviceManager.select_device(config_dict)
     print(f"[Worker] 选定设备: {device}")
 
     # 应用设备补丁
@@ -54,47 +52,47 @@ def setup_device(config: dict) -> str:
     return device
 
 
-def initialize_model(config: dict, device: str):
+def initialize_model(device: str):
     """
     初始化FunASR模型
 
     Args:
-        config: 配置字典
         device: 设备名称（已选定）
     """
-    funasr_config = config["funasr"]
-    cache_dir = funasr_config["model_dir"]
+    # 使用全局配置
+    funasr_config = global_config.funasr
+    cache_dir = funasr_config.model_dir
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
 
     print(f"[Worker] 初始化模型（设备: {device}）...")
     model = AutoModel(
-        model=funasr_config["model"],
-        model_revision=funasr_config["model_revision"],
-        vad_model=funasr_config["vad_model"],
-        vad_model_revision=funasr_config["vad_model_revision"],
-        punc_model=funasr_config["punc_model"],
-        punc_model_revision=funasr_config["punc_model_revision"],
-        spk_model=funasr_config["spk_model"],
-        spk_model_revision=funasr_config["spk_model_revision"],
+        model=funasr_config.model,
+        model_revision=funasr_config.model_revision,
+        vad_model=funasr_config.vad_model,
+        vad_model_revision=funasr_config.vad_model_revision,
+        punc_model=funasr_config.punc_model,
+        punc_model_revision=funasr_config.punc_model_revision,
+        spk_model=funasr_config.spk_model,
+        spk_model_revision=funasr_config.spk_model_revision,
         cache_dir=cache_dir,
-        ncpu=funasr_config.get("ncpu", 8),
+        ncpu=funasr_config.ncpu,
         device=device,  # 使用已选定的设备
-        disable_update=funasr_config.get("disable_update", True),
-        disable_pbar=funasr_config.get("disable_pbar", True)
+        disable_update=funasr_config.disable_update,
+        disable_pbar=funasr_config.disable_pbar
     )
     print(f"[Worker] 模型初始化完成")
     return model
 
 
-def process_task(model, task_file: str, config: dict):
+def process_task(model, task_file: str):
     """处理单个任务"""
     # 读取任务
     with open(task_file, 'r', encoding='utf-8') as f:
         task = json.load(f)
-    
+
     task_id = task['task_id']
     audio_path = task['audio_path']
-    batch_size_s = task.get('batch_size_s', config["funasr"].get("batch_size_s", 300))
+    batch_size_s = task.get('batch_size_s', global_config.funasr.batch_size_s)
     hotword = task.get('hotword', '')
     use_pickle = task.get('use_pickle', True)  # 默认使用pickle
     
@@ -169,18 +167,15 @@ def process_task(model, task_file: str, config: dict):
             pass
 
 
-def worker_loop(worker_id: int, config_path: str, task_dir: str):
+def worker_loop(worker_id: int, task_dir: str):
     """工作进程主循环"""
     print(f"[Worker-{worker_id}] 启动 (PID: {os.getpid()})")
 
-    # 加载配置
-    config = load_config(config_path)
-
     # 设置设备并应用补丁
-    device = setup_device(config)
+    device = setup_device()
 
     # 初始化模型
-    model = initialize_model(config, device)
+    model = initialize_model(device)
     
     # 创建就绪标记文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")
@@ -210,7 +205,7 @@ def worker_loop(worker_id: int, config_path: str, task_dir: str):
             if task_files:
                 # 处理第一个任务
                 task_file = str(task_files[0])
-                process_task(model, task_file, config)
+                process_task(model, task_file)
             else:
                 # 没有任务，短暂休眠
                 time.sleep(0.1)
@@ -230,10 +225,9 @@ if __name__ == "__main__":
     # 设置命令行参数
     parser = argparse.ArgumentParser(description="FunASR工作进程")
     parser.add_argument("--worker-id", type=int, required=True, help="工作进程ID")
-    parser.add_argument("--config", type=str, default="config.json", help="配置文件路径")
     parser.add_argument("--task-dir", type=str, default="./temp/tasks", help="任务目录")
-    
+
     args = parser.parse_args()
-    
-    # 运行工作进程
-    worker_loop(args.worker_id, args.config, args.task_dir)
+
+    # 运行工作进程（使用全局配置，不再需要传递 config）
+    worker_loop(args.worker_id, args.task_dir)
