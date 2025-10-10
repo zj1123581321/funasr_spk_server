@@ -23,10 +23,10 @@ nul
 ref_codes/
 models
 /tests/output/
-sampels
 src/cpp
 version_backup/
 tests/performance/output
+samples
 
 # 测试文件
 .pytest_cache/
