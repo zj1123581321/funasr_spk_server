@@ -13,27 +13,27 @@ import uuid
 from typing import Optional, Any, List
 from pathlib import Path
 from loguru import logger
+from src.core.config import config as global_config
 
 
 class FileBasedProcessPool:
     """
     基于文件系统的进程池管理器
-    
+
     通过文件系统实现进程间通信，完全避免共享状态问题
     每个工作进程完全独立运行
     """
-    
+
     def __init__(self, config_path: str = "config.json", pool_size: Optional[int] = None):
         """
         初始化进程池
-        
+
         Args:
-            config_path: 配置文件路径
+            config_path: 配置文件路径（已废弃，保留用于兼容性）
             pool_size: 进程池大小
         """
-        self.config_path = config_path
-        self.config = self._load_config(config_path)
-        self.pool_size = pool_size or self.config["transcription"]["max_concurrent_tasks"]
+        # 使用全局配置对象
+        self.pool_size = pool_size or global_config.transcription.max_concurrent_tasks
         
         # 任务目录
         self.task_dir = Path("./temp/tasks")
@@ -46,16 +46,7 @@ class FileBasedProcessPool:
         self.next_worker_id = 0  # 轮询分配任务
         
         logger.info(f"初始化文件系统进程池，池大小: {self.pool_size}")
-    
-    def _load_config(self, config_path: str) -> dict:
-        """加载配置文件"""
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"加载配置文件失败: {e}")
-            raise
-    
+
     async def initialize(self):
         """初始化进程池 - 启动独立的工作进程"""
         if self.is_initialized:
@@ -69,12 +60,11 @@ class FileBasedProcessPool:
         try:
             # 启动工作进程
             for i in range(self.pool_size):
-                # 构建命令
+                # 构建命令（不再传递 config 参数，worker 会使用全局配置）
                 cmd = [
                     sys.executable,  # Python解释器
                     "src/core/worker_process.py",
                     "--worker-id", str(i),
-                    "--config", self.config_path,
                     "--task-dir", str(self.task_dir)
                 ]
                 
@@ -117,23 +107,28 @@ class FileBasedProcessPool:
             self.cleanup()
             raise
     
-    async def _wait_for_workers_ready(self, timeout: int = 60):
-        """等待所有工作进程就绪"""
+    async def _wait_for_workers_ready(self, timeout: int = 180):
+        """等待所有工作进程就绪（模型加载可能需要较长时间）"""
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             ready_count = 0
             for i in range(self.pool_size):
                 ready_file = self.task_dir / f"worker_{i}.ready"
                 if ready_file.exists():
                     ready_count += 1
-            
+
             if ready_count == self.pool_size:
                 logger.info(f"所有 {self.pool_size} 个工作进程已就绪")
                 return
-            
+
+            # 每10秒记录一次进度
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                logger.info(f"等待工作进程就绪... ({ready_count}/{self.pool_size} 已就绪, 已等待 {int(elapsed)} 秒)")
+
             await asyncio.sleep(0.5)
-        
+
         raise TimeoutError(f"工作进程初始化超时（{timeout}秒）")
     
     def _cleanup_task_dir(self):
@@ -334,12 +329,11 @@ class FileBasedProcessPool:
                 old_process.terminate()
                 old_process.wait(timeout=5)
         
-        # 启动新进程
+        # 启动新进程（不再传递 config 参数）
         cmd = [
             sys.executable,
             "src/core/worker_process.py",
             "--worker-id", str(worker_id),
-            "--config", self.config_path,
             "--task-dir", str(self.task_dir)
         ]
         
