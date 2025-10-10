@@ -95,7 +95,7 @@ class AuthConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """日志配置"""
     level: str = "INFO"
-    format: str = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}"
+    format: str = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     rotation: str = "100 MB"
     retention: str = "7 days"
     log_dir: str = "./logs"
@@ -134,8 +134,8 @@ class Config(BaseModel):
         # 验证配置
         cls._validate_config(config)
 
-        # 打印配置信息
-        cls._print_config(config)
+        # 注意: 配置打印延迟到 setup_logger() 之后进行，以保证日志格式统一
+        # 不在这里调用 cls._print_config(config)
 
         return config
 
@@ -252,12 +252,9 @@ class Config(BaseModel):
     @classmethod
     def _validate_config(cls, config: "Config"):
         """验证配置的完整性和正确性"""
-        # Worker 模式下跳过详细日志
+        # 注意: 此方法在 setup_logger() 之前调用，所以不输出 info 级别日志
+        # 只输出错误和警告（如果有的话）
         is_worker = os.getenv('FUNASR_WORKER_MODE') == '1'
-
-        if not is_worker:
-            logger.info("=" * 60)
-            logger.info("开始验证配置...")
 
         errors = []
         warnings = []
@@ -308,18 +305,20 @@ class Config(BaseModel):
                 logger.error("请检查 .env 文件和 config.json 配置，修正后重新启动")
             sys.exit(1)
 
-        if not is_worker:
-            logger.info("✅ 配置验证通过")
-            logger.info("=" * 60)
+        # 验证通过的日志延迟到 print_config() 中输出，以保证格式统一
 
-    @classmethod
-    def _print_config(cls, config: "Config"):
-        """打印配置信息（敏感信息脱敏）"""
+    def print_config(self):
+        """打印配置信息（敏感信息脱敏）- 应在 setup_logger() 之后调用"""
         # Worker 模式下跳过配置打印
         is_worker = os.getenv('FUNASR_WORKER_MODE') == '1'
         if is_worker:
             return
 
+        config = self
+
+        # 首先输出配置验证结果
+        logger.info("=" * 60)
+        logger.info("✅ 配置验证通过")
         logger.info("=" * 60)
         logger.info("当前配置:")
         logger.info("-" * 60)

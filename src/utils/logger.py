@@ -52,3 +52,6 @@ def setup_logger():
     logger.info("日志系统初始化完成")
     logger.info(f"日志级别: {config.logging.level}")
     logger.info(f"日志目录: {config.logging.log_dir}")
+
+    # 日志系统初始化完成后，打印配置信息（确保格式和颜色统一）
+    config.print_config()
