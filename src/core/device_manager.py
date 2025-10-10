@@ -2,6 +2,7 @@
 设备管理器 - 统一管理加速设备的检测、选择和配置
 
 支持的设备类型：
+- DirectML - Windows GPU (支持 AMD、NVIDIA、Intel)
 - MPS (Metal Performance Shaders) - Apple Silicon GPU
 - CPU - 通用 CPU 模式
 
@@ -17,10 +18,10 @@ class DeviceManager:
     """统一设备管理器 - 支持多种加速后端"""
 
     # 当前支持的设备类型（按优先级排序）
-    SUPPORTED_DEVICES = ["mps", "cpu"]
+    SUPPORTED_DEVICES = ["dml", "mps", "cpu"]
 
-    # 默认设备选择优先级
-    DEFAULT_PRIORITY = ["mps", "cpu"]
+    # 默认设备选择优先级（Windows 优先 DirectML，Mac 优先 MPS）
+    DEFAULT_PRIORITY = ["dml", "mps", "cpu"]
 
     @staticmethod
     def detect_available_devices() -> List[str]:
@@ -28,9 +29,20 @@ class DeviceManager:
         检测当前环境可用的设备
 
         Returns:
-            可用设备列表，如 ["mps", "cpu"] 或 ["cpu"]
+            可用设备列表，如 ["dml", "cpu"]、["mps", "cpu"] 或 ["cpu"]
         """
         available = []
+
+        # 检测 DirectML (Windows GPU)
+        try:
+            import torch_directml
+            if torch_directml.is_available():
+                available.append("dml")
+                device_count = torch_directml.device_count()
+                device_name = torch_directml.device_name(0) if device_count > 0 else "Unknown"
+                logger.debug(f"检测到 DirectML 设备可用: {device_name} (数量: {device_count})")
+        except ImportError:
+            logger.debug("torch_directml 未安装，跳过 DirectML 检测")
 
         # 检测 MPS (Apple Silicon GPU)
         if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -106,9 +118,19 @@ class DeviceManager:
         为指定设备应用必要的补丁
 
         Args:
-            device: 设备名称 ("mps", "cpu" 等)
+            device: 设备名称 ("dml", "mps", "cpu" 等)
         """
-        if device == "mps":
+        if device == "dml":
+            # 动态导入 DirectML 补丁模块
+            try:
+                from src.core.patches.directml_patch import apply_directml_patch
+                apply_directml_patch()
+                logger.success("✅ DirectML 设备补丁已应用")
+            except Exception as e:
+                logger.error(f"应用 DirectML 补丁失败: {e}")
+                raise
+
+        elif device == "mps":
             # 动态导入 MPS 补丁模块
             try:
                 from src.core.patches.mps_patch import apply_mps_patch
@@ -142,7 +164,22 @@ class DeviceManager:
             "torch_version": torch.__version__,
         }
 
-        if device == "mps":
+        if device == "dml":
+            try:
+                import torch_directml
+                info.update({
+                    "dml_available": torch_directml.is_available(),
+                    "dml_device_count": torch_directml.device_count() if torch_directml.is_available() else 0,
+                    "dml_device_name": torch_directml.device_name(0) if torch_directml.is_available() and torch_directml.device_count() > 0 else "N/A",
+                })
+            except ImportError:
+                info.update({
+                    "dml_available": False,
+                    "dml_device_count": 0,
+                    "dml_device_name": "N/A (torch_directml not installed)",
+                })
+
+        elif device == "mps":
             info.update({
                 "mps_available": torch.backends.mps.is_available(),
                 "mps_built": torch.backends.mps.is_built(),
@@ -154,6 +191,7 @@ class DeviceManager:
     def _get_device_display_name(device: str) -> str:
         """获取设备的显示名称"""
         display_names = {
+            "dml": "Windows GPU (DirectML)",
             "mps": "Apple Silicon GPU (MPS)",
             "cpu": "CPU",
             # 未来扩展：
@@ -181,7 +219,12 @@ class DeviceManager:
         logger.info(f"配置模式: {config.get('funasr', {}).get('device', 'auto')}")
         logger.info(f"PyTorch 版本: {info['torch_version']}")
 
-        if device == "mps":
+        if device == "dml":
+            logger.info(f"DirectML 可用: {info['dml_available']}")
+            logger.info(f"DirectML 设备数量: {info['dml_device_count']}")
+            logger.info(f"DirectML 设备名称: {info['dml_device_name']}")
+
+        elif device == "mps":
             logger.info(f"MPS 可用: {info['mps_available']}")
             logger.info(f"MPS 已构建: {info['mps_built']}")
 

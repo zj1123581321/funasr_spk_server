@@ -1,8 +1,9 @@
 # FunASR related
 funasr==1.2.6
 modelscope==1.18.0
-torch>=2.0.0
-torchaudio>=2.0.0
+torch>=2.0.0,<2.5.0
+torchaudio>=2.0.0,<2.5.0
+torch-directml>=0.2.0.dev240914; sys_platform == 'win32'
 onnxruntime>=1.14.0
 numpy>=1.21.0
 
