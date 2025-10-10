@@ -50,7 +50,7 @@
   },
   "notification": {
     "enabled": true,
-    "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f1fa66dd-a1b0-4893-af75-5dab9d993182",
+    "webhook_url": "",
     "retry_times": 3,
     "timeout_seconds": 10
   },
