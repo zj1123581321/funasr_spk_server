@@ -268,8 +268,10 @@ class FileBasedProcessPool:
         self._cleanup_task_dir()
 
         try:
-            for i in range(self.pool_size):
-                await self._spawn_worker(i)
+            spawn_tasks = [
+                asyncio.create_task(self._spawn_worker(i)) for i in range(self.pool_size)
+            ]
+            await asyncio.gather(*spawn_tasks)
 
             self.is_initialized = True
             self._log_worker_states("初始化完成")
