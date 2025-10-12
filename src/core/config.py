@@ -59,7 +59,6 @@ class TranscriptionConfig(BaseModel):
     delete_after_transcription: bool = True
     transcription_speed_ratio: int = 10
     queue_status_enabled: bool = True
-    load_balancing_enabled: bool = True
 
     model_config = {"protected_namespaces": ()}
 
