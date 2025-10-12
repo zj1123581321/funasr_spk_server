@@ -388,8 +388,7 @@ class MultiProcessClient:
   "transcription": {
     "max_concurrent_tasks": 8,
     "max_queue_size": 50,
-    "queue_status_enabled": true,
-    "load_balancing_enabled": true
+    "queue_status_enabled": true
   }
 }
 ```
