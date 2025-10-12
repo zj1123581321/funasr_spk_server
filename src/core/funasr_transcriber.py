@@ -15,6 +15,7 @@ from src.models.schemas import TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
 from src.core.device_manager import DeviceManager
 from src.core.config import config as global_config
+from src.utils.torch_utils import release_accelerator_memory
 
 
 class FunASRTranscriber:
@@ -268,6 +269,9 @@ class FunASRTranscriber:
                         await progress_task
                     except asyncio.CancelledError:
                         pass
+
+                # 主动释放一次推理占用的加速设备缓存
+                release_accelerator_memory(tag=f"task-{task_id}", log_fn=logger.info)
             
             # 记录结果类型和结构，但不记录完整内容（避免日志过大）
             if isinstance(result, list):
