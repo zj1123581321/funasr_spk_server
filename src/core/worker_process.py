@@ -10,7 +10,6 @@ import time
 import argparse
 import traceback
 from pathlib import Path
-
 # 添加项目根目录到 Python 路径（worker 进程独立运行时需要）
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
@@ -18,6 +17,12 @@ if str(project_root) not in sys.path:
 
 # 设置环境变量以抑制配置打印（在导入config之前）
 os.environ['FUNASR_WORKER_MODE'] = '1'
+
+# 平台相关优化需要在导入 torch 之前完成，确保 MPS 高水位阈值等环境变量生效
+from src.utils.platform_utils import setup_platform_specific_env
+from src.utils.torch_utils import release_accelerator_memory
+
+setup_platform_specific_env()
 
 from funasr import AutoModel
 
@@ -84,19 +89,29 @@ def initialize_model(device: str):
     return model
 
 
-def process_task(model, task_file: str):
-    """处理单个任务"""
+def process_task(
+    worker_id: int,
+    model,
+    task_file: str,
+    task_dir: str,
+) -> None:
+    """处理单个任务并在结束后退出"""
+    result = None
+    result_data = None
+
     # 读取任务
     with open(task_file, 'r', encoding='utf-8') as f:
         task = json.load(f)
 
     task_id = task['task_id']
     audio_path = task['audio_path']
+    local_audio_path = Path(audio_path)
     batch_size_s = task.get('batch_size_s', global_config.funasr.batch_size_s)
     hotword = task.get('hotword', '')
     use_pickle = task.get('use_pickle', True)  # 默认使用pickle
+    original_audio_path = task.get('source_audio_path', audio_path)
 
-    print(f"[Worker-{os.getpid()}] 处理任务 {task_id}: {os.path.basename(audio_path)}")
+    print(f"[Worker-{os.getpid()}] 处理任务 {task_id}: {os.path.basename(original_audio_path)}")
 
     # 结果文件路径
     if use_pickle:
@@ -194,7 +209,6 @@ def process_task(model, task_file: str):
             import torch
             print(f"  - MPS 可用: {torch.backends.mps.is_available()}")
             try:
-                # 尝试简单的 MPS 操作
                 test_tensor = torch.randn(2, 2, device='mps')
                 print(f"  - MPS 测试张量创建: 成功")
                 del test_tensor
@@ -208,8 +222,8 @@ def process_task(model, task_file: str):
             'error': error_msg,
             'traceback': traceback_str,
             'worker_pid': os.getpid(),
-            'audio_path': audio_path,
-            'file_size': os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            'audio_path': original_audio_path,
+            'file_size': local_audio_path.stat().st_size if local_audio_path.exists() else 0
         }
 
         if use_pickle:
@@ -220,11 +234,24 @@ def process_task(model, task_file: str):
                 json.dump(error_data, f, ensure_ascii=False)
 
     finally:
+        # 每次任务结束后主动释放加速设备缓存，避免内存占用持续增长
+        release_accelerator_memory(tag=f"Worker-{os.getpid()}", log_fn=print)
+
+        # 显式移除可能仍在引用的重对象，辅助 GC
+        result = None
+        result_data = None
+
         # 删除任务文件（表示任务已处理）
         try:
             os.remove(task_file)
         except:
             pass
+
+        try:
+            if local_audio_path.exists():
+                local_audio_path.unlink()
+        except Exception as cleanup_error:
+            print(f"[Worker-{os.getpid()}] [诊断] 删除本地音频副本失败: {cleanup_error}")
 
 
 def worker_loop(worker_id: int, task_dir: str):
@@ -254,6 +281,12 @@ def worker_loop(worker_id: int, task_dir: str):
     device = setup_device()
     print(f"[Worker-{worker_id}] [诊断] 设备配置完成: {device}")
 
+    is_mps_device = str(device).lower().startswith("mps")
+    if is_mps_device:
+        print(f"[Worker-{worker_id}] [诊断] MPS 模式下任务完成后将自动退出以触发进程重启")
+    else:
+        print(f"[Worker-{worker_id}] [诊断] CPU 模式任务完成后同样将自动退出以触发进程重启")
+
     # 初始化模型
     print(f"[Worker-{worker_id}] [诊断] 开始模型初始化...")
     model = initialize_model(device)
@@ -267,6 +300,7 @@ def worker_loop(worker_id: int, task_dir: str):
     print(f"[Worker-{worker_id}] ========== 就绪，等待任务 ==========")
     
     # 监听任务
+    restart_requested = False
     while True:
         try:
             # 检查停止信号
@@ -287,7 +321,19 @@ def worker_loop(worker_id: int, task_dir: str):
             if task_files:
                 # 处理第一个任务
                 task_file = str(task_files[0])
-                process_task(model, task_file)
+                process_task(
+                    worker_id,
+                    model,
+                    task_file,
+                    task_dir,
+                )
+                print(f"[Worker-{worker_id}] [诊断] 单个任务处理完成，准备退出以释放资源")
+                try:
+                    os.remove(ready_file)
+                except:
+                    pass
+                restart_requested = True
+                break
             else:
                 # 没有任务，短暂休眠
                 time.sleep(0.1)
@@ -301,6 +347,9 @@ def worker_loop(worker_id: int, task_dir: str):
             time.sleep(1)
     
     print(f"[Worker-{worker_id}] 退出")
+    if restart_requested:
+        print(f"[Worker-{worker_id}] [诊断] 因任务完成退出，等待主进程重启")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

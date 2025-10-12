@@ -10,6 +10,7 @@ import time
 import asyncio
 import subprocess
 import uuid
+import shutil
 from typing import Optional, Any, List
 from pathlib import Path
 from loguru import logger
@@ -44,8 +45,80 @@ class FileBasedProcessPool:
         self.worker_processes = []
         self.is_initialized = False
         self.next_worker_id = 0  # 轮询分配任务
-        
+        self._management_lock = asyncio.Lock()
+        self._health_task: Optional[asyncio.Task] = None
+        self._health_check_interval = 30  # seconds
+
         logger.info(f"初始化文件系统进程池，池大小: {self.pool_size}")
+
+    def _log_worker_states(self, context: str) -> None:
+        """输出当前已知的 worker 进程状态"""
+        states = []
+        for idx in range(self.pool_size):
+            if idx >= len(self.worker_processes):
+                states.append(f"{idx}[未创建]")
+                continue
+            process = self.worker_processes[idx]
+            if process is None:
+                states.append(f"{idx}[缺失]")
+                continue
+            pid = process.pid
+            exit_code = process.poll()
+            if exit_code is None:
+                status = "运行中"
+            else:
+                status = f"已退出({exit_code})"
+            states.append(f"{idx}[pid={pid},{status}]")
+        if states:
+            logger.info(f"{context} | 工作进程状态: {', '.join(states)}")
+    
+    def _start_health_monitor(self) -> None:
+        """启动后台巡检任务"""
+        if self._health_task and not self._health_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        self._health_task = loop.create_task(self._health_check_loop())
+        logger.debug("工作进程健康巡检任务已启动")
+
+    def _stop_health_monitor(self) -> None:
+        """停止后台巡检任务"""
+        if not self._health_task:
+            return
+        task = self._health_task
+        self._health_task = None
+
+        def _finalizer(t: asyncio.Task) -> None:
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as err:
+                logger.debug(f"巡检任务结束时捕获的异常: {err}")
+
+        task.add_done_callback(_finalizer)
+        task.cancel()
+        logger.debug("工作进程健康巡检任务已请求停止")
+
+    async def _health_check_loop(self) -> None:
+        """周期性校验工作进程数量"""
+        try:
+            while self.is_initialized:
+                await asyncio.sleep(self._health_check_interval)
+                if not self.is_initialized:
+                    break
+                try:
+                    await self._ensure_workers_alive()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as monitor_error:
+                    logger.error(f"巡检任务执行失败: {monitor_error}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            logger.debug("工作进程健康巡检任务结束")
 
     async def initialize(self):
         """初始化进程池 - 启动独立的工作进程"""
@@ -60,39 +133,11 @@ class FileBasedProcessPool:
         try:
             # 启动工作进程
             for i in range(self.pool_size):
-                # 构建命令（不再传递 config 参数，worker 会使用全局配置）
-                cmd = [
-                    sys.executable,  # Python解释器
-                    "src/core/worker_process.py",
-                    "--worker-id", str(i),
-                    "--task-dir", str(self.task_dir)
-                ]
-                
-                # 启动进程（使用CREATE_NO_WINDOW避免弹出控制台窗口）
-                if sys.platform == "win32":
-                    # Windows下避免弹出新窗口
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = subprocess.SW_HIDE
-                    
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        startupinfo=startupinfo,
-                        text=True,
-                        encoding='utf-8'
-                    )
+                process = self._launch_worker_process(i)
+                if i < len(self.worker_processes):
+                    self.worker_processes[i] = process
                 else:
-                    # Unix/Linux
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True
-                    )
-                
-                self.worker_processes.append(process)
+                    self.worker_processes.append(process)
                 logger.info(f"启动工作进程 {i} (PID: {process.pid})")
             
             # 等待所有工作进程就绪
@@ -101,6 +146,8 @@ class FileBasedProcessPool:
             
             self.is_initialized = True
             logger.info(f"进程池初始化完成，共 {len(self.worker_processes)} 个工作进程")
+            self._log_worker_states("初始化完成")
+            self._start_health_monitor()
             
         except Exception as e:
             logger.error(f"进程池初始化失败: {e}")
@@ -125,7 +172,7 @@ class FileBasedProcessPool:
             # 每10秒记录一次进度
             elapsed = time.time() - start_time
             if int(elapsed) % 10 == 0 and int(elapsed) > 0:
-                logger.info(f"等待工作进程就绪... ({ready_count}/{self.pool_size} 已就绪, 已等待 {int(elapsed)} 秒)")
+                    logger.info(f"等待工作进程就绪... ({ready_count}/{self.pool_size} 已就绪, 已等待 {int(elapsed)} 秒)")
 
             await asyncio.sleep(0.5)
 
@@ -134,18 +181,66 @@ class FileBasedProcessPool:
     def _cleanup_task_dir(self):
         """清理任务目录"""
         try:
-            # 删除所有任务和结果文件
-            for file in self.task_dir.glob("*.task"):
-                file.unlink()
-            for file in self.task_dir.glob("*.result"):
-                file.unlink()
-            for file in self.task_dir.glob("*.ready"):
-                file.unlink()
-            for file in self.task_dir.glob("*.stop"):
-                file.unlink()
+            for entry in self.task_dir.iterdir():
+                try:
+                    if entry.is_file() or entry.is_symlink():
+                        entry.unlink()
+                    elif entry.is_dir():
+                        shutil.rmtree(entry)
+                except Exception as inner_error:
+                    logger.debug(f"删除 {entry} 失败: {inner_error}")
         except Exception as e:
             logger.warning(f"清理任务目录时出错: {e}")
+
+    def _launch_worker_process(self, worker_id: int) -> subprocess.Popen:
+        """启动单个工作进程"""
+        cmd = [
+            sys.executable,
+            "src/core/worker_process.py",
+            "--worker-id", str(worker_id),
+            "--task-dir", str(self.task_dir),
+        ]
+
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                startupinfo=startupinfo,
+                text=True,
+                encoding="utf-8",
+            )
+        else:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        return process
     
+    async def _ensure_workers_alive(self):
+        """检查并重启所有已退出的工作进程"""
+        self._log_worker_states("巡检前")
+        for worker_id in range(self.pool_size):
+            needs_restart = False
+
+            if worker_id >= len(self.worker_processes):
+                self.worker_processes.extend([None] * (worker_id + 1 - len(self.worker_processes)))
+                needs_restart = True
+            else:
+                process = self.worker_processes[worker_id]
+                needs_restart = process is None or process.poll() is not None
+
+            if needs_restart:
+                logger.warning(f"检测到工作进程 {worker_id} 不可用，尝试重启")
+                await self._restart_worker(worker_id)
+        self._log_worker_states("巡检后")
+
     async def generate_with_pool(self, audio_path: str, batch_size_s: int = 300, hotword: str = '', use_pickle: bool = True) -> Any:
         """
         使用进程池进行推理
@@ -161,12 +256,20 @@ class FileBasedProcessPool:
         if not self.is_initialized:
             await self.initialize()
         
+        # 派发任务前先确保所有工作进程处于可用状态
+        await self._ensure_workers_alive()
+
         # 生成任务ID
         task_id = str(uuid.uuid4())
         
         # 选择工作进程（轮询）
         worker_id = self.next_worker_id
         self.next_worker_id = (self.next_worker_id + 1) % self.pool_size
+
+        if not self._is_worker_alive(worker_id):
+            logger.warning(f"工作进程 {worker_id} 不可用，正在重启")
+            await self._restart_worker(worker_id)
+            self._log_worker_states(f"重新选择工作进程 {worker_id} 后状态")
         
         # 创建任务文件
         task_file = self.task_dir / f"worker_{worker_id}_{task_id}.task"
@@ -177,17 +280,37 @@ class FileBasedProcessPool:
         else:
             result_file = self.task_dir / f"worker_{worker_id}_{task_id}.result"
         
+        source_audio_path = Path(audio_path)
+        if not source_audio_path.exists():
+            raise FileNotFoundError(f"音频文件不存在: {audio_path}")
+
+        local_audio_ext = source_audio_path.suffix or ".wav"
+        local_audio_path = self.task_dir / f"{task_id}{local_audio_ext}"
+
+        try:
+            shutil.copy2(source_audio_path, local_audio_path)
+        except Exception as copy_error:
+            raise RuntimeError(f"复制音频文件失败: {copy_error}") from copy_error
+
         task_data = {
             'task_id': task_id,
-            'audio_path': audio_path,
+            'audio_path': str(local_audio_path),
+            'source_audio_path': str(source_audio_path),
             'batch_size_s': batch_size_s,
             'hotword': hotword,
             'use_pickle': use_pickle
         }
         
         # 写入任务文件
-        with open(task_file, 'w', encoding='utf-8') as f:
-            json.dump(task_data, f, ensure_ascii=False)
+        try:
+            with open(task_file, 'w', encoding='utf-8') as f:
+                json.dump(task_data, f, ensure_ascii=False)
+        except Exception as write_error:
+            try:
+                local_audio_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise write_error
         
         logger.debug(f"任务 {task_id} 分配给工作进程 {worker_id}")
         
@@ -229,6 +352,7 @@ class FileBasedProcessPool:
                             # 检查结果
                             if result_data['success']:
                                 logger.debug(f"任务 {task_id} 处理成功 (工作进程 {worker_id})")
+                                await self._restart_worker(worker_id)
                                 return result_data['result']
                             else:
                                 error_msg = result_data.get('error', '未知错误')
@@ -320,58 +444,56 @@ class FileBasedProcessPool:
     
     async def _restart_worker(self, worker_id: int):
         """重启工作进程"""
-        logger.info(f"重启工作进程 {worker_id}...")
-        
-        # 终止旧进程
-        if worker_id < len(self.worker_processes):
+        async with self._management_lock:
+            if worker_id >= len(self.worker_processes):
+                self.worker_processes.extend([None] * (worker_id + 1 - len(self.worker_processes)))
+
+            exit_code = None
             old_process = self.worker_processes[worker_id]
-            if old_process.poll() is None:
-                old_process.terminate()
-                old_process.wait(timeout=5)
-        
-        # 启动新进程（不再传递 config 参数）
-        cmd = [
-            sys.executable,
-            "src/core/worker_process.py",
-            "--worker-id", str(worker_id),
-            "--task-dir", str(self.task_dir)
-        ]
-        
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                startupinfo=startupinfo,
-                text=True,
-                encoding='utf-8'
-            )
-        else:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-        
-        self.worker_processes[worker_id] = process
-        logger.info(f"工作进程 {worker_id} 已重启 (PID: {process.pid})")
-        
+            if old_process is not None:
+                if old_process.poll() is None:
+                    old_process.terminate()
+                    exit_code = old_process.wait(timeout=5)
+                if old_process.stdout:
+                    old_process.stdout.close()
+                if old_process.stderr:
+                    old_process.stderr.close()
+                if exit_code is None:
+                    exit_code = old_process.poll()
+            logger.info(f"工作进程 {worker_id} 已退出 (exit={exit_code}), 正在重启")
+
+            # 清理旧的就绪/停止文件，避免误判
+            ready_file = self.task_dir / f"worker_{worker_id}.ready"
+            stop_file = self.task_dir / f"worker_{worker_id}.stop"
+            for artifact in (ready_file, stop_file):
+                try:
+                    artifact.unlink()
+                except FileNotFoundError:
+                    pass
+                except Exception as cleanup_error:
+                    logger.debug(f"清理 {artifact.name} 失败: {cleanup_error}")
+
+            process = self._launch_worker_process(worker_id)
+            self.worker_processes[worker_id] = process
+            logger.info(f"工作进程 {worker_id} 已重启 (PID: {process.pid})")
+
         # 等待进程就绪
         for _ in range(60):
             ready_file = self.task_dir / f"worker_{worker_id}.ready"
             if ready_file.exists():
+                logger.info(f"工作进程 {worker_id} (PID: {process.pid}) 已写入就绪标记")
+                self._log_worker_states(f"工作进程 {worker_id} 重启完成")
                 break
             await asyncio.sleep(0.5)
     
     def cleanup(self):
         """清理进程池资源"""
         logger.info("清理进程池资源...")
-        
+
+        if self.is_initialized:
+            self.is_initialized = False
+        self._stop_health_monitor()
+
         # 发送停止信号给所有工作进程
         for i in range(self.pool_size):
             stop_file = self.task_dir / f"worker_{i}.stop"
@@ -393,12 +515,12 @@ class FileBasedProcessPool:
                         process.wait(timeout=2)
                     except:
                         process.kill()
-        
+
         # 清理任务目录
         self._cleanup_task_dir()
-        
+
         self.worker_processes.clear()
-        self.is_initialized = False
+        self._log_worker_states("清理完成")
         logger.info("进程池资源已清理")
     
     def __del__(self):
