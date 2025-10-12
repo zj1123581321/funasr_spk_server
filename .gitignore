@@ -27,6 +27,7 @@ src/cpp
 version_backup/
 tests/performance/output
 samples
+AGENTS.md
 
 # 测试文件
 .pytest_cache/

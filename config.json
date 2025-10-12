@@ -44,7 +44,7 @@
 
     "_comment_model_dir": "模型目录请在 .env 中配置: FUNASR_MODEL_DIR",
 
-    "batch_size_s": 500,
+    "batch_size_s": 60,
     "_comment_batch_size_s": "可通过环境变量覆盖: FUNASR_BATCH_SIZE_S",
 
     "ncpu": 16,
