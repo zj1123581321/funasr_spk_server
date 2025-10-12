@@ -95,23 +95,59 @@ def process_task(model, task_file: str):
     batch_size_s = task.get('batch_size_s', global_config.funasr.batch_size_s)
     hotword = task.get('hotword', '')
     use_pickle = task.get('use_pickle', True)  # 默认使用pickle
-    
-    print(f"[Worker] 处理任务 {task_id}: {os.path.basename(audio_path)}")
-    
+
+    print(f"[Worker-{os.getpid()}] 处理任务 {task_id}: {os.path.basename(audio_path)}")
+
     # 结果文件路径
     if use_pickle:
         result_file = task_file.replace('.task', '.pkl')
     else:
         result_file = task_file.replace('.task', '.result')
-    
+
     try:
-        # 执行模型推理
+        # ========== 诊断日志：任务开始 ==========
+        print(f"[Worker-{os.getpid()}] [诊断] 任务参数:")
+        print(f"  - 音频路径: {audio_path}")
+        print(f"  - 文件存在: {os.path.exists(audio_path)}")
+        if os.path.exists(audio_path):
+            file_size = os.path.getsize(audio_path)
+            print(f"  - 文件大小: {file_size / 1024 / 1024:.2f} MB")
+        print(f"  - batch_size_s: {batch_size_s}")
+        print(f"  - hotword: '{hotword}'")
+
+        # ========== 诊断日志：检查设备状态 ==========
+        import torch
+        print(f"[Worker-{os.getpid()}] [诊断] 设备状态:")
+        print(f"  - MPS 可用: {torch.backends.mps.is_available()}")
+        print(f"  - MPS 已构建: {torch.backends.mps.is_built()}")
+
+        # 检查模型设备
+        if hasattr(model, 'device'):
+            print(f"  - 模型设备: {model.device}")
+
+        # ========== 执行模型推理 ==========
+        print(f"[Worker-{os.getpid()}] [诊断] 开始调用 model.generate()...")
+        start_time = time.time()
+
         result = model.generate(
             input=audio_path,
             batch_size_s=batch_size_s,
             hotword=hotword
         )
-        
+
+        elapsed = time.time() - start_time
+        print(f"[Worker-{os.getpid()}] [诊断] model.generate() 完成，耗时: {elapsed:.2f}秒")
+
+        # ========== 诊断日志：检查结果 ==========
+        print(f"[Worker-{os.getpid()}] [诊断] 结果检查:")
+        print(f"  - 结果类型: {type(result)}")
+        if isinstance(result, list):
+            print(f"  - 结果长度: {len(result)}")
+            if len(result) > 0:
+                print(f"  - 首个元素类型: {type(result[0])}")
+                if isinstance(result[0], dict):
+                    print(f"  - 首个元素键: {list(result[0].keys())}")
+
         # 保存结果
         result_data = {
             'task_id': task_id,
@@ -119,7 +155,9 @@ def process_task(model, task_file: str):
             'result': result,
             'worker_pid': os.getpid()
         }
-        
+
+        print(f"[Worker-{os.getpid()}] [诊断] 保存结果到: {os.path.basename(result_file)}")
+
         if use_pickle:
             # 使用pickle保存（支持大型对象）
             with open(result_file, 'wb') as f:
@@ -130,35 +168,57 @@ def process_task(model, task_file: str):
                 with open(result_file, 'w', encoding='utf-8') as f:
                     json.dump(result_data, f, ensure_ascii=False, separators=(',', ':'))
             except Exception as json_error:
-                print(f"[Worker] JSON保存失败，改用pickle: {json_error}")
+                print(f"[Worker-{os.getpid()}] JSON保存失败，改用pickle: {json_error}")
                 # 降级到pickle
                 result_file = task_file.replace('.task', '.pkl')
                 with open(result_file, 'wb') as f:
                     pickle.dump(result_data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        
-        print(f"[Worker] 任务 {task_id} 完成，结果保存到: {os.path.basename(result_file)}")
-        
+
+        print(f"[Worker-{os.getpid()}] ✓ 任务 {task_id} 完成")
+
     except Exception as e:
         error_msg = str(e)
         traceback_str = traceback.format_exc()
-        print(f"[Worker] 任务 {task_id} 失败: {error_msg}")
-        
+
+        # ========== 诊断日志：错误详情 ==========
+        print(f"[Worker-{os.getpid()}] ✗ 任务 {task_id} 失败!")
+        print(f"[Worker-{os.getpid()}] [诊断] 错误详情:")
+        print(f"  - 错误类型: {type(e).__name__}")
+        print(f"  - 错误信息: {error_msg}")
+        print(f"  - 错误堆栈:\n{traceback_str}")
+
+        # 检查是否是 MPS 相关错误
+        if "dimension" in error_msg.lower() or "tensor" in error_msg.lower():
+            print(f"[Worker-{os.getpid()}] [诊断] 疑似 MPS 张量错误!")
+            print(f"[Worker-{os.getpid()}] [诊断] 当前 MPS 状态:")
+            import torch
+            print(f"  - MPS 可用: {torch.backends.mps.is_available()}")
+            try:
+                # 尝试简单的 MPS 操作
+                test_tensor = torch.randn(2, 2, device='mps')
+                print(f"  - MPS 测试张量创建: 成功")
+                del test_tensor
+            except Exception as mps_e:
+                print(f"  - MPS 测试张量创建: 失败 - {mps_e}")
+
         # 保存错误结果
         error_data = {
             'task_id': task_id,
             'success': False,
             'error': error_msg,
             'traceback': traceback_str,
-            'worker_pid': os.getpid()
+            'worker_pid': os.getpid(),
+            'audio_path': audio_path,
+            'file_size': os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         }
-        
+
         if use_pickle:
             with open(result_file, 'wb') as f:
                 pickle.dump(error_data, f)
         else:
             with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(error_data, f, ensure_ascii=False)
-    
+
     finally:
         # 删除任务文件（表示任务已处理）
         try:
@@ -169,20 +229,42 @@ def process_task(model, task_file: str):
 
 def worker_loop(worker_id: int, task_dir: str):
     """工作进程主循环"""
-    print(f"[Worker-{worker_id}] 启动 (PID: {os.getpid()})")
+    print(f"[Worker-{worker_id}] ========== 启动 (PID: {os.getpid()}) ==========")
+
+    # ========== 诊断日志：环境信息 ==========
+    print(f"[Worker-{worker_id}] [诊断] 环境信息:")
+    print(f"  - Python 版本: {sys.version}")
+    print(f"  - 工作目录: {os.getcwd()}")
+    print(f"  - 任务目录: {task_dir}")
+
+    import torch
+    print(f"[Worker-{worker_id}] [诊断] PyTorch 信息:")
+    print(f"  - 版本: {torch.__version__}")
+    print(f"  - MPS 可用: {torch.backends.mps.is_available()}")
+    print(f"  - MPS 已构建: {torch.backends.mps.is_built()}")
+
+    # 检查环境变量
+    mps_ratio = os.environ.get('PYTORCH_MPS_HIGH_WATERMARK_RATIO', 'not set')
+    omp_threads = os.environ.get('OMP_NUM_THREADS', 'not set')
+    print(f"  - PYTORCH_MPS_HIGH_WATERMARK_RATIO: {mps_ratio}")
+    print(f"  - OMP_NUM_THREADS: {omp_threads}")
 
     # 设置设备并应用补丁
+    print(f"[Worker-{worker_id}] [诊断] 开始设备配置...")
     device = setup_device()
+    print(f"[Worker-{worker_id}] [诊断] 设备配置完成: {device}")
 
     # 初始化模型
+    print(f"[Worker-{worker_id}] [诊断] 开始模型初始化...")
     model = initialize_model(device)
-    
+    print(f"[Worker-{worker_id}] [诊断] 模型初始化完成")
+
     # 创建就绪标记文件
     ready_file = os.path.join(task_dir, f"worker_{worker_id}.ready")
     with open(ready_file, 'w') as f:
         f.write(str(os.getpid()))
-    
-    print(f"[Worker-{worker_id}] 就绪，等待任务...")
+
+    print(f"[Worker-{worker_id}] ========== 就绪，等待任务 ==========")
     
     # 监听任务
     while True:

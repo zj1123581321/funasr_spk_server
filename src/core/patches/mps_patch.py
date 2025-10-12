@@ -189,6 +189,42 @@ def apply_mps_patch():
 
     # 应用补丁
     auto_model.AutoModel.build_model = patched_build_model
+
+    # 针对 MPS 上长音频触发的 CIF index_select 崩溃做一次性补丁
+    try:
+        from funasr.models.bicif_paraformer import cif_predictor as _cif_module  # type: ignore
+
+        if not getattr(_cif_module, "_mps_guard_applied", False):
+            _original_cif = _cif_module.cif
+
+            def _cif_with_mps_guard(hidden, alphas, threshold):
+                if hidden.device.type != "mps" and alphas.device.type != "mps":
+                    return _original_cif(hidden, alphas, threshold)
+
+                try:
+                    return _original_cif(hidden, alphas, threshold)
+                except (IndexError, RuntimeError) as exc:
+                    # 避免重复 fallback 日志刷屏，仅在首次打印告警
+                    if not hasattr(_cif_with_mps_guard, "_warned"):
+                        logger.warning(f"检测到 MPS CIF 计算异常，自动回退到 CPU 执行一次（异常: {exc}）")
+                        setattr(_cif_with_mps_guard, "_warned", True)
+                    hidden_cpu = hidden.detach().to("cpu")
+                    alphas_cpu = alphas.detach().to("cpu")
+                    outputs = _original_cif(hidden_cpu, alphas_cpu, threshold)
+                    # 将结果搬回原设备，保持下游行为一致
+                    converted = tuple(
+                        tensor.to(hidden.device) if isinstance(tensor, torch.Tensor) else tensor
+                        for tensor in outputs
+                    )
+                    return converted
+
+            _cif_module._mps_guard_applied = True  # type: ignore[attr-defined]
+            _cif_module._original_cif = _original_cif  # type: ignore[attr-defined]
+            _cif_module.cif = _cif_with_mps_guard  # type: ignore[assignment]
+            logger.debug("MPS CIF fallback 补丁已应用")
+    except Exception as cif_patch_error:
+        logger.warning(f"应用 MPS CIF fallback 补丁失败: {cif_patch_error}")
+
     _mps_patch_applied = True
 
     logger.debug("MPS 补丁已成功应用到 FunASR")
