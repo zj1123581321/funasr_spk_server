@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- ✅ 支持多种音视频格式（wav, mp3, mp4, m4a, flac等）
+- ✅ 支持多种音视频格式（wav, mp3, mp4, m4a, flac, webm等）
 - ✅ 自动说话人识别和分离
 - ✅ 精确到秒/毫秒的时间戳标注
 - ✅ 双输出格式：JSON（合并说话人）& SRT（原始分割）
@@ -475,7 +475,7 @@ python tests/server/test_concurrent_transcription.py 8
 5. **文件格式不支持**
    ```json
    // 添加支持的文件扩展名
-   "allowed_extensions": [".wav", ".mp3", ".m4a", ".flac", ".ogg"]
+   "allowed_extensions": [".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"]
    ```
 
 ### 调试模式

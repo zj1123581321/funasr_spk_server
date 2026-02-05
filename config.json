@@ -20,7 +20,8 @@
       ".flac",
       ".aac",
       ".ogg",
-      ".opus"
+      ".opus",
+      ".webm"
     ],
 
     "connection_timeout_seconds": 300,

@@ -17,7 +17,7 @@ class ServerConfig(BaseModel):
     port: int = 8767
     max_connections: int = 100
     max_file_size_mb: int = 5000
-    allowed_extensions: list[str] = [".wav", ".mp3", ".mp4", ".m4a", ".flac", ".aac", ".ogg", ".opus"]
+    allowed_extensions: list[str] = [".wav", ".mp3", ".mp4", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"]
     temp_dir: str = "./temp"
     upload_dir: str = "./uploads"
     connection_timeout_seconds: int = 300
