@@ -93,14 +93,32 @@ class FileBasedProcessPool:
             str(self.task_dir),
         ]
 
+        # 创建日志目录
+        log_dir = Path("logs/workers")
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        # 为每个 worker 创建独立的日志文件
+        worker_log = log_dir / f"worker_{worker_id}.log"
+
+        # 打开日志文件（追加模式）
+        log_file = open(worker_log, 'a', encoding='utf-8')
+
+        # 写入分隔符，标记新进程启动
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_file.write(f"\n{'='*80}\n")
+        log_file.write(f"Worker {worker_id} 启动 @ {timestamp}\n")
+        log_file.write(f"{'='*80}\n")
+        log_file.flush()
+
         if sys.platform == "win32":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=log_file,
+                stderr=log_file,
                 startupinfo=startupinfo,
                 text=True,
                 encoding="utf-8",
@@ -108,11 +126,15 @@ class FileBasedProcessPool:
         else:
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=log_file,
+                stderr=log_file,
                 text=True,
             )
 
+        # 将文件对象保存到进程对象中，以便后续关闭
+        process._worker_log_file = log_file
+
+        logger.debug(f"工作进程 {worker_id} 日志输出到: {worker_log}")
         return process
 
     async def _wait_for_worker_ready(
@@ -167,6 +189,13 @@ class FileBasedProcessPool:
                         except Exception:
                             old_process.kill()
 
+            # 关闭旧进程的日志文件
+            if old_process is not None and hasattr(old_process, '_worker_log_file'):
+                try:
+                    old_process._worker_log_file.close()
+                except Exception as e:
+                    logger.debug(f"关闭工作进程 {worker_id} 日志文件失败: {e}")
+
             # 清理旧文件
             ready_file = self.task_dir / f"worker_{worker_id}.ready"
             stop_file = self.task_dir / f"worker_{worker_id}.stop"
@@ -199,6 +228,14 @@ class FileBasedProcessPool:
                     await asyncio.get_event_loop().run_in_executor(None, process.wait, 5)
                 except Exception:
                     process.kill()
+
+            # 关闭日志文件
+            if hasattr(process, '_worker_log_file'):
+                try:
+                    process._worker_log_file.close()
+                except Exception:
+                    pass
+
             async with self._management_lock:
                 self.worker_processes[worker_id] = None
             raise
@@ -508,6 +545,13 @@ class FileBasedProcessPool:
                         await asyncio.get_event_loop().run_in_executor(None, process.wait, 2)
                     except Exception:
                         process.kill()
+
+            # 关闭日志文件
+            if hasattr(process, '_worker_log_file'):
+                try:
+                    process._worker_log_file.close()
+                except Exception:
+                    pass
 
         self._cleanup_task_dir()
 
