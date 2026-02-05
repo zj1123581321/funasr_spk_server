@@ -401,7 +401,7 @@ class ServerTranscriptionTester:
             samples_dir = project_root / "samples"
             audio_files = []
             
-            for ext in ['.wav', '.mp3', '.mp4', '.m4a', '.flac']:
+            for ext in ['.wav', '.mp3', '.mp4', '.m4a', '.flac', '.webm']:
                 audio_files.extend(samples_dir.glob(f"*{ext}"))
             
             if not audio_files:
