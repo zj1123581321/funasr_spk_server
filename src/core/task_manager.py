@@ -60,7 +60,10 @@ class TaskManager:
         # 生成或使用提供的任务ID
         if task_id is None:
             task_id = str(uuid.uuid4())
-        
+
+        # PR1: 解析 ASR 引擎名 —— request 未指定时回退 default_engine
+        engine = (request.engine or "").strip() or config.transcription.default_engine
+
         # 创建任务对象
         task = TranscriptionTask(
             task_id=task_id,
@@ -69,14 +72,15 @@ class TaskManager:
             file_size=request.file_size,
             file_hash=request.file_hash,
             force_refresh=request.force_refresh,
-            output_format=request.output_format
+            output_format=request.output_format,
+            engine=engine,
         )
-        
+
         # 保存任务
         self.tasks[task_id] = task
-        
-        logger.info(f"创建任务: {task_id} - {request.file_name}")
-        
+
+        logger.info(f"创建任务: {task_id} - {request.file_name} (engine={engine})")
+
         return task
     
     def get_task(self, task_id: str) -> Optional[TranscriptionTask]:
@@ -92,9 +96,11 @@ class TaskManager:
         # 更新文件路径
         task.file_path = file_path
         
-        # 检查缓存
+        # 检查缓存（PR1: cache key 含 engine，避免不同引擎结果互相覆盖）
         if not task.force_refresh:
-            cached_result = await db_manager.get_cached_result(task.file_hash, task.output_format)
+            cached_result = await db_manager.get_cached_result(
+                task.file_hash, task.output_format, engine=task.engine
+            )
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
                 task.status = TaskStatus.COMPLETED
@@ -233,9 +239,9 @@ class TaskManager:
             async def progress_callback(progress: float):
                 await self._notify_task_progress(task, progress, f"转录进度: {progress:.1f}%")
             
-            # 执行转录
-            from src.core.funasr_transcriber import get_transcriber
-            transcriber = get_transcriber()
+            # 执行转录（PR1: 用 dispatch 函数根据 task.engine 选择 transcriber）
+            from src.core.transcriber_dispatch import resolve_transcriber
+            transcriber = resolve_transcriber(task.engine)
             result = await transcriber.transcribe(
                 audio_path=task.file_path,
                 task_id=task_id,
@@ -262,16 +268,16 @@ class TaskManager:
                     error=None
                 )
                 task.result = transcription_result
-                
-                # 保存到缓存（包含原始结果）
-                await db_manager.save_result(transcription_result, result["raw_result"])
+
+                # 保存到缓存（PR1: 缓存 key 含 engine，避免与其他引擎结果冲突）
+                await db_manager.save_result(transcription_result, result["raw_result"], engine=task.engine)
             else:
                 # JSON格式结果
                 transcription_result, raw_result = result
                 task.result = transcription_result
-                
-                # 保存到缓存（包含原始结果）
-                await db_manager.save_result(transcription_result, raw_result)
+
+                # 保存到缓存（PR1: 缓存 key 含 engine）
+                await db_manager.save_result(transcription_result, raw_result, engine=task.engine)
             
             task.completed_at = datetime.now()
             task.progress = 100

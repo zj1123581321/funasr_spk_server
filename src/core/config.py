@@ -59,6 +59,9 @@ class TranscriptionConfig(BaseModel):
     delete_after_transcription: bool = True
     transcription_speed_ratio: int = 10
     queue_status_enabled: bool = True
+    # PR1: ASR 引擎默认选择。upload request 未指定 engine 时走这个。
+    # 可通过 FUNASR_DEFAULT_ENGINE 环境变量覆盖。
+    default_engine: str = "funasr"
 
     model_config = {"protected_namespaces": ()}
 
@@ -211,6 +214,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "max_concurrent_tasks", "FUNASR_MAX_CONCURRENT_TASKS", int)
         cls._override_if_set(config_data["transcription"], "task_timeout_minutes", "FUNASR_TASK_TIMEOUT_MINUTES", int)
         cls._override_if_set(config_data["transcription"], "transcription_speed_ratio", "FUNASR_TRANSCRIPTION_SPEED_RATIO", int)
+        cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
 
         # ==================== 数据库配置 ====================
         # 数据库路径由 FUNASR_DATA_DIR 构建

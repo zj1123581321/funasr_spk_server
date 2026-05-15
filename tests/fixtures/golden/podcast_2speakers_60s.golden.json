@@ -1,0 +1,62 @@
+{
+  "segments": [
+    {
+      "start_time": 0.11,
+      "end_time": 9.19,
+      "text": "法，我觉得我们首先就先来聊一聊关于生日的事儿吧。咱们先来回忆回忆，你还有印象自己从小到大记忆当中第一个生日是什么样吗？",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 9.31,
+      "end_time": 18.87,
+      "text": "我跟你讲说出来，你可能不信，就是我小时候过生日的记忆就跟就是歘就是被清零了一样哦，就是我完全没有印象。",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 19.05,
+      "end_time": 24.51,
+      "text": "所以你以前可能就遇到过那个黑衣人，就拿出一根笔说，看这里刷一闪你就都没了。",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 24.51,
+      "end_time": 27.99,
+      "text": "然后我还特别怕你骄傲，就是我我我有什么可骄傲的，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 27.99,
+      "end_time": 28.99,
+      "text": "你没有记忆，我骄傲。",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 28.99,
+      "end_time": 36.39,
+      "text": "不就是我现在觉得我好像能回溯到的，我最有记忆的最完整记忆的那个生日是跟你过的哦，",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 36.69,
+      "end_time": 37.23,
+      "text": "真的啊。",
+      "speaker": "Speaker1"
+    },
+    {
+      "start_time": 37.23,
+      "end_time": 56.37,
+      "text": "对，就是你给我过的可能就是因为我从小生日都不是很有仪式感哦，但是你跟我在一起之后哦，这个人就是太浪漫了，就能整活啊。对，然后跟我在一起之后，你给我过的那个第一个生日实在是就是太颠覆我了，所以我就印象很深刻，我都有点没印象。",
+      "speaker": "Speaker2"
+    },
+    {
+      "start_time": 56.37,
+      "end_time": 58.98,
+      "text": "我给你过第一个生日，怎么颠覆你，我当时裸奔我了。",
+      "speaker": "Speaker1"
+    }
+  ],
+  "speakers": [
+    "Speaker1",
+    "Speaker2"
+  ]
+}
