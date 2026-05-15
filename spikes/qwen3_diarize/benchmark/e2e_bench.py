@@ -20,7 +20,40 @@ sys.path.insert(0, str(HERE.parent))
 
 from src.asr import run_asr
 from src.diarize import run_diarization
-from src.merge import merge_asr_and_diarize, segments_to_srt, segments_to_rttm
+from src.merge import (
+    merge_asr_and_diarize,
+    segments_to_srt,
+    segments_to_rttm,
+    filter_spurious_speakers,
+)
+
+# diarize 配置预设(按实测组结果命名)
+PRESETS = {
+    # 最优: int8 seg + NeMo + cpu 8t + 锁 2 spk,RTF 0.1435,RSS 604MB,2 spk 正确
+    "D": dict(
+        segmentation_model="models/sherpa/pyannote-segmentation-3.0/model.int8.onnx",
+        embedding_model="models/sherpa/nemo-titanet-small/embedding.onnx",
+        provider="cpu",
+        num_threads=8,
+        num_speakers=2,
+    ),
+    # 质量稳: fp32 seg + NeMo + coreml 4t + 自动聚类,RTF 0.1645,2 spk 自动正确
+    "C": dict(
+        segmentation_model="models/sherpa/pyannote-segmentation-3.0/model.onnx",
+        embedding_model="models/sherpa/nemo-titanet-small/embedding.onnx",
+        provider="coreml",
+        num_threads=4,
+        num_speakers=None,
+    ),
+    # 原方案: fp32 + 3D-Speaker + coreml,RTF 0.465 (慢 3x)
+    "baseline": dict(
+        segmentation_model="models/sherpa/pyannote-segmentation-3.0/model.onnx",
+        embedding_model="models/sherpa/3dspeaker-eres2net/embedding.onnx",
+        provider="coreml",
+        num_threads=4,
+        num_speakers=None,
+    ),
+}
 
 
 def main():
@@ -30,6 +63,11 @@ def main():
     ap.add_argument("--language", default="Chinese")
     ap.add_argument("--cluster-threshold", type=float, default=0.9,
                     help="diarize 聚类阈值 (双人对话 0.9 经验值)")
+    ap.add_argument("--preset", default="D", choices=list(PRESETS.keys()),
+                    help="diarize 模型/EP 预设 (D=最快, C=最稳, baseline=原方案)")
+    ap.add_argument("--filter-spurious", action="store_true", default=True,
+                    help="过滤总时长<2s 的'假说话人'(短噪声 turn 合并到邻居)")
+    ap.add_argument("--no-filter-spurious", dest="filter_spurious", action="store_false")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -49,25 +87,36 @@ def main():
     )
 
     # === Stage 2: Diarization ===
-    print(f"[E2E] === Stage 2: Diarization ===", file=sys.stderr)
+    preset_cfg = PRESETS[args.preset]
+    print(f"[E2E] === Stage 2: Diarization (preset={args.preset}) ===", file=sys.stderr)
+    print(f"[E2E]   {preset_cfg}", file=sys.stderr)
     t1 = time.time()
     turns = run_diarization(
         args.audio,
-        num_speakers=None,
         cluster_threshold=args.cluster_threshold,
-        provider="coreml",
-        num_threads=4,
+        **preset_cfg,
     )
     t_dia = time.time() - t1
-    speakers = sorted({t["speaker"] for t in turns})
+    speakers_raw = sorted({t["speaker"] for t in turns})
     print(
-        f"[E2E] Diarize done: turns={len(turns)} speakers={speakers} "
+        f"[E2E] Diarize done: turns={len(turns)} speakers_raw={speakers_raw} "
         f"elapsed={t_dia:.1f}s rtf={t_dia/asr.duration:.3f}",
         file=sys.stderr,
     )
 
+    # === Stage 2.5: Filter spurious speakers ===
+    if args.filter_spurious:
+        turns_filtered = filter_spurious_speakers(turns, min_speaker_total=2.0)
+        spurious_dropped = len(set(t["speaker"] for t in turns)) - len(
+            set(t["speaker"] for t in turns_filtered)
+        )
+        if spurious_dropped > 0:
+            print(f"[E2E] Filtered {spurious_dropped} spurious speakers (<2s total)", file=sys.stderr)
+        turns = turns_filtered
+
     # === Stage 3: Merge ===
-    print(f"[E2E] === Stage 3: Merge ===", file=sys.stderr)
+    speakers = sorted({t["speaker"] for t in turns})
+    print(f"[E2E] === Stage 3: Merge (final speakers={speakers}) ===", file=sys.stderr)
     t2 = time.time()
     segments = merge_asr_and_diarize(asr.text, turns)
     t_merge = time.time() - t2

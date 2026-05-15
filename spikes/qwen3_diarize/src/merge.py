@@ -31,6 +31,45 @@ class Segment:
     text: str
 
 
+def filter_spurious_speakers(turns: List[dict], min_speaker_total: float = 2.0) -> List[dict]:
+    """合并"假说话人" — 某 speaker 总时长 < 阈值则归到时间最近的另一 speaker.
+
+    这是 sherpa-onnx 在 cluster_threshold=0.9 + int8 segmentation 下会出的工件:
+    偶尔切出 0.3s 短 turn 被聚成独立 speaker. 总时长很小 = 噪声片段.
+    """
+    if not turns:
+        return turns
+    totals: dict = {}
+    for t in turns:
+        totals[t["speaker"]] = totals.get(t["speaker"], 0) + (t["end"] - t["start"])
+    spurious = {sp for sp, dur in totals.items() if dur < min_speaker_total}
+    if not spurious:
+        return turns
+
+    valid_speakers = sorted(totals.keys() - spurious, key=lambda s: -totals[s])
+    if not valid_speakers:
+        return turns  # 全是噪声,什么都不改
+
+    out = []
+    for t in turns:
+        if t["speaker"] in spurious:
+            # 找时间最近的 valid speaker 邻居
+            mid = (t["start"] + t["end"]) / 2
+            best = valid_speakers[0]
+            best_dist = float("inf")
+            for ot in turns:
+                if ot["speaker"] not in spurious and ot is not t:
+                    omid = (ot["start"] + ot["end"]) / 2
+                    d = abs(omid - mid)
+                    if d < best_dist:
+                        best_dist = d
+                        best = ot["speaker"]
+            out.append({**t, "speaker": best})
+        else:
+            out.append(t)
+    return out
+
+
 def merge_asr_and_diarize(asr_text: str, turns: List[dict]) -> List[Segment]:
     """按 turn 时长比例线性切分 ASR 文本."""
     if not turns or not asr_text:
