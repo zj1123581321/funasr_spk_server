@@ -225,33 +225,24 @@ _qwen3_singleton: Optional[Qwen3DiarizeTranscriber] = None
 
 
 def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
-    """获取 Qwen3 转录器单例
-
-    从 config.qwen3.* 读模型路径与 preset 参数. config 未配置时抛 ValueError, 告知运维需补.
-    """
+    """获取 Qwen3 转录器单例 (从 config.qwen3 读模型路径 + preset)"""
     global _qwen3_singleton
     if _qwen3_singleton is not None:
         return _qwen3_singleton
 
     from src.core.config import config
 
-    qwen3_cfg = getattr(config, "qwen3", None)
-    if qwen3_cfg is None:
-        raise ValueError(
-            "config.qwen3 未配置. "
-            "请在 config.json 加 'qwen3' 块, 含 model_dir / segmentation_model / embedding_model"
-        )
-
+    q = config.qwen3
     _qwen3_singleton = Qwen3DiarizeTranscriber(
-        asr_model_dir=qwen3_cfg.asr_model_dir,
-        segmentation_model=qwen3_cfg.segmentation_model,
-        embedding_model=qwen3_cfg.embedding_model,
-        num_speakers=qwen3_cfg.num_speakers,
-        cluster_threshold=qwen3_cfg.cluster_threshold,
-        num_threads=qwen3_cfg.num_threads,
-        provider=qwen3_cfg.provider,
-        language=qwen3_cfg.language,
-        temperature=qwen3_cfg.temperature,
+        asr_model_dir=q.asr_model_dir,
+        segmentation_model=q.segmentation_model,
+        embedding_model=q.embedding_model,
+        num_speakers=q.num_speakers,
+        cluster_threshold=q.cluster_threshold,
+        num_threads=q.num_threads,
+        provider=q.provider,
+        language=q.language,
+        temperature=q.temperature,
     )
     return _qwen3_singleton
 

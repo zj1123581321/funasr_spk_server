@@ -48,6 +48,32 @@ class FunASRConfig(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class Qwen3Config(BaseModel):
+    """Qwen3-Diarize 引擎配置(C3 落地)
+
+    服务器启动时,如果 transcription.default_engine == "qwen3", 这些字段会被
+    Qwen3DiarizeTranscriber 读取并构造引擎.
+
+    模型路径默认指向 scripts/download_qwen3_models.sh 落地的位置.
+    """
+    # 模型路径
+    asr_model_dir: str = "./models/qwen3_diarize/Qwen3-ASR-1.7B"
+    segmentation_model: str = "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx"
+    embedding_model: str = "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx"
+
+    # Diarize preset (PoC 报告 preset=auto 普适最优)
+    num_speakers: Optional[int] = None    # None = 自适应聚类
+    cluster_threshold: float = 0.9
+    num_threads: int = 8
+    provider: str = "cpu"
+
+    # ASR 参数
+    language: str = "Chinese"
+    temperature: float = 0.4
+
+    model_config = {"protected_namespaces": ()}
+
+
 class TranscriptionConfig(BaseModel):
     """转录配置"""
     max_concurrent_tasks: int = 2
@@ -109,6 +135,7 @@ class Config(BaseModel):
     """总配置 - 支持环境变量覆盖"""
     server: ServerConfig = ServerConfig()
     funasr: FunASRConfig = FunASRConfig()
+    qwen3: Qwen3Config = Qwen3Config()
     transcription: TranscriptionConfig = TranscriptionConfig()
     database: DatabaseConfig = DatabaseConfig()
     notification: NotificationConfig = NotificationConfig()
@@ -190,6 +217,8 @@ class Config(BaseModel):
             config_data["auth"] = {}
         if "logging" not in config_data:
             config_data["logging"] = {}
+        if "qwen3" not in config_data:
+            config_data["qwen3"] = {}
 
         # ==================== 服务器配置 ====================
         cls._override_if_set(config_data["server"], "host", "FUNASR_SERVER_HOST")
@@ -215,6 +244,27 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "task_timeout_minutes", "FUNASR_TASK_TIMEOUT_MINUTES", int)
         cls._override_if_set(config_data["transcription"], "transcription_speed_ratio", "FUNASR_TRANSCRIPTION_SPEED_RATIO", int)
         cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
+
+        # ==================== Qwen3-Diarize 配置 ====================
+        cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")
+        cls._override_if_set(config_data["qwen3"], "segmentation_model", "FUNASR_QWEN3_SEGMENTATION_MODEL")
+        cls._override_if_set(config_data["qwen3"], "embedding_model", "FUNASR_QWEN3_EMBEDDING_MODEL")
+        cls._override_if_set(config_data["qwen3"], "cluster_threshold", "FUNASR_QWEN3_CLUSTER_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "num_threads", "FUNASR_QWEN3_NUM_THREADS", int)
+        cls._override_if_set(config_data["qwen3"], "provider", "FUNASR_QWEN3_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "language", "FUNASR_QWEN3_LANGUAGE")
+        cls._override_if_set(config_data["qwen3"], "temperature", "FUNASR_QWEN3_TEMPERATURE", float)
+        # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
+        _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
+        if _num_spk_env is not None:
+            _s = _num_spk_env.strip().lower()
+            if _s in ("", "auto", "none"):
+                config_data["qwen3"]["num_speakers"] = None
+            else:
+                try:
+                    config_data["qwen3"]["num_speakers"] = int(_s)
+                except ValueError:
+                    logger.error(f"FUNASR_QWEN3_NUM_SPEAKERS 必须是整数或 auto/none/空, 当前: {_num_spk_env!r}")
 
         # ==================== 数据库配置 ====================
         # 数据库路径由 FUNASR_DATA_DIR 构建

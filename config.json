@@ -28,6 +28,24 @@
     "heartbeat_interval_seconds": 60
   },
 
+  "qwen3": {
+    "_comment_engine": "Qwen3-Diarize 引擎配置(仅当 transcription.default_engine == 'qwen3' 时生效)",
+    "_comment_models": "模型路径由 scripts/download_qwen3_models.sh 落地, 也可通过 FUNASR_QWEN3_* 环境变量覆盖",
+
+    "asr_model_dir": "./models/qwen3_diarize/Qwen3-ASR-1.7B",
+    "segmentation_model": "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx",
+    "embedding_model": "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx",
+
+    "_comment_preset": "PoC 报告 preset=auto 普适最优: fp32 segmentation + NeMo TitaNet + cpu + 8 threads + 自适应聚类",
+    "num_speakers": null,
+    "cluster_threshold": 0.9,
+    "num_threads": 8,
+    "provider": "cpu",
+
+    "language": "Chinese",
+    "temperature": 0.4
+  },
+
   "funasr": {
     "_comment_device": "设备配置请在 .env 中配置: FUNASR_DEVICE, FUNASR_DEVICE_PRIORITY",
 
