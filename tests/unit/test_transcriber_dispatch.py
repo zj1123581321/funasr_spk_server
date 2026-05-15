@@ -64,16 +64,36 @@ class TestResolveTranscriberFollowsConfig:
             assert result is mock_get.return_value
 
     def test_qwen3_matches_config_qwen3(self, server_engine_qwen3):
-        with patch("src.core.qwen3_transcriber.get_qwen3_transcriber") as mock_get:
-            mock_get.return_value = MagicMock(name="qwen3_instance")
+        """PR3: qwen3 走 pool wrapper, 不再调 Qwen3DiarizeTranscriber 单例"""
+        with patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as mock_get:
+            mock_get.return_value = MagicMock(name="qwen3_pool_instance")
             result = resolve_transcriber("qwen3")
             assert result is mock_get.return_value
 
     def test_none_falls_back_to_qwen3_when_config_qwen3(self, server_engine_qwen3):
-        with patch("src.core.qwen3_transcriber.get_qwen3_transcriber") as mock_get:
+        with patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as mock_get:
             mock_get.return_value = MagicMock()
             result = resolve_transcriber(None)
             assert result is mock_get.return_value
+
+    def test_qwen3_dispatch_returns_pool_wrapper_not_diarize_singleton(
+        self, server_engine_qwen3
+    ):
+        """PR3 显式契约: 主进程 qwen3 dispatch 必须返回 pool wrapper, 不再持有 libllama context"""
+        # 旧路径不应被调
+        with patch(
+            "src.core.qwen3_transcriber.get_qwen3_transcriber"
+        ) as old_get, patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as new_get:
+            new_get.return_value = MagicMock(name="qwen3_pool_instance")
+            resolve_transcriber("qwen3")
+            assert new_get.called, "应走 pool wrapper 工厂"
+            assert not old_get.called, "主进程 dispatch 不应再调 Qwen3DiarizeTranscriber 单例"
 
 
 # ==================== Mismatch reject ====================

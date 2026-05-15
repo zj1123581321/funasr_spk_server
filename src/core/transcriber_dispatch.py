@@ -30,9 +30,11 @@ from loguru import logger
 from src.core.config import config
 
 # 注册表: 引擎名 -> get_singleton 函数. 引擎名变动时只改这里
+# PR3: qwen3 走 multi-process worker pool wrapper, 主进程不再持有 libllama context.
+#      Qwen3DiarizeTranscriber 仍存在(qwen3_worker_process.py 内部用), 但主进程 dispatch 不再调.
 _ENGINE_REGISTRY = {
     "funasr": lambda: __import__("src.core.funasr_transcriber", fromlist=["get_transcriber"]).get_transcriber(),
-    "qwen3":  lambda: __import__("src.core.qwen3_transcriber", fromlist=["get_qwen3_transcriber"]).get_qwen3_transcriber(),
+    "qwen3":  lambda: __import__("src.core.qwen3_pool_transcriber", fromlist=["get_qwen3_pool_transcriber"]).get_qwen3_pool_transcriber(),
 }
 
 
