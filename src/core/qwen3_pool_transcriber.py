@@ -31,11 +31,15 @@ class Qwen3PoolTranscriber:
         self,
         pool_size: int,
         pool: Optional[FileBasedProcessPool] = None,
+        heartbeat_interval_seconds: float = 30.0,
     ):
         """
         Args:
             pool_size: worker 进程数(PoC v5 sweet spot N=3).
             pool: 注入式 pool(测试用). 不传则按 qwen3_worker_process.py 作为 entry 新建.
+            heartbeat_interval_seconds: progress 心跳间隔(秒, 默认 30s).
+                长音频(149min)转录可能 30+ 分钟无中间 progress, 触发 client recv timeout.
+                每个心跳调一次 progress_callback, 触发 task_progress WebSocket 消息, 重置 client timer.
         """
         if pool is not None:
             self._pool = pool
@@ -47,6 +51,7 @@ class Qwen3PoolTranscriber:
                 worker_entry_script="src/core/qwen3_worker_process.py",
                 task_dir="./temp/tasks_qwen3",
             )
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
 
     async def initialize(self):
         """提前初始化 pool(启动所有 worker subprocess 并加载模型)"""
@@ -61,10 +66,20 @@ class Qwen3PoolTranscriber:
     ) -> Any:
         """通过 pool 派发任务给 worker subprocess.
 
-        跨进程 progress 难精细传递, 简化为开始 0% / 完成 100% 两次回调.
-        worker 内部的进度日志走 worker 自己的 log 文件.
+        进度通知:
+        - 0% 起始 / 100% 完成
+        - 中间走 heartbeat (每 heartbeat_interval_seconds 一次), 进度值线性 5 → 95 封顶
+        - 心跳目的: 长音频转录(>30 min)期间触发 task_progress 消息, 避免 client recv timeout
+
+        worker 内部的进度日志走 worker 自己的 log 文件(跨进程精细 progress 不传递).
         """
         await self._notify_progress(progress_callback, 0, task_id)
+
+        heartbeat_task: Optional[asyncio.Task] = None
+        if progress_callback is not None:
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(progress_callback, task_id)
+            )
 
         try:
             result = await self._pool.generate_with_pool(
@@ -72,11 +87,32 @@ class Qwen3PoolTranscriber:
                 extra_task_fields={"output_format": output_format},
             )
         except Exception:
-            # pool 错误透传, 由上层 task_manager 处理重试逻辑
             raise
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"[{task_id}] heartbeat 收尾异常(忽略): {e}")
 
         await self._notify_progress(progress_callback, 100, task_id)
         return result
+
+    async def _heartbeat_loop(self, callback: Callable, task_id: str):
+        """心跳循环: 每 interval 调一次 callback, 进度值线性递增封顶 95"""
+        try:
+            pct = 5
+            # 启动时立即发一次 5% (让 client 立刻收到第一个进度心跳)
+            await self._notify_progress(callback, pct, task_id)
+            while True:
+                await asyncio.sleep(self.heartbeat_interval_seconds)
+                pct = min(pct + 3, 95)
+                await self._notify_progress(callback, pct, task_id)
+        except asyncio.CancelledError:
+            raise
 
     @staticmethod
     async def _notify_progress(callback: Optional[Callable], pct: int, task_id: str):

@@ -20,6 +20,7 @@ Qwen3PoolTranscriber — 主进程 wrapper, 通过 FileBasedProcessPool 调度 w
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -221,6 +222,141 @@ class TestProgressCallback:
 
         wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool)
         # 不传 progress_callback (None) 不应崩
+        await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t")
+
+
+# ==================== heartbeat progress (避免 client recv timeout 30 min) ====================
+
+
+class TestHeartbeatProgress:
+    """长任务期间周期性发 progress_callback, 避免 client recv timeout.
+
+    背景: 149min mp3 转录耗时 34 min, 但 client 默认 30 min recv timeout.
+    wrapper 必须在 pool.generate_with_pool 等待期间周期性触发 progress_callback,
+    使 task_manager → ws_handler 发 task_progress 给 client 重置 timer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_calls_callback_multiple_times_during_long_task(self):
+        """模拟 1 秒任务, 设 heartbeat 0.05s → callback 应至少被调 5+ 次 (除 0 / 100)"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        custom_pool = MagicMock()
+
+        async def slow_pool_op(*args, **kwargs):
+            await asyncio.sleep(1.0)
+            return _fake_json_result()
+
+        custom_pool.generate_with_pool = AsyncMock(side_effect=slow_pool_op)
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool, heartbeat_interval_seconds=0.05)
+
+        calls = []
+        async def progress(pct):
+            calls.append(pct)
+
+        await wrapper.transcribe(
+            audio_path="/fake/a.wav", task_id="t-hb", progress_callback=progress
+        )
+
+        # 至少 0%, 多次心跳, 100% (>=5 次)
+        assert len(calls) >= 5, f"心跳次数应 >=5, 实际 {len(calls)}: {calls}"
+        assert 0 in calls, "应有 0% 起始"
+        assert 100 in calls, "应有 100% 完成"
+        # 心跳值在 (0, 100) 之间至少 3 次
+        heartbeat_values = [c for c in calls if 0 < c < 100]
+        assert len(heartbeat_values) >= 3, f"心跳中间值应 >=3 次, 实际 {heartbeat_values}"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_progress_monotonically_increases_then_caps_at_95(self):
+        """心跳值应单调递增, 封顶 95 (避免比 100% 早)"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        custom_pool = MagicMock()
+
+        async def slow(*args, **kwargs):
+            await asyncio.sleep(0.6)
+            return _fake_json_result()
+
+        custom_pool.generate_with_pool = AsyncMock(side_effect=slow)
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool, heartbeat_interval_seconds=0.05)
+
+        calls = []
+        async def progress(pct):
+            calls.append(pct)
+
+        await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t", progress_callback=progress)
+
+        # 0, [heartbeats monotonically increase capped at 95], 100
+        heartbeat_values = [c for c in calls if 0 < c < 100]
+        assert all(v <= 95 for v in heartbeat_values), f"心跳值应封顶 95, got: {heartbeat_values}"
+        assert heartbeat_values == sorted(heartbeat_values), f"心跳值应单调递增: {heartbeat_values}"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_stops_after_pool_completes(self):
+        """pool 完成后 heartbeat 必须立即 cancel, 不再产生额外 callback"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        custom_pool = MagicMock()
+        custom_pool.generate_with_pool = AsyncMock(return_value=_fake_json_result())
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool, heartbeat_interval_seconds=0.05)
+
+        calls = []
+        async def progress(pct):
+            calls.append(pct)
+
+        await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t", progress_callback=progress)
+        snapshot = len(calls)
+        # transcribe 完成后等一会儿, callback 不应再被调
+        await asyncio.sleep(0.3)
+        assert len(calls) == snapshot, f"transcribe 完成后 heartbeat 仍在跑: 前 {snapshot}, 后 {len(calls)}"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_stops_on_pool_error(self):
+        """pool 抛错时 heartbeat 也必须 cancel"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        custom_pool = MagicMock()
+
+        async def fail_slow(*args, **kwargs):
+            await asyncio.sleep(0.2)
+            raise RuntimeError("pool 炸了")
+
+        custom_pool.generate_with_pool = AsyncMock(side_effect=fail_slow)
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool, heartbeat_interval_seconds=0.05)
+
+        calls = []
+        async def progress(pct):
+            calls.append(pct)
+
+        with pytest.raises(RuntimeError, match="pool 炸了"):
+            await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t", progress_callback=progress)
+
+        snapshot = len(calls)
+        await asyncio.sleep(0.3)
+        # 错误也应停 heartbeat
+        assert len(calls) == snapshot, "pool 抛错后 heartbeat 仍在跑"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_default_interval_is_30_seconds(self):
+        """默认心跳 30s (覆盖 client 30 min recv timeout, 客户端最长 30 min 无消息)"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=MagicMock())
+        assert wrapper.heartbeat_interval_seconds == 30.0
+
+    @pytest.mark.asyncio
+    async def test_no_callback_means_no_heartbeat_overhead(self):
+        """progress_callback=None 时不应启 heartbeat task (节约 overhead)"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        custom_pool = MagicMock()
+        custom_pool.generate_with_pool = AsyncMock(return_value=_fake_json_result())
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2, pool=custom_pool, heartbeat_interval_seconds=0.01)
+        # 不传 progress_callback 不应崩 + 不应启 heartbeat
         await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t")
 
 
