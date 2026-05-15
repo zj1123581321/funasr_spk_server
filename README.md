@@ -10,11 +10,12 @@
 - ✅ 双输出格式：JSON（合并说话人）& SRT（原始分割）
 - ✅ WebSocket实时通信
 - ✅ 任务队列管理，支持并发处理
-- ✅ 智能缓存，相同文件直接返回
+- ✅ 智能缓存，相同文件直接返回（**缓存 key 按引擎区分**）
 - ✅ 原始结果保存，支持格式转换
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
 - ✅ 支持Docker部署
+- ✅ **ASR 引擎可插拔架构**（PR1 落地）：upload request 可指定 engine，当前支持 FunASR，Qwen3 占位待 spike 验证
 
 ## 架构说明
 
@@ -59,6 +60,11 @@
 5. **File Manager** (`src/utils/file_utils.py`)
    - 文件上传和验证
    - 格式转换和清理
+
+6. **Transcriber Dispatch** (`src/core/transcriber_dispatch.py`) — PR1 新增
+   - 根据 task.engine 路由到对应转录器（funasr / qwen3）
+   - 30 行薄函数，未来 PR2 触发后会演进为完整 ASREngine 抽象 + factory
+   - 详见 `docs/开发/重构计划-ASR引擎抽象.md`
 
 ## 快速开始
 
@@ -131,15 +137,31 @@ docker-compose up -d
 
 ### 测试客户端
 
-基础测试：
+手工脚本（需先启动服务端）：
 ```bash
-python tests/server/test_server_transcription.py
+# 基础端到端测试
+python tests/manual/server/test_server_transcription.py
+
+# 并发测试
+python tests/manual/server/test_concurrent_transcription.py [客户端数量]
 ```
 
-并发测试：
+> 注：PR1 后所有 `if __name__ == "__main__"` 风格的旧脚本统一迁到 `tests/manual/`，
+> 详见 `tests/manual/README.md`。
+
+### 自动化测试（pytest）
+
+PR1 引入真正可跑的 pytest 套件：
+
 ```bash
-python tests/server/test_concurrent_transcription.py [客户端数量]
+# 默认 unit + integration（integration 在无 env 时自动 skip）
+venv/bin/python -m pytest
+
+# 跑端到端 parity 测试（需要真实加载 FunASR 模型 ~2GB）
+FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/
 ```
+
+详见 `tests/conftest.py` 和 `tests/integration/test_parity_funasr_semantic.py`。
 
 ### WebSocket API
 
@@ -167,10 +189,22 @@ const ws = new WebSocket('ws://localhost:8767');
     "file_size": 1024000,
     "file_hash": "md5-hash",
     "force_refresh": false,
-    "output_format": "json"  // 或 "srt"
+    "output_format": "json",
+    "engine": "funasr"
   }
 }
 ```
+
+**字段说明**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file_name` | string | 是 | 文件名（含扩展名） |
+| `file_size` | int | 是 | 文件字节数 |
+| `file_hash` | string | 是 | 文件 MD5（用于缓存命中检查） |
+| `force_refresh` | bool | 否 | 强制刷新缓存（默认 false） |
+| `output_format` | string | 否 | `"json"`（默认） 或 `"srt"` |
+| `engine` | string | 否 | **PR1 新增**：ASR 引擎名。`"funasr"`（默认）或 `"qwen3"`（PR1 占位）。**省略 = 走 `FUNASR_DEFAULT_ENGINE`。**不带此字段的旧 client 行为零变化。 |
 
 #### 4. 上传文件数据
 ```json
@@ -368,6 +402,7 @@ FUNASR_DEVICE_PRIORITY=mps,cpu
 | `FUNASR_DEVICE` | 计算设备 | auto | 否 |
 | `FUNASR_DEVICE_PRIORITY` | 设备优先级 | mps,cpu | 否 |
 | `FUNASR_MAX_CONCURRENT_TASKS` | 最大并发任务数 | 2 | 否 |
+| `FUNASR_DEFAULT_ENGINE` | 默认 ASR 引擎（PR1 新增） | funasr | 否 |
 
 \* 仅当 `FUNASR_NOTIFICATION_ENABLED=true` 时必需
 \** 仅当 `FUNASR_AUTH_ENABLED=true` 时必需，且生产环境必须修改默认值
@@ -390,10 +425,11 @@ FUNASR_DEVICE_PRIORITY=mps,cpu
 
 ### 智能缓存策略
 
-1. **文件哈希识别**：基于MD5哈希避免重复转录
-2. **原始结果保存**：保存FunASR原始输出，支持格式转换
+1. **文件哈希识别**：基于 MD5 哈希避免重复转录
+2. **原始结果保存**：保存 FunASR 原始输出，支持格式转换
 3. **格式灵活切换**：同一音频可输出不同格式而无需重新转录
 4. **过期清理**：自动清理过期缓存数据
+5. **引擎隔离（PR1 新增）**：cache key 包含 engine 字段，同一音频在 FunASR 和 Qwen3 下各自独立缓存，不会互相覆盖。旧数据库会在首次启动时自动迁移（加 `engine` 列，旧行回填为 `funasr`）。
 
 ### 缓存优势
 
