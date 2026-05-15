@@ -21,11 +21,10 @@ nul
 *.db
 *.sqlite
 ref_codes/
-models
 /tests/output/
 src/cpp
 version_backup/
-tests/performance/output
+tests/manual/performance/output
 samples
 AGENTS.md
 
@@ -68,6 +67,10 @@ config.prod.json
 *.aac
 *.ogg
 *.opus
+# 例外：测试 fixture 必须入库（小型代表性音频）
+!tests/fixtures/audio/*.wav
+!tests/fixtures/audio/*.mp3
+!tests/fixtures/audio/*.m4a
 
 # 日志
 *.log
