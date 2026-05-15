@@ -222,6 +222,124 @@ class TestLoadQwen3Transcriber:
 # ==================== file_name 重写 (pool 派发后 audio basename 是 UUID) ====================
 
 
+# ==================== audio format 转换 (libsndfile 只支持 wav, m4a/mp3 必须先转) ====================
+
+
+class TestAudioFormatConversion:
+    """Qwen3 vendor 内部 sherpa diarize 用 libsndfile, m4a/mp3 不支持. worker 必须先 ffmpeg 转 wav."""
+
+    def test_m4a_triggers_convert_to_wav(self, tmp_path):
+        from src.core import qwen3_worker_process as wp
+        import json
+
+        task_file = tmp_path / "worker_0_t-m4a.task"
+        task = {
+            "task_id": "t-m4a",
+            "audio_path": "/temp/tasks_qwen3/abc.m4a",
+            "source_audio_path": "/orig/upload/my.m4a",
+            "output_format": "json",
+        }
+        task_file.write_text(json.dumps(task))
+
+        fake = MagicMock()
+        captured_path = {}
+
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+            captured_path["actual"] = audio_path
+            from src.models.schemas import TranscriptionResult, TranscriptionSegment
+            return (
+                TranscriptionResult(
+                    task_id=task_id, file_name=Path(audio_path).name, file_hash="h",
+                    duration=1.0,
+                    segments=[TranscriptionSegment(start_time=0.0, end_time=1.0, text="x", speaker="Speaker1")],
+                    speakers=["Speaker1"], processing_time=0.01,
+                ),
+                {"engine": "qwen3"},
+            )
+
+        fake.transcribe = fake_transcribe
+
+        # mock convert_to_wav 验证被调用
+        with patch("src.utils.file_utils.convert_to_wav") as mock_conv:
+            mock_conv.side_effect = lambda inp, output_path=None: output_path
+            wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
+
+        # convert_to_wav 必须被调用 (m4a 触发)
+        mock_conv.assert_called_once()
+        called_input = mock_conv.call_args.args[0]
+        assert called_input.endswith(".m4a")
+        # transcribe 实际拿到的是转换后的 wav 路径
+        assert captured_path["actual"].endswith(".wav")
+
+    def test_wav_skips_conversion(self, tmp_path):
+        """audio 已经是 wav, 不应触发 convert_to_wav"""
+        from src.core import qwen3_worker_process as wp
+        import json
+
+        task_file = tmp_path / "worker_0_t-wav.task"
+        task = {
+            "task_id": "t-wav",
+            "audio_path": "/temp/tasks_qwen3/abc.wav",
+            "source_audio_path": "/orig/upload/my.wav",
+            "output_format": "json",
+        }
+        task_file.write_text(json.dumps(task))
+
+        fake = MagicMock()
+
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+            from src.models.schemas import TranscriptionResult
+            return (
+                TranscriptionResult(
+                    task_id=task_id, file_name="x.wav", file_hash="h",
+                    duration=1.0, segments=[], speakers=[], processing_time=0.01,
+                ),
+                {"engine": "qwen3"},
+            )
+
+        fake.transcribe = fake_transcribe
+
+        with patch("src.utils.file_utils.convert_to_wav") as mock_conv:
+            wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
+
+        # wav 不应触发转换
+        mock_conv.assert_not_called()
+
+    def test_mp3_triggers_convert_to_wav(self, tmp_path):
+        """mp3 也必须转换 (sherpa diarize 用 libsndfile 不支持 mp3)"""
+        from src.core import qwen3_worker_process as wp
+        import json
+
+        task_file = tmp_path / "worker_0_t-mp3.task"
+        task = {
+            "task_id": "t-mp3",
+            "audio_path": "/temp/tasks_qwen3/abc.mp3",
+            "source_audio_path": "/orig/upload/my.mp3",
+            "output_format": "json",
+        }
+        task_file.write_text(json.dumps(task))
+
+        fake = MagicMock()
+
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+            from src.models.schemas import TranscriptionResult
+            return (
+                TranscriptionResult(
+                    task_id=task_id, file_name="x", file_hash="h",
+                    duration=1.0, segments=[], speakers=[], processing_time=0.01,
+                ),
+                {"engine": "qwen3"},
+            )
+
+        fake.transcribe = fake_transcribe
+
+        with patch("src.utils.file_utils.convert_to_wav") as mock_conv:
+            mock_conv.side_effect = lambda inp, output_path=None: output_path
+            wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
+
+        mock_conv.assert_called_once()
+
+
 class TestRewriteFileName:
     """pool 派发把 audio 复制到 task_dir/{uuid}.wav, worker transcribe 拿到的 basename 是 UUID.
     worker 必须把 result.file_name 改回 source_audio_path 的 basename, 保持语义."""

@@ -78,11 +78,27 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
 
     print(f"[Qwen3-Worker-{os.getpid()}] 处理任务 {task_id}: {original_basename} (format={output_format})")
 
+    # Qwen3 vendor 内部 sherpa diarize 用 libsndfile 读 audio, 只支持 wav/flac/ogg.
+    # 非 wav 格式 (m4a/mp3/mp4 etc) 必须用 ffmpeg 先转 16kHz mono wav.
+    # FunASR 路径 funasr.AutoModel 内部自带 ffmpeg 转换, Qwen3 vendor 没有.
+    converted_wav_path = None
+    actual_audio_path = audio_path
+    if not audio_path.lower().endswith(".wav"):
+        try:
+            from src.utils.file_utils import convert_to_wav
+            converted_wav_path = audio_path.rsplit(".", 1)[0] + ".converted.wav"
+            convert_to_wav(audio_path, output_path=converted_wav_path)
+            actual_audio_path = converted_wav_path
+            print(f"[Qwen3-Worker-{os.getpid()}] audio 转换 wav 成功: {os.path.basename(audio_path)} → {os.path.basename(converted_wav_path)}")
+        except Exception as conv_err:
+            print(f"[Qwen3-Worker-{os.getpid()}] audio 转换失败 (将尝试直接读): {conv_err}")
+            converted_wav_path = None
+
     try:
         # transcribe 是 async, 在 worker 内起独立 event loop
         result = asyncio.run(
             transcriber.transcribe(
-                audio_path=audio_path,
+                audio_path=actual_audio_path,
                 task_id=task_id,
                 progress_callback=None,
                 output_format=output_format,
@@ -128,6 +144,12 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
             os.remove(task_file)
         except Exception:
             pass
+        # 清理 ffmpeg 转换出的临时 wav (如果有)
+        if converted_wav_path:
+            try:
+                os.remove(converted_wav_path)
+            except Exception:
+                pass
 
 
 def worker_loop(worker_id: int, task_dir: str) -> None:
