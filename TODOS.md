@@ -70,6 +70,14 @@
 - `lock` / `thread_pool` 实质废弃（生产唯一路径是 `pool`）
 - 删之前确认无 env override 在用
 
+### 9b. 清理 src/ 内 Windows 平台分支
+- 根目录第三轮整理已删 Windows wrapper + Docker 文件，但 src/ 内还有跨平台代码：
+  - `src/main.py:180-182` Windows event loop policy
+  - `src/core/file_based_process_pool.py:114` Windows 特殊处理
+  - `src/utils/platform_utils.py` 整个文件（161 行，含 Windows / Linux 分支）
+  - `requirements.txt` `uvloop` 的 `sys_platform != 'win32'` 条件
+- 删之前确认：删除后是否影响 mac/macOS pool 模式的工作（platform_utils 可能被其他地方依赖）
+
 ### 10. `tests/manual/` 中诊断脚本逐步转写为 pytest regression
 - 重点：`tests/manual/diagnostics/test_mps_*.py`（MPS 历史 bug 的复现脚本）
 - 转写后 retire 旧脚本
