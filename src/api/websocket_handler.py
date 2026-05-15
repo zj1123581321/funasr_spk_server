@@ -192,9 +192,12 @@ class WebSocketHandler:
             self.task_connections[task.task_id].add(connection_id)
             
             # 检查缓存（如果不强制刷新）
+            # PR1: cache key 含 engine（用 task.engine，已经由 task_manager 解析过）
             if not request.force_refresh:
                 from src.core.database import db_manager
-                cached_result = await db_manager.get_cached_result(request.file_hash, output_format)
+                cached_result = await db_manager.get_cached_result(
+                    request.file_hash, output_format, engine=task.engine
+                )
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
                     
@@ -445,7 +448,9 @@ class WebSocketHandler:
                 "chunks_received": set(),  # 记录已收到的分片索引
                 "output_format": data.get("output_format", "json"),
                 "force_refresh": data.get("force_refresh", False),
-                "connection_id": connection_id
+                "connection_id": connection_id,
+                # PR1: 记录引擎选择，最终化时回填到 FileUploadRequest
+                "engine": data.get("engine"),
             }
             
             self.upload_sessions[task_id] = session
@@ -557,10 +562,13 @@ class WebSocketHandler:
                 return
             
             # 检查缓存（如果不强制刷新）
+            # PR1: cache key 含 engine（session 中已记录，无则回退 default_engine）
             if not session["force_refresh"]:
                 from src.core.database import db_manager
+                from src.core.config import config as _config
+                _engine_for_cache = session.get("engine") or _config.transcription.default_engine
                 cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"]
+                    session["file_hash"], session["output_format"], engine=_engine_for_cache
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")
@@ -595,13 +603,15 @@ class WebSocketHandler:
             file_path, _ = await save_uploaded_file(file_data, session["file_name"])
             
             # 创建任务请求对象
+            # PR1: 分片上传完成时把 session 中记录的 engine 回填到 request
             from src.models.schemas import FileUploadRequest
             request = FileUploadRequest(
                 file_name=session["file_name"],
                 file_size=session["file_size"],
                 file_hash=session["file_hash"],
                 force_refresh=session["force_refresh"],
-                output_format=session["output_format"]
+                output_format=session["output_format"],
+                engine=session.get("engine"),
             )
             
             # 创建任务
