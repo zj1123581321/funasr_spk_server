@@ -83,13 +83,45 @@
   `FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/test_parity_funasr_semantic.py`
 - 更新 `README.md`、`docs/部署.md`、`docs/开发/重构计划-ASR引擎抽象.md` (PR2 完成复盘)
 
-### 约束
+### 工作方式约束(非常重要)
+
+**1. 严格 TDD — 红/绿/commit 三步循环, 不可省略**
+
+每加一个功能都按以下顺序:
+
+- **红**: 先写测试, 跑 → 确认 fail (`-x` 选项让 pytest 停在第一个错误处加快迭代)
+- **绿**: 写最小实现让测试过, 跑 → 确认 pass
+- **commit**: 用 git commit 沉淀这个"红 → 绿"闭环, 一个 commit 一件事
+- 然后下一个 cycle, 不要积累多个改动一次性提交
+
+**对应到本任务的具体场景**:
+- `Qwen3DiarizeTranscriber.transcribe()` 的契约测试 (mock 内部 ASR/diarize 调用, 验证返回 `(TranscriptionResult, raw_result)` 结构) — 红/绿/commit
+- `transcriber_dispatch.resolve_transcriber()` 改成全局唯一 loader 的测试 (mock config, 验证启动时只 init 一个) — 红/绿/commit
+- engine 字段 validate 的测试 (3 个 case: 不传 / 传相同 / 传不同) — 红/绿/commit
+- 端到端集成测试 (`tests/integration/test_qwen3_diarize_e2e.py`, 类似现有 funasr parity test) — 红/绿/commit
+
+**禁止**:
+- ❌ 一次性写完所有代码再写测试 (这不是 TDD)
+- ❌ 跳过红的阶段直接写"绿色"实现 (没人能验证测试本身正确)
+- ❌ 一个 commit 塞 N 个功能
+
+**2. 自主决策, 不打断用户**
+
+- 仅在 4 个明确列出的剩余决策点上, 用 AskUserQuestion 一次性问完, 之后**全程不再向用户提问**
+- 遇到任何非用户独有的技术问题(包括但不限于: 包版本冲突、API 接口选择、文件命名、目录结构、import 路径、错误处理策略、log 格式、测试覆盖范围、commit message 写法), **自己决定并推进**
+- 真正需要用户介入的只有: 凭证 / 密码 / 外部账号 / 用户私人数据 / 部署环境特定的细节
+- 任务完成前不要主动 ExitPlanMode 或 stop 等待"用户确认"
+- **任务定义为完成**的标志: PR 内所有代码写完、所有测试绿、`FUNASR_RUN_INTEGRATION=1 pytest` 跑通无回归、相关文档更新, 这时候才给用户最终汇报
+
+**3. 其他**
 
 - macOS only (CLAUDE.md 已约定)
 - 不修改 `spikes/` 下的代码 (历史记录)
-- TDD: 先写测试再改代码, 每个 commit 一个完整功能闭环
-- TaskCreate 拆解工作
+- TaskCreate 拆解工作, 完成一项 mark 一项
 
 ### 开始
 
-先 Read 上面列的 6 个文件熟悉上下文, 然后用 AskUserQuestion 问 4 个剩余决策点. **不要直接开干**.
+1. Read 上面列的 6 个文件熟悉上下文
+2. 用 AskUserQuestion 问 4 个剩余决策点 (一次性问完)
+3. 拿到决策后, **全程不再向用户提问**, 按 TDD 红/绿/commit 循环把活干完
+4. 任务完成后给用户最终汇报
