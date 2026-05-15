@@ -160,50 +160,94 @@ class DatabaseManager:
         file_hash: str,
         output_format: str = "json",
         engine: str = DEFAULT_ENGINE,
+        allow_cross_engine: Optional[bool] = None,
     ) -> Optional[TranscriptionResult]:
         """
         获取缓存的转录结果
 
         Args:
             file_hash: 文件 MD5
-            output_format: 返回格式（json / srt），影响返回结构
-            engine: ASR 引擎名，作为缓存 key 的一部分（避免不同引擎结果互相覆盖）
+            output_format: 返回格式(json / srt), 影响返回结构
+            engine: ASR 引擎名, 当前 server 配置的引擎
+            allow_cross_engine: 跨引擎共享开关. None → 走 config.transcription.cache_cross_engine
+                True: 精确 engine miss 后回退按 file_hash 查任意 engine 最新行
+                False: strict, 仅按 (file_hash, engine) 查
+
+        跨引擎 SRT 命中时从 TranscriptionResult.segments 重建(不依赖 raw_result 引擎特定结构).
         """
         if not config.transcription.cache_enabled:
             return None
 
+        effective_cross = (
+            config.transcription.cache_cross_engine
+            if allow_cross_engine is None
+            else allow_cross_engine
+        )
+
         try:
             async with aiosqlite.connect(self.db_path) as db:
+                # 1) 先精确匹配 (file_hash, engine)
                 cursor = await db.execute(
-                    "SELECT result, raw_result, file_name, duration "
+                    "SELECT result, raw_result, file_name, duration, engine "
                     "FROM transcription_cache WHERE file_hash = ? AND engine = ?",
                     (file_hash, engine),
                 )
                 row = await cursor.fetchone()
 
-                if row:
-                    await db.execute(
-                        "UPDATE transcription_cache SET accessed_at = CURRENT_TIMESTAMP "
-                        "WHERE file_hash = ? AND engine = ?",
-                        (file_hash, engine),
+                # 2) miss 时按 file_hash 回退到任意 engine 最新一行(若开启跨引擎共享)
+                if row is None and effective_cross:
+                    cursor = await db.execute(
+                        "SELECT result, raw_result, file_name, duration, engine "
+                        "FROM transcription_cache WHERE file_hash = ? "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        (file_hash,),
                     )
-                    await db.commit()
+                    row = await cursor.fetchone()
 
-                    result_json, raw_result_json, file_name, duration = row
+                if row is None:
+                    return None
 
-                    if output_format == "json":
+                result_json, raw_result_json, file_name, duration, cached_engine = row
+                cross_hit = cached_engine != engine
+                if cross_hit:
+                    logger.info(
+                        f"跨引擎缓存命中: file_hash={file_hash} "
+                        f"cached_engine={cached_engine} requested_engine={engine}"
+                    )
+
+                # 更新 accessed_at(用 cached_engine 定位实际那行)
+                await db.execute(
+                    "UPDATE transcription_cache SET accessed_at = CURRENT_TIMESTAMP "
+                    "WHERE file_hash = ? AND engine = ?",
+                    (file_hash, cached_engine),
+                )
+                await db.commit()
+
+                if output_format == "json":
+                    result_data = json.loads(result_json)
+                    return TranscriptionResult(**result_data)
+                if output_format == "srt":
+                    if cross_hit:
+                        # 跨引擎: 从 segments 重建, 避开 raw_result 引擎特定结构
                         result_data = json.loads(result_json)
-                        return TranscriptionResult(**result_data)
-                    elif output_format == "srt" and raw_result_json:
+                        tr = TranscriptionResult(**result_data)
+                        srt_content = self._segments_to_srt(tr.segments)
+                    elif raw_result_json:
+                        # 同引擎: 走原有 raw_result 重转(funasr 的 sentence_info 路径)
                         raw_result = json.loads(raw_result_json)
                         srt_content = self._generate_srt_from_raw_result(raw_result)
-                        return {
-                            "format": "srt",
-                            "content": srt_content,
-                            "file_name": file_name,
-                            "file_hash": file_hash,
-                            "duration": duration,
-                        }
+                    else:
+                        # 同引擎但无 raw_result(qwen3 不依赖 raw 即可重建): 也走 segments 路径
+                        result_data = json.loads(result_json)
+                        tr = TranscriptionResult(**result_data)
+                        srt_content = self._segments_to_srt(tr.segments)
+                    return {
+                        "format": "srt",
+                        "content": srt_content,
+                        "file_name": file_name,
+                        "file_hash": file_hash,
+                        "duration": duration,
+                    }
 
                 return None
         except Exception as e:
@@ -298,6 +342,29 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"获取缓存统计信息失败: {e}")
             return {"total_count": 0, "today_count": 0, "cache_size_mb": 0}
+
+    def _segments_to_srt(self, segments) -> str:
+        """从 TranscriptionResult.segments 重建 SRT 字符串(引擎中立).
+
+        用于跨引擎缓存命中: funasr 缓存被 qwen3 请求(或反之)时, raw_result 是另一引擎的
+        私有结构(funasr 是 sentence_info, qwen3 是 asr_text/turns), 无法直接转 SRT.
+        本函数走 schema 中立的 TranscriptionResult.segments 重建, 字节级与 FunASR
+        _generate_srt_from_raw_result 输出对齐(Speaker{N}:文本 无空格).
+        """
+        srt_lines = []
+        idx = 0
+        for seg in segments:
+            text = (seg.text or "").strip()
+            if not text:
+                continue
+            idx += 1
+            start_ms = int(round(seg.start_time * 1000))
+            end_ms = int(round(seg.end_time * 1000))
+            srt_lines.append(str(idx))
+            srt_lines.append(f"{self._ms_to_srt_time(start_ms)} --> {self._ms_to_srt_time(end_ms)}")
+            srt_lines.append(f"{seg.speaker}:{text}")
+            srt_lines.append("")
+        return "\n".join(srt_lines)
 
     def _generate_srt_from_raw_result(self, raw_result: dict) -> str:
         """从原始 FunASR 结果生成 SRT 格式字符串"""

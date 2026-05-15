@@ -89,6 +89,13 @@ class TranscriptionConfig(BaseModel):
     # 可通过 FUNASR_DEFAULT_ENGINE 环境变量覆盖。
     default_engine: str = "funasr"
 
+    # PR2: 跨引擎缓存共享开关(默认 True)
+    # True: get_cached_result 先按 (file_hash, engine) 精确查, miss 后回退按 file_hash 查任意 engine 最新行
+    # False: strict 模式, 仅按 (file_hash, engine) 查
+    # 跨引擎 SRT 命中时从 TranscriptionResult.segments 重建(避开 raw_result 引擎特定结构)
+    # 可通过 FUNASR_CACHE_CROSS_ENGINE 环境变量覆盖
+    cache_cross_engine: bool = True
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -244,6 +251,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "task_timeout_minutes", "FUNASR_TASK_TIMEOUT_MINUTES", int)
         cls._override_if_set(config_data["transcription"], "transcription_speed_ratio", "FUNASR_TRANSCRIPTION_SPEED_RATIO", int)
         cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
+        cls._override_if_set(config_data["transcription"], "cache_cross_engine", "FUNASR_CACHE_CROSS_ENGINE", cls._parse_bool)
 
         # ==================== Qwen3-Diarize 配置 ====================
         cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")
