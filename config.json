@@ -90,7 +90,10 @@
     "delete_after_transcription": true,
     "transcription_speed_ratio": 10,
     "_comment_transcription_speed_ratio": "转录速度比率（RTF的倒数），不同设备性能不同，可通过环境变量覆盖: FUNASR_TRANSCRIPTION_SPEED_RATIO",
-    "queue_status_enabled": true
+    "queue_status_enabled": true,
+
+    "qwen3_pool_size": 3,
+    "_comment_qwen3_pool_size": "Qwen3 引擎专用 worker pool 大小(PoC v5 sweet spot 3, GPU 97% 满载). 独立于 max_concurrent_tasks. 可通过环境变量覆盖: FUNASR_QWEN3_POOL_SIZE"
   },
 
   "database": {

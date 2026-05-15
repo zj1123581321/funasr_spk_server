@@ -96,6 +96,12 @@ class TranscriptionConfig(BaseModel):
     # 可通过 FUNASR_CACHE_CROSS_ENGINE 环境变量覆盖
     cache_cross_engine: bool = True
 
+    # PR3: Qwen3 引擎的 worker pool 大小(独立于 max_concurrent_tasks)
+    # FunASR pool 用 max_concurrent_tasks(物理最优 2), Qwen3 pool 用 qwen3_pool_size(PoC v5 sweet spot 3)
+    # 两者独立, 切引擎不需要改 env
+    # 可通过 FUNASR_QWEN3_POOL_SIZE 环境变量覆盖
+    qwen3_pool_size: int = 3
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -252,6 +258,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "transcription_speed_ratio", "FUNASR_TRANSCRIPTION_SPEED_RATIO", int)
         cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
         cls._override_if_set(config_data["transcription"], "cache_cross_engine", "FUNASR_CACHE_CROSS_ENGINE", cls._parse_bool)
+        cls._override_if_set(config_data["transcription"], "qwen3_pool_size", "FUNASR_QWEN3_POOL_SIZE", int)
 
         # ==================== Qwen3-Diarize 配置 ====================
         cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")
