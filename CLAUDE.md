@@ -50,7 +50,20 @@ Always respond in 中文
 3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
 4. 跑 parity 确认 FunASR 路径无回归
 
-# 部署约定
+# 部署约定（重要：本项目不走 Docker）
 
-docker 服务打包部署到生产环境都需要走 docker-deploy 这个 skill，先 build。
-项目中 `deploy_targets.json` 定义部署目标服务器和远程路径。
+本项目**不能 Docker 部署**。必须直接在 macOS 宿主机上运行。
+
+## 为什么不能用 Docker
+依赖 Apple Silicon 的 MPS GPU 加速（FunASR 模型推理走 Metal Performance Shaders）。
+MPS / CoreML / Vision 这些是宿主机级 API，**无法穿透容器**。
+强行用 Docker 只能跑 CPU，性能 5-10× 倒退。
+
+## 真实部署方式
+- 仓库根的 `Dockerfile` / `docker-compose.yml` 是历史残留 + Linux 备用方案，**生产从不用**
+- 全局 CLAUDE.md 提到的 `docker-deploy` skill 对本项目不适用，**不要调用**
+- 本机有 `deploy_targets.json` 也不要走，部署目标按 prod/dev 物理隔离布局：
+  - **prod**: `~/Production/funasr_spk_server/` (8767 端口，`funasr-server` PM2 进程)
+  - **dev**: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/` (8867 端口，`funasr-server-dev` PM2 进程)
+- 部署流程：在目标目录 `git pull` + （需要时）`venv/bin/pip install -r requirements.txt` + `pm2 restart funasr-server`
+- PM2 配置在各自 working tree 的 `ecosystem.config.cjs`（**两边不同**：prod 版 autorestart=true，dev 版 autorestart=false）
