@@ -203,16 +203,59 @@ SRT 抽样: Speaker1 主题阐述, Speaker2 插话补充, Speaker4 附和, Speak
 
 CLI 用 `--preset auto` (默认),不需要再传 num_speakers.
 
-## 5. 后续路径
+## 5. 真并行实测 (v4)
 
-### ~~P0~~ 已完成
-- [x] **性能优化**: 换 NeMo embedding,RTF 0.465 → 0.086 (5.4x)
-- [x] **ANE 验证**: CoreML EP 没真用 ANE,改用 cpu+多线程更优
+`benchmark/parallel_e2e_bench.py` subprocess fork ASR + Diarize 同时跑,带资源监控.
 
-### P0 (PoC 闭环 -> 可用 prototype)
-- [ ] **真并行**: 把 ASR 跟 diarize 用 subprocess 分进程跑,从串行 RTF 0.206 → 实测并行 RTF (目标接近 0.12)
-- [ ] **改进 turn 边界**: 调 pyannote 的 `min_duration_on/off`,让长 turn 切碎(目前一个 47s turn 内含 speaker 切换)
-- [ ] **多说话人鲁棒性**: 现 PoC 只验证双人 podcast;3+ 说话人会议场景另测
+### 5.1 完整对照表
+
+| 场景 | 模式 | Wall RTF | ASR 内 | Diarize 内 | ASR CPU avg | Diarize CPU avg | Sys CPU avg |
+|---|---|---|---|---|---|---|---|
+| 5min 2 人 | 串行 | 0.206 | 0.120 | 0.086 | — | — | — |
+| **5min 2 人** | **并行 4t** | **0.118** | 0.109 | 0.090 | 186% | 312% | 690% |
+| 8min 4 人 | 串行 | 0.186 | 0.105 | 0.080 | — | — | — |
+| **8min 4 人** | **并行 4t** | **0.108** | 0.103 | 0.086 | 187% | 322% | 732% |
+| 8min 4 人 | 并行 6t | 0.115 | 0.110 | 0.088 | 179% | 441% | 778% |
+
+### 5.2 关键发现
+
+- **并行加速 1.7-2x**: Wall RTF 减半,接近理论值 max(ASR, Diarize)
+- **diarize-threads=4 是甜点**: 6 线程反抢 ASR encoder 的 CPU 核,拖慢 6%
+- **ASR LLM decoder 在 Metal GPU 跑 (间接证据)**:
+  - ASR 子进程 CPU avg 187% (约 2 核),远不是 8 核满载
+  - 但 inner RTF 0.103-0.109 这个速度纯 CPU 不可能 → LLM decoder 必在 GPU
+  - 187% CPU = ONNX encoder 阶段(12s, 多核 ~400%) + GGUF decoder 阶段(~100% wrapper)
+- **系统总 CPU avg 690-732%** = 10 核机器(8P+2E)的 ~7 核等效满载,余 3 核 — 还能再起一个并行 worker 处理第二个音频
+
+### 5.3 资源占用 (并行 4t, 4 人音频)
+
+```
+ASR 子进程    : CPU avg 187%  peak 458% | RSS peak 3789MB (含 1.47GB GGUF + Metal context + ONNX encoder + KV cache)
+Diarize 子进程: CPU avg 322%  peak 402% | RSS peak  444MB (NeMo 38MB + sherpa_onnx_core + 音频 buffer)
+系统总       : CPU avg 732%  peak 1000%| 总内存 ~30GB used (含 OS baseline,我们俩贡献 ~4.2GB)
+```
+
+### 5.4 没拿到的直接数据
+
+无 sudo 拿不到 powermetrics 的 GPU/ANE Power 精确数据.要拿可跑:
+```
+sudo powermetrics -s gpu_power,ane_power -i 500 -n 100
+```
+同时跑 `parallel_e2e_bench.py`,得到 GPU 功率时间序列.基于间接证据已能确定 ASR LLM 走 Metal GPU,diarize 走 CPU,**ANE 一直空闲** (sherpa-onnx 没路由).
+
+## 6. 后续路径
+
+### ~~已完成 (PoC v1 → v4 演化)~~
+- [x] v1: 跑通端到端 (基础架构)
+- [x] v2: 换 NeMo embedding (diarize RTF 0.465 → 0.086, 5.4x)
+- [x] v3: 自动聚类验证 (2/4 人未知场景都准确, NeMo + threshold=0.9)
+- [x] v4: 真并行 + 资源监控 (Wall RTF 0.108-0.118, 1.7-2x 加速)
+
+### P1 (生产化前)
+- [ ] **拿 sudo 跑 powermetrics**: 确认 GPU/ANE Power 精确数据,把"间接证据"升级为"实测数据"
+- [ ] **改进 turn 边界**: 调 pyannote `min_duration_on/off`,让长 turn 切碎(目前最长 turn 47s 内含 speaker 切换)
+- [ ] **接 Forced Aligner**: 拉 qwen3_aligner 模型,出词级 timestamp (现在是按 turn 时长比例切文本)
+- [ ] **服务化**: WebSocket / HTTP wrapper 接入 funasr_spk_server 项目
 
 ### P1 (做更精细的对齐)
 - [ ] 找 / 自己量化 `qwen3_aligner_*` 模型,启 ASR engine 的 aligner — 拿词级 timestamp
