@@ -248,6 +248,75 @@ class TestQwen3DiarizeTranscriberSrtMode:
         assert raw["engine"] == "qwen3"
 
 
+class TestProgressCallback:
+    """progress_callback 兼容 sync + async, 异常被吞不影响 transcribe 完成"""
+
+    @pytest.mark.asyncio
+    async def test_sync_callback_called_with_100_at_end(self, transcriber, tmp_path):
+        from unittest.mock import MagicMock
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        cb = MagicMock()
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", progress_callback=cb, output_format="json",
+            )
+        called_pcts = [args[0] for (args, _) in cb.call_args_list]
+        assert 100 in called_pcts, f"应至少调 1 次 100%: {called_pcts}"
+        # 单调非递减(进度不能倒退)
+        assert called_pcts == sorted(called_pcts), f"进度倒退了: {called_pcts}"
+
+    @pytest.mark.asyncio
+    async def test_async_callback_awaited(self, transcriber, tmp_path):
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        cb = AsyncMock()
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", progress_callback=cb, output_format="json",
+            )
+        assert cb.await_count >= 1, "async callback 至少 await 一次"
+        awaited_pcts = [args[0] for (args, _) in cb.call_args_list]
+        assert 100 in awaited_pcts
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_is_swallowed(self, transcriber, tmp_path):
+        """callback 内部抛错不能影响 transcribe 完成(用户端代码 bug 不应让转录失败)"""
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        def cb(_pct):
+            raise RuntimeError("bad callback")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            result, _ = await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", progress_callback=cb, output_format="json",
+            )
+        # transcribe 必须正常完成
+        assert result.task_id == "t"
+
+    @pytest.mark.asyncio
+    async def test_no_callback_works(self, transcriber, tmp_path):
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            # progress_callback=None 是默认, 不应抛
+            result, _ = await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", output_format="json",
+            )
+        assert result.task_id == "t"
+
+
 class TestEngineSingletonReuse:
     """asr engine 加载一次后复用, 避免每次 transcribe 都加载 GGUF"""
 
