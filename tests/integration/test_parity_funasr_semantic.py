@@ -37,6 +37,30 @@ pytestmark = pytest.mark.skipif(
 TIMESTAMP_TOLERANCE_SECONDS = 0.05
 
 
+@pytest.fixture(scope="session", autouse=True)
+def force_lock_mode():
+    """
+    强制 FunASR 走 lock 模式（单进程 + threading.Lock）
+    原因：pool 模式在 pytest 进程里 fork worker 会很复杂；
+    PR1 没改 FunASRTranscriber 类，lock 和 pool 调用 model.generate() 参数完全一致，
+    所以 lock 模式生成的 golden 等价于 pool 模式。
+    """
+    from src.core.config import config
+    original = config.transcription.concurrency_mode
+    config.transcription.concurrency_mode = "lock"
+    yield
+    config.transcription.concurrency_mode = original
+
+
+@pytest.fixture(autouse=True)
+def reset_transcriber_singleton():
+    """每个测试前重置 transcriber 单例，避免状态串扰"""
+    import src.core.funasr_transcriber as ft
+    # 跑完后保留实例（同进程下重复加载模型代价太大）
+    yield
+    # 不主动重置 —— 单例复用避免反复加载 2GB 模型
+
+
 def assert_semantic_equal(actual: TranscriptionResult, golden: dict):
     """语义级别对比 — 容忍非语义差异（时间戳轻微波动、运行时字段）"""
     actual_segs = actual.segments
