@@ -15,7 +15,7 @@
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
 - ✅ **ASR 引擎可插拔架构**（PR1 落地）：upload request 可指定 engine，当前支持 FunASR，Qwen3 占位待 spike 验证
-- ⚠️ **仅支持 macOS（Apple Silicon）**：依赖 MPS GPU 加速；Linux/Windows/Docker 均不支持，详见 [docs/部署.md](docs/部署.md)
+- 🍎 **macOS（Apple Silicon）专属**：依赖 MPS GPU 加速，详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
 
@@ -70,9 +70,10 @@
 
 ### 环境要求
 
-- Python 3.8+
-- FFmpeg
-- 4GB+ 内存
+- macOS 13+ (Apple Silicon)
+- Python 3.11.9
+- FFmpeg (`brew install ffmpeg`)
+- 8GB+ 内存（推荐 16GB）
 
 ### 本地运行
 
@@ -118,7 +119,7 @@ cp .env.example .env
 python run_server.py
 ```
 
-> **生产部署**（PM2 守护、prod/dev 物理隔离布局、为什么不能 Docker）请见 [docs/部署.md](docs/部署.md)。
+> **生产部署**（PM2 守护、prod/dev 物理隔离布局）请见 [docs/部署.md](docs/部署.md)。
 
 ## 客户端用法
 

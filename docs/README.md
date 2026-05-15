@@ -7,7 +7,7 @@
 | 文档 | 主题 |
 |---|---|
 | [客户端交互指南](使用/客户端交互指南.md) | WebSocket 协议、单文件/分片上传、Python 客户端完整示例 |
-| [部署指南](部署.md) | prod (PM2) / dev (前台) 部署流程、为什么不能 Docker |
+| [部署指南](部署.md) | macOS prod (PM2) / dev (前台) 部署流程 |
 
 ## 🛠 开发（给改源码的人看）
 
@@ -23,7 +23,7 @@
 
 | 文档 | 主题 |
 |---|---|
-| [项目起源](项目起源.md) | 2025-07 初始设计稿（含已演进项说明：原计划 CPU + Docker + 跨平台，实际演进为 mac-only + MPS） |
+| [项目起源](项目起源.md) | 2025-07 初始设计稿（含「已演进项」说明，原跨平台需求实际收敛为 mac-only + MPS） |
 | [VAD并发问题解决方案](funasr相关/VAD并发问题解决方案.md) | FunASR Python 版 VAD 并发不安全的历史问题及解决路径（pool 模式由来） |
 
 ---
@@ -44,7 +44,12 @@
 - 新建：`部署.md` + `README.md` 索引
 
 第二轮 — 项目根目录整理：
-- 移动：`Dockerfile` / `docker-compose.yml` → `docker/`（加 README 说明未官方支持）
 - 移动：`项目设计.md` → `docs/项目起源.md`（顶部加「已演进项」说明）
-- 新建：`docker/README.md` + `windows_scripts/README.md`（标注未官方支持状态）
 - 修订：`setup_mac.sh` Python 版本对齐 3.11 + 指向 docs/部署.md
+
+第三轮 — mac-only 收敛，删除 Windows / Docker 残留：
+- 删除：`Dockerfile` / `docker-compose.yml` / `docker/`（整个目录）
+- 删除：`manage.bat` / `start.bat` / `start_background.bat`（根级 Windows wrapper）
+- 删除：`windows_scripts/`（整个目录）
+- 简化：`README.md` / `CLAUDE.md` / `docs/部署.md` 移除「为什么不能 Docker」长解释
+- src/ 内尚有少量 Windows 平台分支代码（main.py / file_based_process_pool.py / utils/platform_utils.py），留待后续 PR 清理（见 TODOS.md）

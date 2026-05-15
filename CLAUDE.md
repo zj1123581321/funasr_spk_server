@@ -50,40 +50,30 @@ Always respond in 中文
 3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
 4. 跑 parity 确认 FunASR 路径无回归
 
-# 部署约定（重要：本项目不走 Docker）
+# 部署约定（macOS only）
 
-本项目**不能 Docker 部署**。必须直接在 macOS 宿主机上运行。
+本项目仅在 macOS Apple Silicon 上运行（依赖 MPS GPU 加速）。**不要调用全局 `docker-deploy` skill**。
 
-## 为什么不能用 Docker
-依赖 Apple Silicon 的 MPS GPU 加速（FunASR 模型推理走 Metal Performance Shaders）。
-MPS / CoreML / Vision 这些是宿主机级 API，**无法穿透容器**。
-强行用 Docker 只能跑 CPU，性能 5-10× 倒退。
+prod/dev 物理隔离：
 
-## 真实部署方式
-- 仓库根的 `Dockerfile` / `docker-compose.yml` 是历史残留 + Linux 备用方案，**生产从不用**
-- 全局 CLAUDE.md 提到的 `docker-deploy` skill 对本项目不适用，**不要调用**
-- 本机有 `deploy_targets.json` 也不要走，prod/dev 物理隔离布局：
-  - **prod**: `~/Production/funasr_spk_server/`（8767 端口，PM2 守护）
-  - **dev**: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/`（8867 端口，**默认不挂 PM2**）
+| 环境 | 目录 | 端口 | 守护 |
+|---|---|---|---|
+| prod | `~/Production/funasr_spk_server/` | 8767 | **PM2** (`funasr-server`) |
+| dev | `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/` | 8867 | **不挂 PM2**（前台直跑） |
 
-## 生产部署（prod，PM2 守护）
+## prod 部署
 ```bash
 cd ~/Production/funasr_spk_server
 git pull origin main
-venv/bin/pip install -r requirements.txt  # 仅 requirements 有变化时
-pm2 restart funasr-server                  # ecosystem.config.cjs: autorestart=true
+venv/bin/pip install -r requirements.txt   # 仅 requirements 有变化时
+pm2 restart funasr-server                  # 启动数据库自动迁移
 ```
 
-## 开发运行（dev，**不挂 PM2**）
-- 默认前台直接跑：
-  ```bash
-  cd ~/Dev/projects/250729_funasr_spk_server/funasr_spk_server
-  venv/bin/python run_server.py
-  ```
-- 仅在需要长跑调试时按需用 PM2：
-  ```bash
-  pm2 start ecosystem.config.cjs   # autorestart=false，调试时崩了不会无限拉起
-  # 用完
-  pm2 delete funasr-server-dev && pm2 save
-  ```
-- `ecosystem.config.cjs` 在 dev 工作树存在，仅作「按需启动时的参数模板」，不代表 dev 默认要挂 PM2
+## dev 运行
+默认前台直跑，方便看日志和调试：
+```bash
+venv/bin/python run_server.py
+```
+仅在需要长跑调试时才用 PM2：`pm2 start ecosystem.config.cjs`，用完 `pm2 delete funasr-server-dev && pm2 save`。
+
+详细部署文档：`docs/部署.md`
