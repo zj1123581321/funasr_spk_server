@@ -23,6 +23,7 @@
 
 | 文档 | 主题 |
 |---|---|
+| [项目起源](项目起源.md) | 2025-07 初始设计稿（含已演进项说明：原计划 CPU + Docker + 跨平台，实际演进为 mac-only + MPS） |
 | [VAD并发问题解决方案](funasr相关/VAD并发问题解决方案.md) | FunASR Python 版 VAD 并发不安全的历史问题及解决路径（pool 模式由来） |
 
 ---
@@ -35,8 +36,15 @@
 
 ## 历史清理记录（2026-05-15）
 
+第一轮 — docs/ 整理：
 - 删除：`README_WINDOWS.md`（项目 mac-only）、`DEPLOYMENT.md`（被 `部署.md` 替代）
 - 删除：`funasr相关/funasr readme.md` + `non-streaming.md`（FunASR 上游冗余内容）
 - 删除：`funasr python 并发错误问题/funasr-onnx-offline-vad.cpp`（无关 C++ 片段）
 - 移动：`使用/server-client-interaction.md` → `开发/Server-Client 交互协议.md`（受众是服务端开发者）
 - 新建：`部署.md` + `README.md` 索引
+
+第二轮 — 项目根目录整理：
+- 移动：`Dockerfile` / `docker-compose.yml` → `docker/`（加 README 说明未官方支持）
+- 移动：`项目设计.md` → `docs/项目起源.md`（顶部加「已演进项」说明）
+- 新建：`docker/README.md` + `windows_scripts/README.md`（标注未官方支持状态）
+- 修订：`setup_mac.sh` Python 版本对齐 3.11 + 指向 docs/部署.md
