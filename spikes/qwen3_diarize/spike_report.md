@@ -235,13 +235,41 @@ Diarize 子进程: CPU avg 322%  peak 402% | RSS peak  444MB (NeMo 38MB + sherpa
 系统总       : CPU avg 732%  peak 1000%| 总内存 ~30GB used (含 OS baseline,我们俩贡献 ~4.2GB)
 ```
 
-### 5.4 没拿到的直接数据
+### 5.4 powermetrics 直接验证 (v5)
 
-无 sudo 拿不到 powermetrics 的 GPU/ANE Power 精确数据.要拿可跑:
-```
-sudo powermetrics -s gpu_power,ane_power -i 500 -n 100
-```
-同时跑 `parallel_e2e_bench.py`,得到 GPU 功率时间序列.基于间接证据已能确定 ASR LLM 走 Metal GPU,diarize 走 CPU,**ANE 一直空闲** (sherpa-onnx 没路由).
+`benchmark/run_concurrency_test.sh` 同时启动 N 个 `parallel_e2e_bench` + 后台 `sudo powermetrics -s gpu_power,ane_power,cpu_power`. 测试音频用 5min 双人样本.
+
+**实测对照表 (N=1/2/3/4 并发)**:
+
+| N | 总 wall | latency/task | RTF/task | Throughput | CPU avg | GPU avg | **GPU p95** | ANE |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 35.2s | 35s | 0.116 | **1.71/min** | 9.0W | 3.2W | 35.6W (71%) | **0W** |
+| 2 | 65.6s | 58s | 0.196 | 1.83/min | 11.7W | 6.2W | 46.7W (93%) | **0W** |
+| 3 | 84.7s | 76s | 0.255 | **2.12/min** | 14.6W | 9.5W | 48.9W (97%) | **0W** |
+| 4 | 110.3s | 109s | 0.364 | 2.18/min | 15.2W | 10.3W | **50.4W (100%)** | **0W** |
+
+**关键发现**:
+
+1. **ANE 全程 0W (直接证据)**: 4 个 N 全部 ANE Power = 0,完美确证之前的间接推论 — sherpa-onnx CoreML EP 不路由 ANE,FluidAudio/CoreML 那条 ANE 路径走 sherpa 框架不可达
+2. **GPU 是瓶颈**: M1 Max 32-core GPU 物理上限 ~52W,**N=3 已经 97% 满载,N=4 100% 满**
+3. **CPU 全程未饱和**: 9-15W avg (M1 Max 满载 ~40W),不是瓶颈
+
+**Throughput vs Latency 拐点**:
+
+| 升级 | Throughput | Latency | 性价比 |
+|---|---|---|---|
+| N=1 → N=2 | +7% | +66% | 很差 |
+| N=2 → N=3 | +16% | +31% | **尚可** |
+| N=3 → N=4 | +3% | +43% | 完全不值 |
+
+### 5.5 生产并发推荐
+
+| 业务场景 | 推荐 N | 理由 |
+|---|---|---|
+| 用户提交单音频等结果 (交互式) | **N=1** | latency 35s, GPU 富余 30% |
+| 批量队列处理 (后台 worker) | **N=3** | Throughput 顶峰 2.12/min, ~127 个 5min 音频/小时 |
+| 混合 (在线+离线) | **N=2** | 折中 |
+| N≥4 | ❌ | GPU 100% 饱和,纯排队
 
 ## 6. 后续路径
 
