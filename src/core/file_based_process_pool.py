@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -362,9 +362,14 @@ class FileBasedProcessPool:
         batch_size_s: int = 300,
         hotword: str = "",
         use_pickle: bool = True,
+        extra_task_fields: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         使用进程池进行推理
+
+        Args:
+            extra_task_fields: 引擎特定的额外任务字段(默认 None).
+                FunASR 路径不传, Qwen3 池传 {"output_format": "json"/"srt"} 给 worker.
         """
         if not self.is_initialized:
             await self.initialize()
@@ -412,6 +417,8 @@ class FileBasedProcessPool:
             "hotword": hotword,
             "use_pickle": use_pickle,
         }
+        if extra_task_fields:
+            task_data.update(extra_task_fields)
 
         try:
             with open(task_file, "w", encoding="utf-8") as f:
