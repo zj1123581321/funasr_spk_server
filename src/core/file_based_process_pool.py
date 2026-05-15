@@ -27,15 +27,23 @@ class FileBasedProcessPool:
     每个工作进程完全独立运行
     """
 
-    def __init__(self, config_path: str = "config.json", pool_size: Optional[int] = None):
+    def __init__(
+        self,
+        config_path: str = "config.json",
+        pool_size: Optional[int] = None,
+        worker_entry_script: str = "src/core/worker_process.py",
+    ):
         """
         初始化进程池
 
         Args:
             config_path: 配置文件路径（已废弃，保留用于兼容性）
             pool_size: 进程池大小
+            worker_entry_script: worker 子进程入口脚本路径。默认 FunASR worker;
+                Qwen3 池传 "src/core/qwen3_worker_process.py"。
         """
         self.pool_size = pool_size or global_config.transcription.max_concurrent_tasks
+        self.worker_entry_script = worker_entry_script
 
         # 任务目录
         self.task_dir = Path("./temp/tasks")
@@ -86,7 +94,7 @@ class FileBasedProcessPool:
         """在当前事件循环内同步启动进程"""
         cmd = [
             sys.executable,
-            "src/core/worker_process.py",
+            self.worker_entry_script,
             "--worker-id",
             str(worker_id),
             "--task-dir",
