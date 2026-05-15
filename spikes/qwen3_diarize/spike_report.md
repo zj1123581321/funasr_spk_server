@@ -150,6 +150,59 @@ Speaker3 (主持人曼奇): 3 segs, 96.0s, 690 chars  (~32%)
 - `FastClusteringConfig(num_clusters=2, threshold=0.5)` 锁定模式不工作 → 所有 turn 都归到 speaker 0
 - 必须用 threshold 模式,然后调参
 
+## 4. 自动聚类验证 (未知说话人数场景)
+
+生产场景常不知道音频有多少人。在 2 人 (5min 双人 podcast) 和 4 人 (8min 圆桌 podcast,从 `media.xyzcdn.net` 的 m4a 切第 5-13min) 两种音频上对照 5 种 (embedding × threshold) 配置:
+
+### 4.1 自动聚类对照 (num_speakers=-1)
+
+| 配置 | 2 人音频 | 4 人音频 | 评价 |
+|---|---|---|---|
+| **NeMo + thr 0.9** | **2 spk 完美** (63/32%) | **4 主导 spk 完美** (36/31/24/10%) + 5 个 <3% 噪声 | **生产推荐** RTF 0.08 |
+| NeMo + thr 0.7 | 2 spk 完美 | 5 主导 spk (过分 1) | 双人 OK, 多人不准 |
+| NeMo + thr 0.5 | 4 spk ✗ (主嘉宾被拆 3) | 38 spk 过度细分 | 拒 |
+| 3D-Spk + thr 0.9 | 2 spk 完美 | 4 spk 完美 (38/26/19/12%) | 备选, 但慢 2x (RTF 0.17) |
+| 3D-Spk + thr 0.7 | 3 spk (1 噪声) | 25 spk 过多 | 拒 |
+
+**关键发现**:
+- **NeMo + threshold=0.9 是普适最优**: 双人/多人未知场景都稳定
+- 多人场景会有少量 <3% 占比的 spurious cluster (噪声切片被聚成簇), 后处理过滤即可解决
+- `cluster_threshold=0.9` 不是为 2 人调出来的特殊值,是 NeMo embedding 的物理特性 (距离尺度自然落点)
+
+### 4.2 自适应过滤阈值 (filter_spurious_speakers)
+
+为同时适应不同时长音频, `filter_spurious_speakers` 用 `max(2s, 1% audio_duration)` 作为合并阈值:
+- 5min 音频: 阈值 3s
+- 8min 音频: 阈值 4.8s
+- 60min 会议: 阈值 36s
+
+### 4.3 4 人端到端实测 (preset=auto)
+
+```
+audio_duration : 480.00s (8min)
+asr_rtf        : 0.105 (2544 chars)
+diarize_rtf    : 0.080 (raw 9 spk → filter 后 4 spk)
+e2e parallel   : 0.105 ✓ < 0.15 目标
+peak_rss       : 3797 MB
+turns/segments : 91 / 91
+final spk      : 4 (比例 37%/31%/24%/11% — 4 人圆桌典型分布)
+```
+
+SRT 抽样: Speaker1 主题阐述, Speaker2 插话补充, Speaker4 附和, Speaker3 短回应 — 角色分配合理.
+
+### 4.4 默认 PRESETS 更新
+
+```python
+# 普适最优 (未知人数 — 这次新增, 默认值)
+"auto": dict(seg=fp32, emb=NeMo, provider=cpu, threads=8, num_speakers=None)
+# 已知 2 人最优
+"D":    dict(seg=int8, emb=NeMo, provider=cpu, threads=8, num_speakers=2)
+# 2 人稳健备选
+"C":    dict(seg=fp32, emb=NeMo, provider=coreml, threads=4, num_speakers=None)
+```
+
+CLI 用 `--preset auto` (默认),不需要再传 num_speakers.
+
 ## 5. 后续路径
 
 ### ~~P0~~ 已完成

@@ -29,7 +29,17 @@ from src.merge import (
 
 # diarize 配置预设(按实测组结果命名)
 PRESETS = {
-    # 最优: int8 seg + NeMo + cpu 8t + 锁 2 spk,RTF 0.1435,RSS 604MB,2 spk 正确
+    # 普适最优: fp32 seg + NeMo + cpu 8t + 自动聚类 (threshold=0.9)
+    # 实测 2 人/4 人均稳健;后处理过滤 <1% 时长的 spurious cluster
+    # 这是不知道说话人数的生产推荐
+    "auto": dict(
+        segmentation_model="models/sherpa/pyannote-segmentation-3.0/model.onnx",
+        embedding_model="models/sherpa/nemo-titanet-small/embedding.onnx",
+        provider="cpu",
+        num_threads=8,
+        num_speakers=None,   # 自动聚类
+    ),
+    # 已知 2 人最优: int8 seg + NeMo + cpu 8t + 锁 2 spk,RTF 0.1435,RSS 604MB
     "D": dict(
         segmentation_model="models/sherpa/pyannote-segmentation-3.0/model.int8.onnx",
         embedding_model="models/sherpa/nemo-titanet-small/embedding.onnx",
@@ -63,8 +73,8 @@ def main():
     ap.add_argument("--language", default="Chinese")
     ap.add_argument("--cluster-threshold", type=float, default=0.9,
                     help="diarize 聚类阈值 (双人对话 0.9 经验值)")
-    ap.add_argument("--preset", default="D", choices=list(PRESETS.keys()),
-                    help="diarize 模型/EP 预设 (D=最快, C=最稳, baseline=原方案)")
+    ap.add_argument("--preset", default="auto", choices=list(PRESETS.keys()),
+                    help="diarize 预设 (auto=未知人数推荐, D=已知2人, C=2人稳健, baseline=原方案)")
     ap.add_argument("--filter-spurious", action="store_true", default=True,
                     help="过滤总时长<2s 的'假说话人'(短噪声 turn 合并到邻居)")
     ap.add_argument("--no-filter-spurious", dest="filter_spurious", action="store_false")
@@ -106,7 +116,13 @@ def main():
 
     # === Stage 2.5: Filter spurious speakers ===
     if args.filter_spurious:
-        turns_filtered = filter_spurious_speakers(turns, min_speaker_total=2.0)
+        # 用 max(2s, 1% of audio_duration) 作为阈值,自适应音频时长
+        turns_filtered = filter_spurious_speakers(
+            turns,
+            min_speaker_total=2.0,
+            min_speaker_share=0.01,
+            audio_duration=asr.duration,
+        )
         spurious_dropped = len(set(t["speaker"] for t in turns)) - len(
             set(t["speaker"] for t in turns_filtered)
         )

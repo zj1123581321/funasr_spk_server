@@ -31,18 +31,32 @@ class Segment:
     text: str
 
 
-def filter_spurious_speakers(turns: List[dict], min_speaker_total: float = 2.0) -> List[dict]:
-    """合并"假说话人" — 某 speaker 总时长 < 阈值则归到时间最近的另一 speaker.
+def filter_spurious_speakers(
+    turns: List[dict],
+    min_speaker_total: float = 2.0,
+    min_speaker_share: float = 0.01,
+    audio_duration: float = 0.0,
+) -> List[dict]:
+    """合并"假说话人" — 某 speaker 总时长太小则归到时间最近的另一 speaker.
 
-    这是 sherpa-onnx 在 cluster_threshold=0.9 + int8 segmentation 下会出的工件:
-    偶尔切出 0.3s 短 turn 被聚成独立 speaker. 总时长很小 = 噪声片段.
+    阈值组合(满足任一即视为 spurious):
+      - 绝对时长 < min_speaker_total (默认 2s)
+      - 占音频时长比例 < min_speaker_share (默认 1%; 仅当 audio_duration > 0 才启用)
+
+    场景:
+      - 2 人 5min(300s) 音频: 1% = 3s,刚好滤掉<3s 的噪声碎片
+      - 4 人 8min(480s) 音频: 1% = 4.8s,滤掉 NeMo+0.9 产生的 5 个 <3% spurious cluster
     """
     if not turns:
         return turns
     totals: dict = {}
     for t in turns:
         totals[t["speaker"]] = totals.get(t["speaker"], 0) + (t["end"] - t["start"])
-    spurious = {sp for sp, dur in totals.items() if dur < min_speaker_total}
+
+    abs_threshold = min_speaker_total
+    pct_threshold = min_speaker_share * audio_duration if audio_duration > 0 else 0.0
+    threshold = max(abs_threshold, pct_threshold)
+    spurious = {sp for sp, dur in totals.items() if dur < threshold}
     if not spurious:
         return turns
 
