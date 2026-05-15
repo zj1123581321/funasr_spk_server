@@ -65,36 +65,35 @@
 - **config.qwen3 已就绪**:asr_model_dir / segmentation_model / embedding_model / preset 参数全部能从 config 读
 - **vendor 引擎**:`src/core/vendor/qwen_asr_gguf/`, import 即触发 libllama Metal init(一次性, 进程级)
 
-### 已经拍板的决策(不要再问)
+### 已经拍板的决策(共 9 项, 不要再问)
 
-1. **架构方向**: 跟 FunASR 同一套, 复用 `FileBasedProcessPool` 基础设施, **不另起炉灶**
-2. **Qwen3 池大小**: 默认 3 (PoC sweet spot)
-3. **不引入 ABC 抽象**: 注册表式扩展, 跟当前 `_ENGINE_REGISTRY` 思路一致
-4. **错误恢复**: 复用 `FileBasedProcessPool` 现有 health monitor + auto restart, 不重写
-5. **删除单 instance 路径**:Qwen3 之后只走 pool, 不保留两套模式
+**架构层**:
+1. 跟 FunASR 同一套, 复用 `FileBasedProcessPool` 基础设施, **不另起炉灶**
+2. **不引入 ABC 抽象**: 注册表式扩展, 跟当前 `_ENGINE_REGISTRY` 思路一致
+3. **错误恢复**: 复用 `FileBasedProcessPool` 现有 health monitor + auto restart, 不重写
+4. **删除单 instance 路径**: Qwen3 之后只走 pool, 不保留两套模式
 
-### 必须先和我对齐再动手的剩余决策点
+**实现细节**:
+5. **池大小配置**: 新增 `config.transcription.qwen3_pool_size = 3` 独立字段(FunASR `max_concurrent_tasks=2` 不变).
+   - 理由: 两引擎物理最优值真的不同(FunASR=2, Qwen3=3 PoC sweet spot), 独立字段表达清晰; 共用一个字段反而迫使运维切引擎时改 env.
+   - env override: `FUNASR_QWEN3_POOL_SIZE`
 
-**用 AskUserQuestion 一次性问完, 之后不再向用户提问**:
+6. **worker entry 组织**: 新增独立 `src/core/qwen3_worker_process.py`, **不改造现有 `worker_process.py`**.
+   - 理由: CLAUDE.md "低耦合高内聚" 原则; FunASR 路径零侵入(`worker_process.py` 不动); FunASR/Qwen3 模型加载逻辑完全不同(modelscope vs vendor+libllama+sherpa), 夹在一起易混
+   - `FileBasedProcessPool` 加一个构造参数 `worker_entry_script` (默认 `src/core/worker_process.py`), Qwen3 池传 `src/core/qwen3_worker_process.py`
 
-1. **池大小配置**:
-   - (A) 新增 `config.transcription.qwen3_pool_size = 3` 字段(独立配置, FunASR pool=2 不变)
-   - (B) 复用 `max_concurrent_tasks`, 但启动时根据 engine 决定默认值(funasr=2, qwen3=3)
-   - (C) 不区分, 共用 `max_concurrent_tasks`, 运维改 env 即可
+7. **Qwen3DiarizeTranscriber 类去留**: **保留**, 但只在 worker subprocess 进程内实例化使用.
+   - 主进程不再 import `Qwen3DiarizeTranscriber`, 所有实例化都在 worker 进程内 → libllama context 自然 per-worker 隔离
+   - Worker 内单线程跑任务, 不需要 asyncio.Lock
+   - `get_qwen3_transcriber()` 入口保留, 内部 lazy 加载, worker 主循环调它的 `transcribe()`
 
-2. **worker entry 组织**:
-   - (A) 改造 `worker_process.py` 加 `--engine` 参数, 内部分支加载 funasr / qwen3 模型
-   - (B) 新增独立的 `qwen3_worker_process.py`, `FileBasedProcessPool` 按 engine 选 worker 脚本
+**测试层**:
+8. **并发测试粒度**: hybrid + 真 e2e 两个都做.
+   - hybrid(真 pool + mock worker entry): 默认 enabled, 秒级, 验证主进程派发不串台
+   - 真 e2e (`FUNASR_RUN_INTEGRATION=1`): 真 N=2 Qwen3 模型并发, 验证 libllama 真能并行
+   - 任选其一都有盲区, 必须两者结合堵死
 
-3. **并发测试粒度**(测试必须覆盖, 不可省略):
-   - (A) 仅 hybrid: 真 pool + mock worker entry, 验证 dispatching 不串台(默认 enabled, 秒级)
-   - (B) 仅真 e2e: 2 个并发真音频 + 真模型 + 真 pool, FUNASR_RUN_INTEGRATION=1, 慢但覆盖最强
-   - (C) **两个都做(推荐)**: hybrid 默认跑, 真 e2e gate by env
-
-4. **现有 Qwen3 单 instance 实现(`Qwen3DiarizeTranscriber` 类)**:
-   - (A) **保留**类, 但只在 worker subprocess 内部用(worker 内部加载模型时实例化), 主进程不直接调
-   - (B) 完全删除, worker 内联模型加载逻辑, 不走 transcriber 类
-   - (C) 保留并改造为"worker-internal API", 主进程通过 pool 调用, 不直接 import
+9. **真服务器手工冒烟必做**: 部署前最后一道防线, 见下方"工作产出要求".
 
 ### 工作产出要求
 
@@ -183,8 +182,8 @@
 ### 开始
 
 1. Read 上面列的 9 个文件熟悉上下文
-2. 用 AskUserQuestion 问 4 个剩余决策点(一次性问完)
-3. 拿到决策后**全程不再向用户提问**, 按 TDD 红/绿/commit 循环把活干完
+2. **不需要问用户任何决策点** — 9 项决策都已经在上面"已经拍板的决策"段写死
+3. **全程不向用户提问**(除非凭证 / 用户私人数据 / 部署环境特定细节), 按 TDD 红/绿/commit 循环把活干完
 4. 真服务器并发冒烟通过后, 给用户最终汇报(含: commits 列表 / 测试矩阵 / 并发实测数据 / 内存峰值 / 后续 TODO)
 
 ### 已知 TODO(用户已经拒收, 不要做)
