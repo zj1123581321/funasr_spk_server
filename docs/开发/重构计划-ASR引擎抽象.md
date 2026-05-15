@@ -6,7 +6,7 @@
 > **当前分支**：dev → 已合并 main（`40d1a9a`）
 > **核心修订**：把原「窄版 B」进一步收窄为 PR1 最小闭环；PR2 是否做 ASREngine 完整抽象，由 PR1 跑通 + Qwen3 spike 结果决定。
 >
-> ## 🟢 状态:PR1 + PR2 均已完成 (2026-05-15)
+> ## 🟢 状态:PR1 + PR2 + PR3 均已完成 (2026-05-15)
 >
 > **PR1** (`40d1a9a` 已合并 main):
 > - 13 commits, 38 个 unit test, 3 个 FunASR parity test 全绿
@@ -19,6 +19,23 @@
 > - 5 个 integration test 全绿(FunASR parity 3 + Qwen3 e2e 2)
 > - Qwen3 e2e 实测: 60s 双人音频 RTF 0.118 (与 PoC 报告一致)
 > - 生产切换方式: `FUNASR_DEFAULT_ENGINE=qwen3` + `bash scripts/download_qwen3_models.sh` 即生效
+>
+> **PR3** (`spike/qwen3-diarize-poc` 分支, 2026-05-15):
+> - **Qwen3 从同进程单 instance 升级到 multi-process worker pool** (解决 libllama 并发 unsafe)
+> - 主进程不再持有 libllama context, 每个 worker subprocess 独立加载 GGUF + Metal + sherpa
+> - 池大小独立: FunASR 用 `max_concurrent_tasks=2`, Qwen3 用 `qwen3_pool_size=3`
+> - 任务目录物理隔离: FunASR 用 `temp/tasks/`, Qwen3 用 `temp/tasks_qwen3/`(避免 PM2 daemon 抢任务)
+> - 7 commits + 30 个新增 test:
+>   - unit (23): `test_file_based_pool_engine_aware.py` (6), `test_qwen3_worker_process.py` (6), `test_qwen3_pool_transcriber.py` (12, 含 task_dir 隔离断言), `test_config_qwen3_pool_size.py` (6 → 实际 6), `test_transcriber_dispatch.py` (+3 PR3 路由测试)
+>   - integration (4 hybrid + 4 real): `test_qwen3_pool_concurrent_dispatching.py` (hybrid 真 pool + mock worker, 4 测试, 默认 enabled), `test_qwen3_pool_real_concurrency.py` (FUNASR_RUN_INTEGRATION=1, 4 测试, N=2 真 Qwen3 模型)
+> - 真 e2e 实测: 串行 1 task ~15s, 并发 2 task ~22s (ratio 1.5x serial, 短音频 overhead 占比大), N=2 worker 总 RSS ~6.9GB (GGUF mmap 共享)
+> - 关键架构决策(都写死, 见 `docs/开发/集成-Qwen3-多Worker池-新session-prompt.md`):
+>   1. 复用 `FileBasedProcessPool`(加 `worker_entry_script` + `task_dir` 参数), 不另起炉灶
+>   2. 不引入 ABC 抽象, 注册表式扩展
+>   3. 复用 health monitor + auto restart, 不重写
+>   4. 删除单 instance 路径(主进程 dispatch 只走 pool), 但 `Qwen3DiarizeTranscriber` 类保留供 worker 内部使用
+>   5. 池大小独立字段 (FunASR=2, Qwen3=3) + 任务目录独立 (避免抢任务)
+>   6. Qwen3 worker entry 独立 (`src/core/qwen3_worker_process.py`), FunASR `worker_process.py` 零侵入
 
 ---
 

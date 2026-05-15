@@ -15,8 +15,8 @@
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
 - ✅ **双 ASR 引擎可选**(全局唯一引擎模式, PR2 落地):
-  - `funasr`: Paraformer-zh + cam++ 说话人识别(生产默认, 高准确率, MPS 加速)
-  - `qwen3`: Qwen3-ASR 1.7B GGUF + sherpa-onnx speaker diarization(RTF 0.118, 自适应聚类)
+  - `funasr`: Paraformer-zh + cam++ 说话人识别(生产默认, 高准确率, MPS 加速, multi-process pool N=2)
+  - `qwen3`: Qwen3-ASR 1.7B GGUF + sherpa-onnx speaker diarization(RTF 0.118, 自适应聚类, multi-process pool N=3, PR3 落地)
 - 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
@@ -174,10 +174,12 @@ FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/
 
 ### 引擎切换与性能对照
 
-| 引擎 | 配置 | RTF (60s 双人音频) | 优点 | 备注 |
-|------|------|---------------------|------|------|
-| `funasr` | `FUNASR_DEFAULT_ENGINE=funasr` | ~0.1 (MPS) | 中文高准确率, cam++ 说话人 | 生产默认 |
-| `qwen3`  | `FUNASR_DEFAULT_ENGINE=qwen3` + `download_qwen3_models.sh` | **0.118** (M1 Max) | Qwen3-ASR 1.7B 准确率夯爆, 自适应聚类 | 需要 ~2.1GB 模型 + Metal GPU |
+| 引擎 | 配置 | RTF (60s 双人音频) | 并发模型 | 优点 | 备注 |
+|------|------|---------------------|----------|------|------|
+| `funasr` | `FUNASR_DEFAULT_ENGINE=funasr` | ~0.1 (MPS) | multi-process pool N=2 (`max_concurrent_tasks`) | 中文高准确率, cam++ 说话人 | 生产默认 |
+| `qwen3`  | `FUNASR_DEFAULT_ENGINE=qwen3` + `download_qwen3_models.sh` | **0.118** (M1 Max) | multi-process pool N=3 (`qwen3_pool_size`, PR3) | Qwen3-ASR 1.7B 准确率夯爆, 自适应聚类 | 需要 ~2.1GB 模型 + Metal GPU; 任务目录 `temp/tasks_qwen3/` 与 FunASR 物理隔离 |
+
+两套池架构相同(`FileBasedProcessPool`), 但 task 目录 + entry 脚本独立, 同机器 FunASR daemon 和 Qwen3 测试可并存. 详见 [docs/部署.md 第五节](docs/部署.md).
 
 服务器**启动时**根据 `FUNASR_DEFAULT_ENGINE` 锁定一个引擎, 全程不切换. upload_request.engine 字段:
 - 不传 / 空 / 等于 server → 通过
