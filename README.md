@@ -14,8 +14,8 @@
 - ✅ 原始结果保存，支持格式转换
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
-- ✅ 支持Docker部署
 - ✅ **ASR 引擎可插拔架构**（PR1 落地）：upload request 可指定 engine，当前支持 FunASR，Qwen3 占位待 spike 验证
+- ⚠️ **仅支持 macOS（Apple Silicon）**：依赖 MPS GPU 加速；Linux/Windows/Docker 均不支持，详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
 
@@ -82,12 +82,9 @@ git clone <repository_url>
 cd funasr_spk_server
 ```
 
-2. 创建虚拟环境
+2. 创建虚拟环境（macOS）
 ```bash
-python -m venv venv
-# Windows
-venv\Scripts\activate
-# Linux/Mac
+python3.11 -m venv venv
 source venv/bin/activate
 ```
 
@@ -116,22 +113,12 @@ cp .env.example .env
 
 详细配置说明见 `.env.example` 文件注释。
 
-5. 启动服务器
+5. 启动服务器（前台开发模式）
 ```bash
 python run_server.py
 ```
 
-### Docker部署
-
-1. 构建镜像
-```bash
-docker-compose build
-```
-
-2. 启动服务
-```bash
-docker-compose up -d
-```
+> **生产部署**（PM2 守护、prod/dev 物理隔离布局、为什么不能 Docker）请见 [docs/部署.md](docs/部署.md)。
 
 ## 客户端用法
 
@@ -541,17 +528,24 @@ python tests/server/test_concurrent_transcription.py 8
 
 ## 开发扩展
 
-### 自定义格式支持
+### 加新的 ASR 引擎（PR1 后推荐路径）
+
+1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂
+2. 在 `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 加 `if name == "<engine>"` 分支
+3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
+4. 跑 parity 确认 FunASR 路径无回归
+5. 如确认要长期共存，参考 `docs/开发/重构计划-ASR引擎抽象.md` 第 8 节决定是否触发 PR2
+
+### 自定义输出格式支持
 
 1. 在 `funasr_transcriber.py` 中添加新的格式处理方法
 2. 在 `database.py` 中添加格式转换逻辑
-3. 更新API文档和客户端示例
+3. 更新 API 文档和客户端示例
 
 ### 第三方集成
 
-- **Web前端**：提供HTTP REST API封装
-- **移动端SDK**：基于WebSocket的移动端集成
-- **云服务**：Docker容器化部署
+- **Web 前端**：基于 WebSocket 协议实现，见 `docs/使用/客户端交互指南.md`
+- **移动端 SDK**：基于 WebSocket 协议
 
 ## License
 
