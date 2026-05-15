@@ -3,8 +3,17 @@
 > **版本**：v2（基于 codex 独立 review 反馈大幅修订）
 > **生成于**：2026-05-15
 > **基于**：`/plan-ceo-review` + `codex exec` 双重审稿
-> **当前分支**：dev
+> **当前分支**：dev → 已合并 main（`40d1a9a`）
 > **核心修订**：把原「窄版 B」进一步收窄为 PR1 最小闭环；PR2 是否做 ASREngine 完整抽象，由 PR1 跑通 + Qwen3 spike 结果决定。
+>
+> ## 🟢 状态：PR1 已完成（2026-05-15）
+> - 13 commits 已合并到 main 并 push（`40d1a9a`）
+> - 38 个 unit test 全绿
+> - 3 个 integration parity test 全绿（lock mode + MPS 跑通，golden baseline 已落档 `tests/fixtures/golden/`）
+> - `tts_1speaker_5s`: 1 段 1 人 ✓
+> - `silence_5s`: 0 段（VAD 正确） ✓
+> - `podcast_2speakers_60s`: 9 段 2 人（cam++ 正确区分）✓
+> - 待用户主动跑：Qwen3 spike（`spikes/qwen3_spike.py`）+ 生产部署
 
 ---
 
@@ -450,11 +459,12 @@ PR2 工作量：CC ~2-3 天 / 人工 ~2 周。
 
 ---
 
-## 14. 待 user 确认事项汇总
+## 14. 待 user 确认事项汇总（PR1 完成时回顾）
 
-- [ ] **D3** ✅ 已确认：C 方案（分两 PR）
-- [ ] **D4**：你能否提供 3 条代表性测试音频（≤5s，单人/双人/含静音）放到 `tests/fixtures/audio/`？没有的话我用合成音频或公开数据集 stub
-- [ ] **D5**：Qwen3 spike 你想我先做（独立 PR0），还是 PR1 同时进行？建议同时（spike 用 ~半天，PR1 用 ~1 天，并行）
+- [x] **D3** ✅ 已确认：C 方案（分两 PR）
+- [x] **D4** ✅ 已确认：用户提供播客音频（60s 双人）+ macOS say 合成单人 + ffmpeg 合成静音
+- [x] **D5** ✅ 已确认：Qwen3 spike 脚本同 PR1 落档，实跑由用户主动触发
+- [x] **Q1-Q7 实施细节**：在 PR1 落地过程中按需决策，全部体现在 commit 历史
 
 ---
 
