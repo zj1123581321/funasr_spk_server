@@ -1,59 +1,262 @@
+"""Qwen3-Diarize 转录器
+
+调用形状与 FunASRTranscriber 对齐:
+    async def transcribe(audio_path, task_id, progress_callback, output_format)
+        JSON 模式 -> (TranscriptionResult, raw_result_dict)
+        SRT  模式 -> {format, content, file_name, file_hash, duration, processing_time, raw_result}
+
+内部组装:
+    1. ASR  (src.core.qwen3.asr.run_asr) — 拿全文 text + duration
+    2. Diarize (src.core.qwen3.diarize.run_diarization) — 拿 turns
+    3. filter_spurious + merge — 把 ASR 文本切到各 speaker turn
+
+ASR 引擎(libllama.dylib + Metal context) 实例级 lazy 单例, 进程内复用.
 """
-Qwen3-ASR 1.7B 转录器（PR1 占位实现）
+from __future__ import annotations
 
-PR1 阶段：本模块仅作 dispatch 入口存在，使 transcriber_dispatch 能解析到 qwen3 名。
-真正的模型加载和推理逻辑由 spike 脚本（spikes/qwen3_spike.py）验证后，
-在 PR2（或 PR1 后续 commit）中落地。
+import asyncio
+import os
+import time
+from typing import Any, Callable, Optional, Tuple, Union
 
-调用 transcribe 会抛 NotImplementedError，明确告知 PR1 阶段未启用。
-"""
-from typing import Optional
+from loguru import logger
+
+from src.core.qwen3.asr import build_engine, run_asr
+from src.core.qwen3.diarize import run_diarization
+from src.core.qwen3.merge import (
+    filter_spurious_speakers,
+    merge_asr_and_diarize,
+    segments_to_srt,
+)
+from src.models.schemas import TranscriptionResult, TranscriptionSegment
+from src.utils.file_utils import calculate_file_hash
 
 
-class Qwen3Transcriber:
-    """Qwen3-ASR 转录器占位
+class Qwen3DiarizeTranscriber:
+    """Qwen3-ASR + sherpa Speaker Diarization 离线转录器
 
-    接口形状暂时保持和 FunASRTranscriber.transcribe 一致（待 spike 后确认）：
-        async def transcribe(audio_path, task_id, progress_callback, output_format)
-            -> (TranscriptionResult, raw_result) 元组 | srt_dict
+    参数注入式: 模型路径 / preset 由调用方传入(典型从 config 读), 类本身不绑 config.
     """
 
-    def __init__(self):
-        # 不做任何重量级加载 —— 真正落地时这里才会加载模型
-        self._initialized = False
+    def __init__(
+        self,
+        asr_model_dir: str,
+        segmentation_model: str,
+        embedding_model: str,
+        num_speakers: Optional[int] = None,
+        cluster_threshold: float = 0.9,
+        num_threads: int = 8,
+        provider: str = "cpu",
+        language: str = "Chinese",
+        temperature: float = 0.4,
+        # filter_spurious 参数
+        spurious_min_total: float = 2.0,
+        spurious_min_share: float = 0.01,
+    ):
+        self.asr_model_dir = asr_model_dir
+        self.segmentation_model = segmentation_model
+        self.embedding_model = embedding_model
+        self.num_speakers = num_speakers
+        self.cluster_threshold = cluster_threshold
+        self.num_threads = num_threads
+        self.provider = provider
+        self.language = language
+        self.temperature = temperature
+        self.spurious_min_total = spurious_min_total
+        self.spurious_min_share = spurious_min_share
+
+        # 引擎单例 — 第一次 transcribe 时构造, 后续复用
+        self._asr_engine = None
+
+    # ==================== 引擎管理 ====================
+
+    def _ensure_engine(self):
+        """惰性构造 ASR 引擎(libllama + Metal context 加载耗时, 进程内复用)"""
+        if self._asr_engine is None:
+            logger.info(f"首次构造 Qwen3-ASR 引擎(asr_model_dir={self.asr_model_dir})")
+            self._asr_engine = build_engine(self.asr_model_dir)
+        return self._asr_engine
 
     async def initialize(self):
-        raise NotImplementedError(
-            "Qwen3Transcriber 在 PR1 阶段仅为占位。"
-            "等待 spike (spikes/qwen3_spike.py) 验证后落地实现。"
-        )
+        """提前触发引擎加载(可选, 不调也会在 transcribe 时 lazy 加载)"""
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._ensure_engine)
+
+    # ==================== 进度回调 ====================
+
+    @staticmethod
+    async def _report_progress(callback: Optional[Callable], pct: int, task_id: str):
+        if callback is None:
+            return
+        try:
+            if asyncio.iscoroutinefunction(callback):
+                await callback(pct)
+            else:
+                callback(pct)
+            logger.debug(f"[{task_id}] 进度: {pct}%")
+        except Exception as e:
+            logger.warning(f"[{task_id}] progress_callback 异常 (忽略): {e}")
+
+    # ==================== 主入口 ====================
 
     async def transcribe(
         self,
         audio_path: str,
         task_id: str,
-        progress_callback=None,
+        progress_callback: Optional[Callable] = None,
         output_format: str = "json",
-    ):
-        raise NotImplementedError(
-            "Qwen3Transcriber.transcribe 在 PR1 阶段未实现。"
-            "等 spike (spikes/qwen3_spike.py) 跑通后再落地。"
+    ) -> Union[Tuple[TranscriptionResult, dict], dict]:
+        """跑一遍 ASR + Diarize + Merge, 返回 (TranscriptionResult, raw_result) 或 SRT dict"""
+        start_time = time.time()
+        loop = asyncio.get_event_loop()
+
+        await self._report_progress(progress_callback, 5, task_id)
+
+        # 引擎在线程池 lazy 加载, 不阻塞 event loop
+        engine = await loop.run_in_executor(None, self._ensure_engine)
+
+        await self._report_progress(progress_callback, 10, task_id)
+
+        # ASR + Diarize 并行(PoC 实测真并行节省 ~50% wall time)
+        asr_future = loop.run_in_executor(
+            None,
+            lambda: run_asr(
+                audio_path,
+                engine,
+                language=self.language,
+                temperature=self.temperature,
+            ),
+        )
+        diarize_future = loop.run_in_executor(
+            None,
+            lambda: run_diarization(
+                audio_path,
+                segmentation_model=self.segmentation_model,
+                embedding_model=self.embedding_model,
+                num_speakers=self.num_speakers,
+                cluster_threshold=self.cluster_threshold,
+                num_threads=self.num_threads,
+                provider=self.provider,
+            ),
         )
 
-    # 同步薄断言入口，仅给测试用 —— 避免测试代码强制 async
-    def transcribe_sync_stub(self):
-        raise NotImplementedError(
-            "Qwen3Transcriber 在 PR1 阶段是占位实现，"
-            "需要先跑 spike 验证可行性。"
+        # progress 在等待时定期报(简化: gather 完成时直接跳到 80)
+        asr_result, turns = await asyncio.gather(asr_future, diarize_future)
+        await self._report_progress(progress_callback, 80, task_id)
+
+        # 过滤假说话人(短时长 spurious cluster)
+        filtered_turns = filter_spurious_speakers(
+            turns,
+            min_speaker_total=self.spurious_min_total,
+            min_speaker_share=self.spurious_min_share,
+            audio_duration=asr_result.duration,
         )
 
+        # 文本切分到 turns
+        merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
+        await self._report_progress(progress_callback, 90, task_id)
 
-_qwen3_singleton: Optional[Qwen3Transcriber] = None
+        file_hash = await calculate_file_hash(audio_path)
+        processing_time = time.time() - start_time
+
+        raw_result = {
+            "asr_text": asr_result.text,
+            "asr_rtf": asr_result.rtf,
+            "asr_duration": asr_result.duration,
+            "asr_elapsed": asr_result.elapsed,
+            "turns": turns,
+            "filtered_turns": filtered_turns,
+            "engine": "qwen3",
+        }
+
+        if output_format == "srt":
+            srt_content = segments_to_srt(merged_segments)
+            await self._report_progress(progress_callback, 100, task_id)
+            logger.info(
+                f"[{task_id}] Qwen3 转录完成 (SRT): "
+                f"duration={asr_result.duration:.2f}s, "
+                f"耗时={processing_time:.2f}s, "
+                f"RTF={processing_time / asr_result.duration:.3f}"
+            )
+            return {
+                "format": "srt",
+                "content": srt_content,
+                "file_name": os.path.basename(audio_path),
+                "file_hash": file_hash,
+                "duration": asr_result.duration,
+                "processing_time": processing_time,
+                "raw_result": raw_result,
+            }
+
+        # JSON: 转 TranscriptionSegment, speaker int -> "Speaker{i+1}"
+        segments = [
+            TranscriptionSegment(
+                start_time=round(s.start, 2),
+                end_time=round(s.end, 2),
+                text=s.text,
+                speaker=f"Speaker{s.speaker + 1}",
+            )
+            for s in merged_segments
+        ]
+        speakers = sorted(set(seg.speaker for seg in segments))
+
+        transcription_result = TranscriptionResult(
+            task_id=task_id,
+            file_name=os.path.basename(audio_path),
+            file_hash=file_hash,
+            duration=asr_result.duration,
+            segments=segments,
+            speakers=speakers,
+            processing_time=processing_time,
+        )
+
+        await self._report_progress(progress_callback, 100, task_id)
+        logger.info(
+            f"[{task_id}] Qwen3 转录完成 (JSON): "
+            f"segments={len(segments)}, speakers={len(speakers)}, "
+            f"duration={asr_result.duration:.2f}s, 耗时={processing_time:.2f}s"
+        )
+        return (transcription_result, raw_result)
 
 
-def get_qwen3_transcriber() -> Qwen3Transcriber:
-    """获取 Qwen3 转录器单例（PR1 阶段返回占位实例）"""
+# ==================== 全局单例(C3 配置接通后从 config 读路径) ====================
+
+_qwen3_singleton: Optional[Qwen3DiarizeTranscriber] = None
+
+
+def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
+    """获取 Qwen3 转录器单例
+
+    从 config.qwen3.* 读模型路径与 preset 参数. config 未配置时抛 ValueError, 告知运维需补.
+    """
     global _qwen3_singleton
-    if _qwen3_singleton is None:
-        _qwen3_singleton = Qwen3Transcriber()
+    if _qwen3_singleton is not None:
+        return _qwen3_singleton
+
+    from src.core.config import config
+
+    qwen3_cfg = getattr(config, "qwen3", None)
+    if qwen3_cfg is None:
+        raise ValueError(
+            "config.qwen3 未配置. "
+            "请在 config.json 加 'qwen3' 块, 含 model_dir / segmentation_model / embedding_model"
+        )
+
+    _qwen3_singleton = Qwen3DiarizeTranscriber(
+        asr_model_dir=qwen3_cfg.asr_model_dir,
+        segmentation_model=qwen3_cfg.segmentation_model,
+        embedding_model=qwen3_cfg.embedding_model,
+        num_speakers=qwen3_cfg.num_speakers,
+        cluster_threshold=qwen3_cfg.cluster_threshold,
+        num_threads=qwen3_cfg.num_threads,
+        provider=qwen3_cfg.provider,
+        language=qwen3_cfg.language,
+        temperature=qwen3_cfg.temperature,
+    )
     return _qwen3_singleton
+
+
+def reset_qwen3_transcriber_singleton():
+    """重置单例(仅测试用)"""
+    global _qwen3_singleton
+    _qwen3_singleton = None

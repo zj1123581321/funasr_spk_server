@@ -67,19 +67,11 @@ class TestResolveTranscriber:
             config.transcription.default_engine = original
 
 
-class TestQwen3TranscriberPlaceholder:
-    """Qwen3 transcriber 在 PR1 是占位，spike 后才落地"""
+class TestQwen3TranscriberModule:
+    """qwen3_transcriber 模块基本健壮性 — 真实接口实现在 test_qwen3_transcriber.py 验"""
 
     def test_qwen3_module_importable(self):
-        """模块必须能 import（即便实现是占位）"""
+        """模块必须能 import 并暴露 get_qwen3_transcriber"""
         from src.core import qwen3_transcriber
         assert hasattr(qwen3_transcriber, "get_qwen3_transcriber")
-
-    def test_qwen3_transcribe_raises_not_implemented(self):
-        """transcribe 调用应明确抛 NotImplementedError，标注 PR1 阶段未启用"""
-        from src.core.qwen3_transcriber import get_qwen3_transcriber
-        t = get_qwen3_transcriber()
-        with pytest.raises(NotImplementedError) as exc:
-            # 同步调用最浅层断言 — 不必走 async
-            t.transcribe_sync_stub()
-        assert "PR1" in str(exc.value) or "spike" in str(exc.value).lower()
+        assert hasattr(qwen3_transcriber, "Qwen3DiarizeTranscriber")
