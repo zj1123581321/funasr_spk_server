@@ -173,6 +173,81 @@ class TestQwen3DiarizeTranscriberJsonMode:
         assert len(result.speakers) == 2, f"spurious 未过滤: {result.speakers}"
 
 
+class TestQwen3DiarizeTranscriberSrtMode:
+    """SRT 模式返回 dict, 与 FunASR SRT 分支保持同形"""
+
+    @pytest.mark.asyncio
+    async def test_srt_mode_returns_dict_with_format_key(self, transcriber, tmp_path):
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            ret = await transcriber.transcribe(
+                audio_path=str(audio),
+                task_id="t-srt",
+                output_format="srt",
+            )
+        assert isinstance(ret, dict), "SRT 模式应返回 dict, 不是元组"
+        assert ret["format"] == "srt"
+
+    @pytest.mark.asyncio
+    async def test_srt_dict_required_fields(self, transcriber, tmp_path):
+        audio = tmp_path / "podcast.mp3"
+        audio.write_bytes(b"\x00")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(duration=10.0)), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="hash-x")):
+            ret = await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", output_format="srt",
+            )
+        # FunASR SRT 分支返回 {format, content, file_name, file_hash, duration, processing_time, raw_result}
+        for key in ("format", "content", "file_name", "file_hash", "duration", "processing_time", "raw_result"):
+            assert key in ret, f"SRT dict 缺字段: {key}"
+        assert ret["file_name"] == "podcast.mp3"
+        assert ret["file_hash"] == "hash-x"
+        assert ret["duration"] == 10.0
+
+    @pytest.mark.asyncio
+    async def test_srt_content_format(self, transcriber, tmp_path):
+        """SRT content 是合规字符串 — 序号 / 时间戳 / Speaker{n}:文本"""
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(text="abcdefghij")), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            ret = await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", output_format="srt",
+            )
+        content = ret["content"]
+        # 序号 + 时间戳格式
+        assert "1\n00:00:00,000 --> 00:00:05,000\n" in content, content
+        assert "2\n00:00:05,000 --> 00:00:10,000\n" in content, content
+        # Speaker 命名
+        assert "Speaker1:" in content
+        assert "Speaker2:" in content
+
+    @pytest.mark.asyncio
+    async def test_srt_raw_result_contains_asr_data(self, transcriber, tmp_path):
+        """SRT 模式的 raw_result 也要含 asr_text + turns(缓存命中后能重转 JSON)"""
+        audio = tmp_path / "x.wav"
+        audio.write_bytes(b"\x00")
+        with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(text="测试")), \
+             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
+             patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
+            ret = await transcriber.transcribe(
+                audio_path=str(audio), task_id="t", output_format="srt",
+            )
+        raw = ret["raw_result"]
+        assert raw["asr_text"] == "测试"
+        assert raw["turns"] == _fake_turns()
+        assert raw["engine"] == "qwen3"
+
+
 class TestEngineSingletonReuse:
     """asr engine 加载一次后复用, 避免每次 transcribe 都加载 GGUF"""
 
