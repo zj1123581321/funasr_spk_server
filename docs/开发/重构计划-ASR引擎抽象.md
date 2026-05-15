@@ -6,14 +6,19 @@
 > **当前分支**：dev → 已合并 main（`40d1a9a`）
 > **核心修订**：把原「窄版 B」进一步收窄为 PR1 最小闭环；PR2 是否做 ASREngine 完整抽象，由 PR1 跑通 + Qwen3 spike 结果决定。
 >
-> ## 🟢 状态：PR1 已完成（2026-05-15）
-> - 13 commits 已合并到 main 并 push（`40d1a9a`）
-> - 38 个 unit test 全绿
-> - 3 个 integration parity test 全绿（lock mode + MPS 跑通，golden baseline 已落档 `tests/fixtures/golden/`）
-> - `tts_1speaker_5s`: 1 段 1 人 ✓
-> - `silence_5s`: 0 段（VAD 正确） ✓
-> - `podcast_2speakers_60s`: 9 段 2 人（cam++ 正确区分）✓
-> - 待用户主动跑：Qwen3 spike（`spikes/qwen3_spike.py`）+ 生产部署
+> ## 🟢 状态:PR1 + PR2 均已完成 (2026-05-15)
+>
+> **PR1** (`40d1a9a` 已合并 main):
+> - 13 commits, 38 个 unit test, 3 个 FunASR parity test 全绿
+> - golden baseline 落档 `tests/fixtures/golden/`
+>
+> **PR2** (`spike/qwen3-diarize-poc` 分支):
+> - Qwen3 spike 通过 (RTF 0.108-0.118, 2/4 人未知场景验证通过, 见 `spikes/qwen3_diarize/spike_report.md`)
+> - 13 commits 落地 Qwen3-Diarize 引擎集成: vendor + 三模块 + Transcriber + 全局唯一引擎 dispatch + config + 集成测试 + 文档
+> - 58 个 unit test 全绿(含 Qwen3 11/ dispatch 10/ task_manager 10/ database 12/ websocket 3/ schemas 4/ config 8)
+> - 5 个 integration test 全绿(FunASR parity 3 + Qwen3 e2e 2)
+> - Qwen3 e2e 实测: 60s 双人音频 RTF 0.118 (与 PoC 报告一致)
+> - 生产切换方式: `FUNASR_DEFAULT_ENGINE=qwen3` + `bash scripts/download_qwen3_models.sh` 即生效
 
 ---
 
@@ -351,28 +356,41 @@ async def init_db(self):
 
 ---
 
-## 8. PR2 触发条件 & 内容（不在 PR1 范围）
+## 8. PR2 触发条件 & 内容(不在 PR1 范围) — 已实施复盘
 
-### 8.1 触发条件（**全部满足**才考虑做 PR2）
-- ✅ PR1 已合并并稳定运行 ≥ 1 周
-- ✅ Qwen3 spike report 显示可行
-- ✅ Qwen3 在 PR1 框架下能跑通端到端
-- ✅ 长期共存确定（不是仅短期 A/B 后选一个）
-- ✅ 已经或即将出现第三个引擎需求
+### 8.1 触发条件 (实际触发情况, 2026-05-15)
+- ✅ PR1 已合并并稳定运行 (`40d1a9a` on main)
+- ✅ Qwen3 spike report 显示可行 (`spikes/qwen3_diarize/spike_report.md`, RTF 0.108-0.118)
+- ✅ Qwen3 在 PR1 框架下能跑通端到端 (单任务 + N 并发 + powermetrics 验证)
+- ✅ 长期共存确定(FunASR 高准确率 vs Qwen3 自适应聚类, 各有适用场景)
+- ⏸ 第三个引擎需求 — 暂无, 但 PR2 仍触发(用户实际选了直接落 Qwen3 集成)
 
-任一项不满足，**不做 PR2，方案永久停留在 PR1**。
+### 8.2 PR2 实际实施 (与 v2 计划的对照)
+原计划 PR2 内容(v2):
+1. ❌ ABC 抽象 + EngineCapabilities — **跳过**, 注册表式 `_ENGINE_REGISTRY` dict 已足够
+2. ❌ EngineRouter 类替代 dispatch 函数 — **跳过**, dispatch 函数加 strict validate 即可
+3. ❌ contract test 体系 — **跳过**, 各引擎用独立 unit test 覆盖更直接
+4. ❌ 异常分类重构(EngineInitError 等) — **跳过**, ValueError 已足够
+5. ❌ engine-level 资源配额 + WebSocketHandler 拆分 — **跳过**, 全局唯一引擎下无并发引擎切换, 无意义
+6. ✅ config.engines 嵌套结构 — **替代为 `config.qwen3` 顶级块**, 与 funasr 平级, 简洁
 
-### 8.2 如做 PR2，内容
-1. `src/core/engines/base.py` 完整 ABC：`ASREngine` + `EngineCapabilities`
-2. `FunASREngine` 和 `Qwen3Engine` 改造为 ABC 实现（不再用 dispatch 函数）
-3. `EngineRouter` 类替代 `resolve_transcriber()` 薄函数
-4. `tests/contract/test_*_engine_contract.py` 强制每个引擎满足契约
-5. 异常分类重构：替换 `except Exception` 为具体异常类（修 T5）
-6. engine-level 资源配额：`engines.{name}.max_concurrent` 配置 + 调度器（修 T10 真正落地）
-7. WebSocketHandler 670 行拆分（修 T8 真正落地）
-8. `config.engines: dict[str, EngineConfig]` 嵌套结构（替换 PR1 临时方案）
+实际 PR2 落地:
+1. ✅ **全局唯一引擎模式** — 服务器启动时由 `default_engine` 锁定, upload_request.engine strict reject
+2. ✅ **Qwen3-Diarize 引擎** — vendor + 三模块(ASR/Diarize/Merge) + `Qwen3DiarizeTranscriber`(参数注入式)
+3. ✅ **模型权重落地脚本** — `scripts/download_qwen3_models.sh` 双模式(prod 镜像 / URL)
+4. ✅ **配置项** — `Qwen3Config` 类 + FUNASR_QWEN3_* env override + `config.json` qwen3 顶级块
+5. ✅ **测试覆盖** — 11 unit (qwen3_transcriber) + 10 unit (dispatch strict) + 2 e2e integration
+6. ✅ **文档** — README / 部署 / 重构计划同步更新
 
-PR2 工作量：CC ~2-3 天 / 人工 ~2 周。
+### 8.3 PR2 实际工作量
+- 13 commits, 单人(CC)集中工作约 1 个工作日完成
+- 关键加速: **不引入抽象**, 直接落地 + TDD 红/绿/commit 闭环
+- 验证总计: 58 unit + 5 integration test 全绿
+
+### 8.4 v2 计划的"过度设计"教训
+PR2 实际落地证明 v2 计划的"完整 ABC 抽象 + contract test 体系"对 2 个引擎场景是过度设计.
+**注册表式 dict + 鸭子类型 + strict validate** 三件套已经完整覆盖了"全局唯一引擎"的所有边界, 且代码总行数不到 60 行.
+未来如真出现第三个引擎需求, 届时再触发抽象重构, 而不是现在.
 
 ---
 
