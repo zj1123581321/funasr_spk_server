@@ -56,13 +56,26 @@ class TaskManager:
         logger.info("任务管理器已停止")
     
     async def create_task(self, request: FileUploadRequest, task_id: str = None) -> TranscriptionTask:
-        """创建新任务"""
+        """创建新任务
+
+        Raises:
+            ValueError: request.engine 非空且与 server 配置不匹配(全局唯一引擎模式).
+                       错误信息同时含 server engine + requested engine, 客户端可据此调整.
+        """
         # 生成或使用提供的任务ID
         if task_id is None:
             task_id = str(uuid.uuid4())
 
-        # PR1: 解析 ASR 引擎名 —— request 未指定时回退 default_engine
-        engine = (request.engine or "").strip() or config.transcription.default_engine
+        # PR2: 全局唯一引擎 — request.engine 非空时必须等于 server engine, 否则 reject
+        server_engine = config.transcription.default_engine
+        requested = (request.engine or "").strip()
+        if requested and requested != server_engine:
+            raise ValueError(
+                f"Server configured with engine={server_engine!r}, "
+                f"cannot accept engine={requested!r}. "
+                f"Please omit the engine field or set it to {server_engine!r}."
+            )
+        engine = requested or server_engine
 
         # 创建任务对象
         task = TranscriptionTask(
