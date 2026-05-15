@@ -71,6 +71,17 @@ class TestConstructor:
         assert wrapper._pool.worker_entry_script == "src/core/qwen3_worker_process.py"
         assert wrapper._pool.pool_size == 3
 
+    def test_default_pool_uses_isolated_task_dir(self):
+        """task_dir 必须与 FunASR 池物理隔离, 否则同机器 FunASR daemon 抢任务文件"""
+        from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
+
+        wrapper = Qwen3PoolTranscriber(pool_size=2)
+        # 必须不是 FunASR 默认 ./temp/tasks
+        assert str(wrapper._pool.task_dir) != "temp/tasks"
+        assert str(wrapper._pool.task_dir) != "./temp/tasks"
+        # 推荐路径: temp/tasks_qwen3
+        assert "qwen3" in str(wrapper._pool.task_dir).lower()
+
     def test_inject_custom_pool(self):
         from src.core.qwen3_pool_transcriber import Qwen3PoolTranscriber
 

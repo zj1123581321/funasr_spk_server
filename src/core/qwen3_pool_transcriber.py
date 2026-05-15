@@ -40,9 +40,12 @@ class Qwen3PoolTranscriber:
         if pool is not None:
             self._pool = pool
         else:
+            # task_dir 必须与 FunASR 池物理隔离 — 否则同机器 PM2 daemon FunASR 和
+            # 临时跑的 Qwen3 测试 / 进程会抢 worker_X_*.task 文件, 导致结果串台.
             self._pool = FileBasedProcessPool(
                 pool_size=pool_size,
                 worker_entry_script="src/core/qwen3_worker_process.py",
+                task_dir="./temp/tasks_qwen3",
             )
 
     async def initialize(self):

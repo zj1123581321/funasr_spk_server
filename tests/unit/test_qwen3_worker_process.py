@@ -217,3 +217,99 @@ class TestLoadQwen3Transcriber:
             ret = wp.load_qwen3_transcriber()
 
         assert ret is fake_instance
+
+
+# ==================== file_name 重写 (pool 派发后 audio basename 是 UUID) ====================
+
+
+class TestRewriteFileName:
+    """pool 派发把 audio 复制到 task_dir/{uuid}.wav, worker transcribe 拿到的 basename 是 UUID.
+    worker 必须把 result.file_name 改回 source_audio_path 的 basename, 保持语义."""
+
+    def test_json_mode_rewrites_tres_file_name_to_source_basename(self, tmp_path, write_task_file):
+        """JSON 模式: source_audio_path != audio_path 时, result.file_name 应是 source basename"""
+        from src.core import qwen3_worker_process as wp
+        import json
+
+        # 模拟 pool 派发: 写 task 文件, audio_path 是临时 uuid 路径, source_audio_path 是原始名
+        task_file = tmp_path / "worker_0_t-rewrite.task"
+        task = {
+            "task_id": "t-rewrite",
+            "audio_path": "/temp/tasks_qwen3/abc-uuid.wav",
+            "source_audio_path": "/orig/upload/my_podcast.wav",
+            "output_format": "json",
+        }
+        task_file.write_text(json.dumps(task))
+
+        # fake transcriber: 内部用 audio_path basename 作为 file_name (跟 Qwen3DiarizeTranscriber 一致)
+        fake = MagicMock()
+
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+            from src.models.schemas import TranscriptionResult, TranscriptionSegment
+            return (
+                TranscriptionResult(
+                    task_id=task_id,
+                    file_name=Path(audio_path).name,  # "abc-uuid.wav"
+                    file_hash="h",
+                    duration=1.0,
+                    segments=[
+                        TranscriptionSegment(
+                            start_time=0.0, end_time=1.0, text="x", speaker="Speaker1"
+                        )
+                    ],
+                    speakers=["Speaker1"],
+                    processing_time=0.01,
+                ),
+                {"engine": "qwen3"},
+            )
+
+        fake.transcribe = fake_transcribe
+
+        wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
+
+        result_file = tmp_path / "worker_0_t-rewrite.pkl"
+        with open(result_file, "rb") as f:
+            data = pickle.load(f)
+
+        tres, _raw = data["result"]
+        # worker 应改写 file_name 为 source basename
+        assert tres.file_name == "my_podcast.wav", (
+            f"file_name 未改写: 期望 my_podcast.wav, 实际 {tres.file_name}"
+        )
+
+    def test_srt_mode_rewrites_dict_file_name_to_source_basename(self, tmp_path):
+        from src.core import qwen3_worker_process as wp
+        import json
+
+        task_file = tmp_path / "worker_0_t-srt.task"
+        task = {
+            "task_id": "t-srt",
+            "audio_path": "/temp/tasks_qwen3/xyz-uuid.wav",
+            "source_audio_path": "/orig/upload/another.wav",
+            "output_format": "srt",
+        }
+        task_file.write_text(json.dumps(task))
+
+        fake = MagicMock()
+
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+            return {
+                "format": "srt",
+                "content": "1\n00:00:00,000 --> 00:00:01,000\nSpeaker1:x\n",
+                "file_name": Path(audio_path).name,  # "xyz-uuid.wav"
+                "file_hash": "h",
+                "duration": 1.0,
+                "processing_time": 0.01,
+                "raw_result": {"engine": "qwen3"},
+            }
+
+        fake.transcribe = fake_transcribe
+
+        wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
+
+        result_file = tmp_path / "worker_0_t-srt.pkl"
+        with open(result_file, "rb") as f:
+            data = pickle.load(f)
+
+        # SRT dict 的 file_name 应改写
+        assert data["result"]["file_name"] == "another.wav"

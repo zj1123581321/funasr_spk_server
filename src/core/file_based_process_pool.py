@@ -32,6 +32,7 @@ class FileBasedProcessPool:
         config_path: str = "config.json",
         pool_size: Optional[int] = None,
         worker_entry_script: str = "src/core/worker_process.py",
+        task_dir: str = "./temp/tasks",
     ):
         """
         初始化进程池
@@ -41,12 +42,14 @@ class FileBasedProcessPool:
             pool_size: 进程池大小
             worker_entry_script: worker 子进程入口脚本路径。默认 FunASR worker;
                 Qwen3 池传 "src/core/qwen3_worker_process.py"。
+            task_dir: 任务文件目录。FunASR 默认 ./temp/tasks; Qwen3 必须用独立目录
+                (如 ./temp/tasks_qwen3), 避免与 prod FunASR daemon 抢 worker_X_*.task 文件。
         """
         self.pool_size = pool_size or global_config.transcription.max_concurrent_tasks
         self.worker_entry_script = worker_entry_script
 
         # 任务目录
-        self.task_dir = Path("./temp/tasks")
+        self.task_dir = Path(task_dir)
         self.task_dir.mkdir(parents=True, exist_ok=True)
 
         # 进程管理

@@ -41,6 +41,27 @@ def load_qwen3_transcriber():
     return get_qwen3_transcriber()
 
 
+def _rewrite_file_name(result, original_basename: str, output_format: str):
+    """把 transcribe 返回值中的 file_name 改写为原始上传文件名
+
+    pool 派发把 audio file 复制到 task_dir/{uuid}.wav, 因此 worker 拿到的
+    audio_path basename 是 UUID. 这里改写回原始 basename, 保持主进程
+    收到的语义与 FunASR 路径一致.
+    """
+    if output_format == "srt":
+        # SRT 模式返回 dict
+        if isinstance(result, dict) and "file_name" in result:
+            result["file_name"] = original_basename
+        return result
+
+    # JSON 模式返回 (TranscriptionResult, raw)
+    if isinstance(result, tuple) and len(result) == 2:
+        tres, raw = result
+        if hasattr(tres, "file_name"):
+            tres.file_name = original_basename
+    return result
+
+
 def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> None:
     """处理单个任务并写 pickle 结果"""
     # 读任务
@@ -53,8 +74,9 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
 
     result_file = task_file.replace(".task", ".pkl")
     original_audio_path = task.get("source_audio_path", audio_path)
+    original_basename = os.path.basename(original_audio_path)
 
-    print(f"[Qwen3-Worker-{os.getpid()}] 处理任务 {task_id}: {os.path.basename(original_audio_path)} (format={output_format})")
+    print(f"[Qwen3-Worker-{os.getpid()}] 处理任务 {task_id}: {original_basename} (format={output_format})")
 
     try:
         # transcribe 是 async, 在 worker 内起独立 event loop
@@ -66,6 +88,10 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
                 output_format=output_format,
             )
         )
+
+        # 把 file_name 改写为用户上传的原始文件名
+        # (pool 派发把 audio 复制到 task_dir/{uuid}.wav, worker 拿到的 basename 是 UUID, 不是原始名)
+        result = _rewrite_file_name(result, original_basename, output_format)
 
         result_data = {
             "task_id": task_id,
