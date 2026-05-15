@@ -62,8 +62,28 @@ MPS / CoreML / Vision 这些是宿主机级 API，**无法穿透容器**。
 ## 真实部署方式
 - 仓库根的 `Dockerfile` / `docker-compose.yml` 是历史残留 + Linux 备用方案，**生产从不用**
 - 全局 CLAUDE.md 提到的 `docker-deploy` skill 对本项目不适用，**不要调用**
-- 本机有 `deploy_targets.json` 也不要走，部署目标按 prod/dev 物理隔离布局：
-  - **prod**: `~/Production/funasr_spk_server/` (8767 端口，`funasr-server` PM2 进程)
-  - **dev**: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/` (8867 端口，`funasr-server-dev` PM2 进程)
-- 部署流程：在目标目录 `git pull` + （需要时）`venv/bin/pip install -r requirements.txt` + `pm2 restart funasr-server`
-- PM2 配置在各自 working tree 的 `ecosystem.config.cjs`（**两边不同**：prod 版 autorestart=true，dev 版 autorestart=false）
+- 本机有 `deploy_targets.json` 也不要走，prod/dev 物理隔离布局：
+  - **prod**: `~/Production/funasr_spk_server/`（8767 端口，PM2 守护）
+  - **dev**: `~/Dev/projects/250729_funasr_spk_server/funasr_spk_server/`（8867 端口，**默认不挂 PM2**）
+
+## 生产部署（prod，PM2 守护）
+```bash
+cd ~/Production/funasr_spk_server
+git pull origin main
+venv/bin/pip install -r requirements.txt  # 仅 requirements 有变化时
+pm2 restart funasr-server                  # ecosystem.config.cjs: autorestart=true
+```
+
+## 开发运行（dev，**不挂 PM2**）
+- 默认前台直接跑：
+  ```bash
+  cd ~/Dev/projects/250729_funasr_spk_server/funasr_spk_server
+  venv/bin/python run_server.py
+  ```
+- 仅在需要长跑调试时按需用 PM2：
+  ```bash
+  pm2 start ecosystem.config.cjs   # autorestart=false，调试时崩了不会无限拉起
+  # 用完
+  pm2 delete funasr-server-dev && pm2 save
+  ```
+- `ecosystem.config.cjs` 在 dev 工作树存在，仅作「按需启动时的参数模板」，不代表 dev 默认要挂 PM2
