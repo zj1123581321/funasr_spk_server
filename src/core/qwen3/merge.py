@@ -153,6 +153,7 @@ def segments_to_srt(segments: List[Segment]) -> str:
         idx += 1
         lines.append(str(idx))
         lines.append(f"{fmt(seg.start)} --> {fmt(seg.end)}")
-        lines.append(f"Speaker{seg.speaker + 1}: {seg.text.strip()}")
+        # 与 FunASR SRT 字节级对齐: 冒号后无空格(funasr_transcriber.py:516)
+        lines.append(f"Speaker{seg.speaker + 1}:{seg.text.strip()}")
         lines.append("")
     return "\n".join(lines)

@@ -226,9 +226,11 @@ class TestQwen3DiarizeTranscriberSrtMode:
         # 序号 + 时间戳格式
         assert "1\n00:00:00,000 --> 00:00:05,000\n" in content, content
         assert "2\n00:00:05,000 --> 00:00:10,000\n" in content, content
-        # Speaker 命名
+        # Speaker 命名 + 与 FunASR 字节级对齐(冒号后无空格, 见 funasr_transcriber.py:516)
         assert "Speaker1:" in content
         assert "Speaker2:" in content
+        assert "Speaker1: " not in content, "Qwen3 SRT 应与 FunASR 字节级一致, 冒号后不应有空格"
+        assert "Speaker2: " not in content, "Qwen3 SRT 应与 FunASR 字节级一致, 冒号后不应有空格"
 
     @pytest.mark.asyncio
     async def test_srt_raw_result_contains_asr_data(self, transcriber, tmp_path):
