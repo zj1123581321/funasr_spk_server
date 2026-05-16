@@ -578,13 +578,22 @@ class FileBasedProcessPool:
         logger.info("进程池资源已清理")
 
     def __del__(self):
-        """析构函数 - 确保资源清理"""
-        if hasattr(self, "is_initialized") and self.is_initialized:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.cleanup())
-            else:
-                loop.run_until_complete(self.cleanup())
+        """析构函数 - 确保资源清理.
+
+        解释器关闭路径调用时 main thread event loop 已不存在,
+        asyncio.get_event_loop() 抛 RuntimeError. 全局 try/except 兜底,
+        生产端走 src/main.py SIGTERM signal_handler 主动 cleanup, 这里只是防
+        stderr 噪声.
+        """
+        try:
+            if hasattr(self, "is_initialized") and self.is_initialized:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.cleanup())
+                else:
+                    loop.run_until_complete(self.cleanup())
+        except Exception:
+            pass
 
 
 # 全局进程池实例
