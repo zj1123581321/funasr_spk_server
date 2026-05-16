@@ -6,6 +6,24 @@
 > **当前分支**：dev → 已合并 main（`40d1a9a`）
 > **核心修订**：把原「窄版 B」进一步收窄为 PR1 最小闭环；PR2 是否做 ASREngine 完整抽象，由 PR1 跑通 + Qwen3 spike 结果决定。
 >
+> ## 🟢 状态:PR1 + PR2 + PR3 + 多人场景 PR4 均已完成 (2026-05-16)
+>
+> **多人场景 PR4** (`spike/qwen3-diarize-poc` 分支, 2026-05-16):
+> - **核心目标**: 把 PoC 验证的 short-segment guard + cluster centroid merge 落到生产 path
+> - **严格 TDD**: 每个函数红→绿→commit, 全程可追溯, 11 个 commit
+> - **测试**: 70 个新单测 (postprocess 23 + cluster_merge 20 + config 20 + transcriber 集成 + diarize fallback + vendor dylib)
+> - **集成**: 在 transcriber 主流程加 2 个 helper (apply_short_segment_guard_to_segments, apply_cluster_centroid_merge_to_turns), 走 per-worker singleton, 并发隔离
+> - **Config**: Qwen3Config 新增 10 个字段 (4 short_segment_* + 6 cluster_merge_*) + 10 个 env override + .env.example 同步
+> - **生产路径**: filter_spurious_speakers → cluster_merge (合并过聚) → merge_asr_chunks_and_diarize → short_segment_guard (drop ghost + ABA + merge same)
+> - **eval_set 验证** (PoC): 1/2/3+/4/6 speaker 全场景 detected 与真值 ±1
+> - **集成 e2e**: `tests/integration/test_qwen3_multispeaker_pipeline.py` 3 个 case (1/2/4 spk, 4spk skipif eval_set 在本地)
+> - **关键改动**:
+>   - 新增 `src/core/qwen3/postprocess.py` (PR2, 6 函数 + 23 单测)
+>   - 新增 `src/core/qwen3/cluster_merge.py` (PR3, 6 函数 + 20 单测)
+>   - 修 `src/core/qwen3/diarize.py:_load_audio_mono_16k` 加 librosa fallback (m4a/aac/etc)
+>   - `src/core/qwen3_transcriber.py` 加 2 个 helper + 集成调用
+>   - 新增 `tests/unit/test_qwen3_vendor_dylib_preload.py` 保护性 smoke (dylib fix 防回退)
+>
 > ## 🟢 状态:PR1 + PR2 + PR3 均已完成 (2026-05-15)
 >
 > **PR1** (`40d1a9a` 已合并 main):

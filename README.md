@@ -17,6 +17,9 @@
 - ✅ **双 ASR 引擎可选**(全局唯一引擎模式, PR2 落地):
   - `funasr`: Paraformer-zh + cam++ 说话人识别(生产默认, 高准确率, MPS 加速, multi-process pool N=2)
   - `qwen3`: Qwen3-ASR 1.7B GGUF + sherpa-onnx speaker diarization(RTF 0.118, 自适应聚类, multi-process pool N=3, PR3 落地)
+    - **多人场景支持** (PR4 落地, 2026-05-16): cluster centroid merge + short-segment guard 后处理
+    - 验证: PoC eval_set 1/2/3+/4/6 speaker 全场景 detected speakers 与真值 ±1
+    - 默认全开, 可用 `FUNASR_QWEN3_CLUSTER_MERGE_ENABLED=false` / `FUNASR_QWEN3_SHORT_GUARD_ENABLED=false` 关闭
 - 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
