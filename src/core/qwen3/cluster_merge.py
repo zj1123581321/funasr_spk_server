@@ -113,3 +113,52 @@ def merge_main_high_conf(
         if not merged_any:
             break
     return mapping_updates, remaining_mains, log
+
+
+def merge_minor_to_main(
+    centroids: dict,
+    shares: dict,
+    main_set: list,
+    minor_set: list,
+    relabel_threshold: float = 0.55,
+) -> tuple[dict, list]:
+    """每个 minor cluster -> 最近 main (cos ≥ relabel_threshold).
+
+    Args:
+        centroids, shares: 同 merge_main_high_conf.
+        main_set: 主 cluster keys.
+        minor_set: 次 cluster keys (待分配).
+        relabel_threshold: cosine 阈值, 默认 0.55.
+
+    Returns:
+        (mapping_updates, log)
+        mapping_updates: dict[minor_sp -> main_sp].
+        log: list of {action, from, to, sim, share}.
+    """
+    mapping_updates: dict = {}
+    log: list = []
+    for sp in minor_set:
+        if sp not in centroids:
+            log.append({"action": "skip_minor_no_centroid", "from": sp})
+            continue
+        sims = [(m, cosine(centroids[sp], centroids[m])) for m in main_set if m in centroids]
+        sims.sort(key=lambda kv: -kv[1])
+        best_main, best_sim = sims[0] if sims else (None, -1.0)
+        if best_main is not None and best_sim >= relabel_threshold:
+            mapping_updates[sp] = best_main
+            log.append({
+                "action": "minor_to_main",
+                "from": sp,
+                "to": best_main,
+                "sim": round(best_sim, 4),
+                "share": round(shares.get(sp, 0.0), 4),
+            })
+        else:
+            log.append({
+                "action": "minor_kept_isolated",
+                "from": sp,
+                "best_main": best_main,
+                "best_sim": round(best_sim, 4) if best_main is not None else None,
+                "share": round(shares.get(sp, 0.0), 4),
+            })
+    return mapping_updates, log

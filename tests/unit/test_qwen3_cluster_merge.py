@@ -179,3 +179,65 @@ class TestMergeMainHighConf:
         assert mapping_updates.get("1") == "0"
         assert mapping_updates.get("2") == "0"
         assert len(log) == 2
+
+
+class TestMergeMinorToMain:
+    """merge_minor_to_main: minor cluster -> 最近 main (cos ≥ relabel_threshold)."""
+
+    def test_minor_above_threshold_merged_to_nearest_main(self) -> None:
+        """minor 与 main_A cos=0.9, main_B cos=0.3, 合到 main_A."""
+        from src.core.qwen3.cluster_merge import merge_minor_to_main
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),  # main_A
+            "1": np.array([0.0, 1.0]),  # main_B
+            "2": np.array([0.9, 0.4359]) / np.linalg.norm([0.9, 0.4359]),  # minor, ~main_A
+        }
+        shares = {"0": 0.5, "1": 0.4, "2": 0.1}
+        main_set = ["0", "1"]
+        minor_set = ["2"]
+        mapping_updates, log = merge_minor_to_main(
+            centroids, shares, main_set, minor_set, relabel_threshold=0.55
+        )
+        assert mapping_updates == {"2": "0"}
+        assert len(log) == 1
+        assert log[0]["action"] == "minor_to_main"
+
+    def test_minor_below_threshold_kept_isolated(self) -> None:
+        """minor 与所有 main 相似度都低 (cos < 0.55), 保留 (e.g. 音乐 cluster)."""
+        from src.core.qwen3.cluster_merge import merge_minor_to_main
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.0, 1.0]),
+            # 与 main_A cos=-0.7071, 与 main_B cos=-0.7071, 都 < 0.55
+            "2": np.array([-0.7071, -0.7071]),
+        }
+        shares = {"0": 0.5, "1": 0.4, "2": 0.1}
+        main_set = ["0", "1"]
+        minor_set = ["2"]
+        mapping_updates, log = merge_minor_to_main(
+            centroids, shares, main_set, minor_set, relabel_threshold=0.55
+        )
+        assert mapping_updates == {}
+        assert len(log) == 1
+        assert log[0]["action"] == "minor_kept_isolated"
+
+    def test_multiple_minors_each_assigned(self) -> None:
+        """多个 minor, 各自分配到最近 main."""
+        from src.core.qwen3.cluster_merge import merge_minor_to_main
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),  # main_A
+            "1": np.array([0.0, 1.0]),  # main_B
+            "2": np.array([0.95, 0.31]) / np.linalg.norm([0.95, 0.31]),  # minor ~A
+            "3": np.array([0.31, 0.95]) / np.linalg.norm([0.31, 0.95]),  # minor ~B
+        }
+        shares = {"0": 0.4, "1": 0.4, "2": 0.1, "3": 0.1}
+        main_set = ["0", "1"]
+        minor_set = ["2", "3"]
+        mapping_updates, log = merge_minor_to_main(
+            centroids, shares, main_set, minor_set, relabel_threshold=0.55
+        )
+        assert mapping_updates == {"2": "0", "3": "1"}
+        assert len(log) == 2
