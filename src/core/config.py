@@ -78,6 +78,15 @@ class Qwen3Config(BaseModel):
     short_segment_aba_max_mid_sec: float = 1.5
     short_segment_merge_same: bool = True
 
+    # PR3: cluster centroid merge (多人场景修复, 加载 audio + sherpa embedding extractor 算 centroid)
+    # 默认开启 (PoC eval_set 5 个样本 1/2/3+/4/6 speaker 全过, 见 docs/开发/PR4-*)
+    cluster_merge_enabled: bool = True
+    cluster_merge_min_main_share: float = 0.03
+    cluster_merge_relabel_threshold: float = 0.55
+    cluster_merge_main_threshold: float = 0.78
+    cluster_merge_dominant_share: float = 0.6
+    cluster_merge_dominant_threshold: float = 0.6
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -281,6 +290,13 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "short_segment_drop_sec", "FUNASR_QWEN3_SHORT_DROP_SEC", float)
         cls._override_if_set(config_data["qwen3"], "short_segment_aba_max_mid_sec", "FUNASR_QWEN3_SHORT_ABA_MAX_MID_SEC", float)
         cls._override_if_set(config_data["qwen3"], "short_segment_merge_same", "FUNASR_QWEN3_SHORT_MERGE_SAME", cls._parse_bool)
+        # PR3 cluster centroid merge
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_enabled", "FUNASR_QWEN3_CLUSTER_MERGE_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_min_main_share", "FUNASR_QWEN3_CLUSTER_MERGE_MIN_MAIN_SHARE", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_relabel_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_RELABEL_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_main_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_MAIN_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_share", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_SHARE", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_THRESHOLD", float)
         # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
         _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
         if _num_spk_env is not None:
