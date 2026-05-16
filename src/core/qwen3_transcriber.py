@@ -234,6 +234,9 @@ class Qwen3DiarizeTranscriber:
         后续 task 复用同一 callable, 省每次 build 的开销.
         """
         if self._embedding_extractor_fn is None:
+            logger.info(
+                f"首次构造 sherpa embedding extractor(embedding_model={self.embedding_model})"
+            )
             self._embedding_extractor_fn = build_embedding_extractor_fn(self)
         return self._embedding_extractor_fn
 
