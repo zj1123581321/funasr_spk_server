@@ -10,6 +10,7 @@ import re
 
 _BACKCHANNEL_TOKENS = {"对", "嗯嗯", "好的", "是的"}
 _PURE_PUNCT_RE = re.compile(r"^[，。！？!?,.\s]+$")
+_QUESTION_TAIL_RE = re.compile(r"(对吗|是吧|是不是|有没有|可以吗|好吗|是吗)$")
 
 
 def is_backchannel(text: str) -> bool:
@@ -26,3 +27,18 @@ def is_backchannel(text: str) -> bool:
     if _PURE_PUNCT_RE.match(text):
         return True
     return False
+
+
+_QUESTION_TAIL_MAX_LEN = 14
+
+
+def is_question_tail(text: str) -> bool:
+    """判断文本是否为短问句尾巴 (含 '对吗' / '是吧' 等 marker 且 ≤14 字).
+
+    Args:
+        text: segment 的 ASR 文本.
+    """
+    stripped = (text or "").strip()
+    if len(stripped) > _QUESTION_TAIL_MAX_LEN:
+        return False
+    return bool(_QUESTION_TAIL_RE.search(stripped))

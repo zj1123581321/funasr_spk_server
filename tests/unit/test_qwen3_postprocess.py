@@ -44,3 +44,30 @@ class TestIsBackchannel:
         assert is_backchannel("。") is True
         assert is_backchannel("？") is True
         assert is_backchannel("，") is True
+
+
+class TestIsQuestionTail:
+    """is_question_tail: 识别短问句尾巴 (常出现在 turn 切换处)."""
+
+    def test_short_question_tail(self) -> None:
+        """短问句尾 (≤14 字) 含 '对吗' 等 marker 视为问句尾巴."""
+        from src.core.qwen3.postprocess import is_question_tail
+
+        assert is_question_tail("对吗") is True
+        assert is_question_tail("你说的对吗") is True
+
+    def test_long_text_with_marker_not_question_tail(self) -> None:
+        """超过 14 字即使尾部含 marker, 也不算"短问句尾巴" — 太长不是 turn 切换信号."""
+        from src.core.qwen3.postprocess import is_question_tail
+
+        long_text = "这是一段非常长非常长非常长非常长非常长非常长的话你说对吗"
+        assert len(long_text) > 14
+        assert is_question_tail(long_text) is False
+
+    def test_no_marker_text_is_not_question_tail(self) -> None:
+        """无问句 marker 的陈述句不是问句尾巴."""
+        from src.core.qwen3.postprocess import is_question_tail
+
+        assert is_question_tail("今天天气好") is False
+        assert is_question_tail("") is False
+        assert is_question_tail("这是一段完整的陈述句") is False
