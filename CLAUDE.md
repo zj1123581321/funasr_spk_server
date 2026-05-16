@@ -31,24 +31,29 @@ Always respond in 中文
 - 通过 = 改动安全；失败 = 你改坏了 FunASR 路径，回去查
 - golden baseline 在 `tests/fixtures/golden/`，由首次运行自动生成
 
-# ASR 引擎抽象（PR1 落地）
+# ASR 引擎架构
 
-## 现状
-- `src/core/transcriber_dispatch.py` 是 30 行薄 dispatch 函数（不是 ABC 抽象）
-- 支持 `funasr`（生产）和 `qwen3`（占位）
-- 引擎选择优先级：`upload_request.engine` > `config.transcription.default_engine` (`FUNASR_DEFAULT_ENGINE`) > `funasr`
-- 缓存 key 已按 engine 区分
+## 当前现状（2026-05-16）
 
-## 设计原则
-- PR1 阶段**不引入** ABC 抽象 / factory / contract test 体系（避免在 Qwen3 可行性未验证前过早抽象）
-- Qwen3 真要落地前先跑 `spikes/qwen3_spike.py` 验证
-- PR2 是否触发由 Qwen3 spike 结果决定，详见 `docs/开发/重构计划-ASR引擎抽象.md` 第 8 节
+两个引擎并行接入生产，dispatch 走轻量函数路由（**不是 ABC 抽象**）：
 
-## 加新引擎的步骤（PR1 阶段）
-1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂
+- **FunASR**（生产稳定）: `src/core/funasr_transcriber.py`，MPS GPU 加速
+- **Qwen3**: `src/core/qwen3_pool_transcriber.py`（多 worker pool）+ `src/core/qwen3_transcriber.py`（单例）+ `src/core/qwen3/asr.py`（引擎构造）。Mac 上 frontend ONNX 走 CoreML ANE（`onnx_provider="COREML_ANE_FE"`），见 `spikes/qwen3_mac_hw_accel/SUMMARY.md`
+- **Dispatch**: `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 按 engine 名分支
+- **引擎选择优先级**: `upload_request.engine` > `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`）> `funasr`
+- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，跨引擎不命中
+
+## 关键架构决策
+
+**为什么不用 ABC / factory / contract test 抽象**（决策档案: `docs/开发/archive/重构计划-ASR引擎抽象.md`）:
+
+PR1 设计阶段曾计划 ABC 抽象 + factory + contract test 体系（PR2 触发），实际工程化（PR2-4）后判定**过度设计**。当前"全局唯一引擎实例 + 薄 dispatch 路由 + per-engine config 隔离"模式已支撑 2 个引擎 + 后处理 pipeline + 多 worker pool 等复杂需求，工程复杂度更低，第三个引擎接入再触发抽象不迟。
+
+## 加新引擎的步骤
+1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂（或 pool wrapper，参考 `qwen3_pool_transcriber.py`）
 2. 在 `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 加 `if name == "<engine>": ...` 分支
 3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
-4. 跑 parity 确认 FunASR 路径无回归
+4. 跑 parity 确认 FunASR + Qwen3 既有路径无回归
 
 # 部署约定（macOS only）
 
