@@ -1,0 +1,81 @@
+{
+  "tag": "d13_combo_t4_feane_n2",
+  "mode": "n2",
+  "num_threads": 4,
+  "provider": "cpu",
+  "onnx_provider": "COREML",
+  "coreml_asr_patch": true,
+  "wall_total": 415.78647804260254,
+  "tasks": {
+    "1spk-16min": {
+      "meta": {
+        "label": "1spk-16min",
+        "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
+        "wall": 165.02940345800016,
+        "duration": 970.176,
+        "rtf": 0.1701025416604824,
+        "n_segments": 42,
+        "speakers": [
+          "Speaker1"
+        ],
+        "num_threads": 4,
+        "provider": "cpu",
+        "onnx_provider": "COREML",
+        "coreml_asr_patch": true,
+        "asr_text_len": 4627
+      },
+      "totals": {
+        "asr.encoder.frontend_onnx": 8.335367834981298,
+        "asr.encoder.backend_onnx": 109.8965159579966,
+        "asr.encoder.total": 118.45592167004361,
+        "audio.load": 1.8040949999995064,
+        "audio.load_file_wrap": 1.804118500003824,
+        "sherpa.pipeline.process": 82.69837604100758,
+        "sherpa.diarize.total": 85.80950716701045,
+        "asr.llm_decode": 37.38034966799023,
+        "asr.safe_decode_total": 37.38053816408501,
+        "asr.run_total": 155.81602699999348,
+        "sherpa.embedding.compute": 5.123012081021443,
+        "cluster_merge.apply": 6.022463625005912
+      },
+      "wall": 168.0633011660102
+    },
+    "4spk-44min": {
+      "meta": {
+        "label": "4spk-44min",
+        "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_4spk.m4a",
+        "wall": 411.765951207999,
+        "duration": 2625.89825,
+        "rtf": 0.1568095607695382,
+        "n_segments": 297,
+        "speakers": [
+          "Speaker17",
+          "Speaker3",
+          "Speaker5",
+          "Speaker6",
+          "Speaker71"
+        ],
+        "num_threads": 4,
+        "provider": "cpu",
+        "onnx_provider": "COREML",
+        "coreml_asr_patch": true,
+        "asr_text_len": 13793
+      },
+      "totals": {
+        "asr.encoder.frontend_onnx": 14.924905915962881,
+        "asr.encoder.backend_onnx": 267.7212831200304,
+        "asr.encoder.total": 283.3858279599808,
+        "audio.load": 3.8862136249954347,
+        "audio.load_file_wrap": 3.8871628750057425,
+        "sherpa.pipeline.process": 206.9357278749958,
+        "sherpa.diarize.total": 212.4976997079939,
+        "asr.llm_decode": 107.36744967097184,
+        "asr.safe_decode_total": 107.36801679202472,
+        "asr.run_total": 390.8291180410015,
+        "sherpa.embedding.compute": 11.544534707980347,
+        "cluster_merge.apply": 13.540794832995743
+      },
+      "wall": 415.06983762499294
+    }
+  }
+}

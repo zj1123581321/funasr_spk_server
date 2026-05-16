@@ -1,0 +1,44 @@
+{
+  "tag": "d1a_onlyfe_t8_n1_1spk",
+  "mode": "n1",
+  "num_threads": 8,
+  "provider": "cpu",
+  "onnx_provider": "COREML",
+  "coreml_asr_patch": true,
+  "wall_total": 152.74949288368225,
+  "tasks": {
+    "1spk-16min": {
+      "meta": {
+        "label": "1spk-16min",
+        "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_1spk_real.m4a",
+        "wall": 149.09353083399765,
+        "duration": 970.176,
+        "rtf": 0.1536767873396143,
+        "n_segments": 43,
+        "speakers": [
+          "Speaker1"
+        ],
+        "num_threads": 8,
+        "provider": "cpu",
+        "onnx_provider": "COREML",
+        "coreml_asr_patch": true,
+        "asr_text_len": 4631
+      },
+      "totals": {
+        "asr.encoder.frontend_onnx": 6.187893916969188,
+        "asr.encoder.backend_onnx": 23.051066210056888,
+        "asr.encoder.total": 29.48644729197258,
+        "audio.load": 1.711558499999228,
+        "audio.load_file_wrap": 1.7115802920015994,
+        "sherpa.pipeline.process": 73.2815239999909,
+        "sherpa.diarize.total": 76.23336062500312,
+        "asr.llm_decode": 110.78985291699064,
+        "asr.safe_decode_total": 110.79004245699616,
+        "asr.run_total": 140.12180437499774,
+        "sherpa.embedding.compute": 4.94599741899583,
+        "cluster_merge.apply": 5.819640375004383
+      },
+      "wall": 152.04831020899292
+    }
+  }
+}

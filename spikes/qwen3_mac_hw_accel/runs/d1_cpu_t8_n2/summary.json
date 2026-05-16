@@ -1,0 +1,19 @@
+{
+  "tag": "d1_cpu_t8_n2",
+  "mode": "n2",
+  "num_threads": 8,
+  "provider": "cpu",
+  "onnx_provider": "COREML",
+  "coreml_asr_patch": true,
+  "wall_total": 2.2564480304718018,
+  "tasks": {
+    "1spk-16min": {
+      "error": "no json",
+      "rc": 1
+    },
+    "4spk-44min": {
+      "error": "no json",
+      "rc": 1
+    }
+  }
+}
