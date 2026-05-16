@@ -101,3 +101,35 @@ def drop_tiny_segments(
         "merged_into_prev": merged_into_prev,
         "merged_into_next": merged_into_next,
     }
+
+
+def aba_smoothing(
+    segments: list[dict], max_mid_sec: float
+) -> tuple[list[dict], dict]:
+    """A-B-A 抖动平滑: 短中间段强制改回 A speaker (不动 text).
+
+    Args:
+        segments: ordered list of {start, end, speaker, text}.
+        max_mid_sec: 中间段最大时长, 超过此值不平滑.
+
+    Returns:
+        (new_segments, stats) — stats 含 changed (改了多少个中间段).
+    """
+    out = [dict(s) for s in segments]
+    changed = 0
+    for i in range(1, len(out) - 1):
+        a, b, c = out[i - 1], out[i], out[i + 1]
+        if str(a.get("speaker")) != str(c.get("speaker")):
+            continue
+        if str(a.get("speaker")) == str(b.get("speaker")):
+            continue
+        dur = float(b["end"]) - float(b["start"])
+        if dur > max_mid_sec:
+            continue
+        text = (b.get("text") or "").strip()
+        cps = (len(text) / dur) if dur > 0 else 0
+        # 接受: backchannel / 极短高密度切碎 (<=1.0s 且 cps>=5)
+        if is_backchannel(text) or (dur <= 1.0 and cps >= 5):
+            b["speaker"] = a["speaker"]
+            changed += 1
+    return out, {"changed": changed}

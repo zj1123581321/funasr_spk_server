@@ -155,3 +155,60 @@ class TestDropTinySegments:
         assert out[0]["text"] == "前段尾"
         assert out[0]["end"] == 3.3
         assert stats["merged_into_prev"] == 1
+
+
+class TestABASmoothing:
+    """aba_smoothing: A-B-A 抖动短中间段强制改回 A speaker (不动 text)."""
+
+    def test_backchannel_aba_replaced(self) -> None:
+        """A-B-A 三段中 B 是 backchannel, 改 B.speaker 为 A.speaker."""
+        from src.core.qwen3.postprocess import aba_smoothing
+
+        segments = [
+            _seg(0.0, 2.0, "0", "正常说话"),
+            _seg(2.0, 2.5, "1", "对"),  # backchannel, dur=0.5
+            _seg(2.5, 5.0, "0", "继续说"),
+        ]
+        out, stats = aba_smoothing(segments, max_mid_sec=1.5)
+        assert out[1]["speaker"] == "0"
+        assert out[1]["text"] == "对"  # text 不动
+        assert stats["changed"] == 1
+
+    def test_long_mid_segment_not_changed(self) -> None:
+        """A-B-A 三段, B 太长 (> max_mid_sec) 不改 — 长段是真正说话."""
+        from src.core.qwen3.postprocess import aba_smoothing
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 5.0, "1", "对"),  # dur=3.0 > max_mid_sec=1.5
+            _seg(5.0, 7.0, "0", "后"),
+        ]
+        out, stats = aba_smoothing(segments, max_mid_sec=1.5)
+        assert out[1]["speaker"] == "1"
+        assert stats["changed"] == 0
+
+    def test_different_outer_speakers_not_changed(self) -> None:
+        """A-B-C 三段外层 speaker 不同, 不算 ABA, 不改."""
+        from src.core.qwen3.postprocess import aba_smoothing
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 2.5, "1", "对"),  # backchannel, 但 A != C
+            _seg(2.5, 5.0, "2", "后"),  # 不同于 A
+        ]
+        out, stats = aba_smoothing(segments, max_mid_sec=1.5)
+        assert out[1]["speaker"] == "1"
+        assert stats["changed"] == 0
+
+    def test_high_density_short_carbage_replaced(self) -> None:
+        """A-B-A 中 B 高 char/sec (≥5 cps) 且极短 (≤1.0s) 视为切碎噪声 → 改."""
+        from src.core.qwen3.postprocess import aba_smoothing
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 2.5, "1", "高密度话语片段"),  # dur=0.5, len=8, cps=16
+            _seg(2.5, 5.0, "0", "后"),
+        ]
+        out, stats = aba_smoothing(segments, max_mid_sec=1.5)
+        assert out[1]["speaker"] == "0"
+        assert stats["changed"] == 1
