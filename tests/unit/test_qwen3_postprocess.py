@@ -212,3 +212,46 @@ class TestABASmoothing:
         out, stats = aba_smoothing(segments, max_mid_sec=1.5)
         assert out[1]["speaker"] == "0"
         assert stats["changed"] == 1
+
+
+class TestMergeConsecutiveSameSpeaker:
+    """merge_consecutive_same_speaker: 相邻同 speaker + 小 gap 合并."""
+
+    def test_merges_adjacent_same_speaker(self) -> None:
+        """相邻同 speaker, gap=0, 应合并."""
+        from src.core.qwen3.postprocess import merge_consecutive_same_speaker
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 4.0, "0", "续"),
+        ]
+        out, merged = merge_consecutive_same_speaker(segments, merge_gap_sec=0.05)
+        assert len(out) == 1
+        assert out[0]["start"] == 0.0
+        assert out[0]["end"] == 4.0
+        assert out[0]["text"] == "前续"
+        assert merged == 1
+
+    def test_keeps_speaker_changes(self) -> None:
+        """不同 speaker 即使 gap=0 也不合并."""
+        from src.core.qwen3.postprocess import merge_consecutive_same_speaker
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 4.0, "1", "另一说话人"),
+        ]
+        out, merged = merge_consecutive_same_speaker(segments, merge_gap_sec=0.05)
+        assert len(out) == 2
+        assert merged == 0
+
+    def test_respects_gap(self) -> None:
+        """同 speaker 但 gap 超过 merge_gap_sec, 不合并 (两段独立)."""
+        from src.core.qwen3.postprocess import merge_consecutive_same_speaker
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(3.0, 5.0, "0", "后"),  # gap=1.0s, > 0.05
+        ]
+        out, merged = merge_consecutive_same_speaker(segments, merge_gap_sec=0.05)
+        assert len(out) == 2
+        assert merged == 0

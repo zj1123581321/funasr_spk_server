@@ -133,3 +133,32 @@ def aba_smoothing(
             b["speaker"] = a["speaker"]
             changed += 1
     return out, {"changed": changed}
+
+
+def merge_consecutive_same_speaker(
+    segments: list[dict], merge_gap_sec: float = 0.05
+) -> tuple[list[dict], int]:
+    """合并相邻同 speaker + gap ≤ merge_gap_sec 的连续段, 减少碎片.
+
+    Args:
+        segments: ordered list of {start, end, speaker, text}.
+        merge_gap_sec: 允许合并的最大 gap, 超过则视为独立段.
+
+    Returns:
+        (new_segments, merged_count).
+    """
+    if not segments:
+        return list(segments), 0
+    out = [dict(segments[0])]
+    merged = 0
+    for s in segments[1:]:
+        prev = out[-1]
+        same_speaker = str(prev.get("speaker")) == str(s.get("speaker"))
+        small_gap = float(s["start"]) - float(prev["end"]) <= merge_gap_sec
+        if same_speaker and small_gap:
+            prev["text"] = (prev.get("text") or "") + (s.get("text") or "")
+            prev["end"] = max(float(prev["end"]), float(s["end"]))
+            merged += 1
+        else:
+            out.append(dict(s))
+    return out, merged
