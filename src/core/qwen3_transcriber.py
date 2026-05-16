@@ -248,9 +248,21 @@ class Qwen3DiarizeTranscriber:
         return self._asr_engine
 
     async def initialize(self):
-        """提前触发引擎加载(可选, 不调也会在 transcribe 时 lazy 加载)"""
+        """提前触发引擎加载(可选, 不调也会在 transcribe 时 lazy 加载).
+
+        PR4 follow-up: 同时 eager warm sherpa embedding extractor, 让第一个
+        cluster_merge task 不含 3-5s 的 extractor build overhead. extractor
+        warmup 独立 try/except, 失败不阻塞 ASR engine 可用性 (生产时 sherpa
+        模型缺失/加载慢等场景, ASR 仍能跑, cluster_merge 在 task 内 lazy 重试).
+        """
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._ensure_engine)
+        try:
+            await loop.run_in_executor(None, self._ensure_embedding_extractor_fn)
+        except Exception as exc:
+            logger.warning(
+                f"sherpa embedding extractor 预热失败, 留给首次 cluster_merge lazy 加载: {exc}"
+            )
 
     # ==================== 进度回调 ====================
 

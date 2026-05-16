@@ -26,6 +26,80 @@ class TestApplyClusterCentroidMergeToTurns:
         assert out == turns
         assert log == []
 
+    async def test_initialize_eager_warms_up_extractor(self, monkeypatch) -> None:
+        """transcriber.initialize() 应同时 eager warm ASR engine + sherpa extractor.
+
+        worker_loop 启动时调 initialize() 让两者都 ready, 第一个 task 不再含
+        extractor build 的 3-5s overhead.
+        """
+        import src.core.qwen3_transcriber as qwen3_tx_mod
+        from src.core.qwen3_transcriber import Qwen3DiarizeTranscriber
+
+        # 桩两个 build 函数, 跟踪调用次数
+        engine_build_count = {"n": 0}
+        extractor_build_count = {"n": 0}
+
+        def _stub_build_engine(model_dir):
+            engine_build_count["n"] += 1
+            return object()
+
+        def _stub_build_extractor(cfg_like):
+            extractor_build_count["n"] += 1
+            return lambda audio, start, end: None
+
+        monkeypatch.setattr(qwen3_tx_mod, "build_engine", _stub_build_engine)
+        monkeypatch.setattr(qwen3_tx_mod, "build_embedding_extractor_fn", _stub_build_extractor)
+
+        transcriber = Qwen3DiarizeTranscriber(
+            asr_model_dir="/fake",
+            segmentation_model="/fake/seg.onnx",
+            embedding_model="/fake/emb.onnx",
+        )
+        # 状态前: 两个都 None
+        assert transcriber._asr_engine is None
+        assert transcriber._embedding_extractor_fn is None
+
+        await transcriber.initialize()
+
+        # 两个都被 eager build 一次
+        assert engine_build_count["n"] == 1
+        assert extractor_build_count["n"] == 1
+        # 后续调用 ensure 应复用, 不再 build
+        transcriber._ensure_embedding_extractor_fn()
+        assert extractor_build_count["n"] == 1
+
+    async def test_initialize_extractor_failure_does_not_break_engine(
+        self, monkeypatch
+    ) -> None:
+        """extractor warmup 失败不影响 ASR engine warmup — fail-soft 设计.
+
+        生产场景: sherpa 模型缺失时, ASR 应仍可用, cluster_merge 在 task 内
+        再 lazy 尝试 (那里再失败有 try/except 兜底).
+        """
+        import src.core.qwen3_transcriber as qwen3_tx_mod
+        from src.core.qwen3_transcriber import Qwen3DiarizeTranscriber
+
+        monkeypatch.setattr(qwen3_tx_mod, "build_engine", lambda md: object())
+
+        def _stub_build_extractor_fails(cfg_like):
+            raise RuntimeError("sherpa model missing")
+
+        monkeypatch.setattr(
+            qwen3_tx_mod, "build_embedding_extractor_fn", _stub_build_extractor_fails
+        )
+
+        transcriber = Qwen3DiarizeTranscriber(
+            asr_model_dir="/fake",
+            segmentation_model="/fake/seg.onnx",
+            embedding_model="/fake/emb.onnx",
+        )
+        # initialize 不应抛错 (extractor 失败被 catch)
+        await transcriber.initialize()
+        # ASR engine 仍 warm
+        assert transcriber._asr_engine is not None
+        # extractor 仍 None (warmup 失败, 留给 task 内 lazy 重试)
+        assert transcriber._embedding_extractor_fn is None
+
     def test_ensure_embedding_extractor_fn_is_lazy_singleton(self, monkeypatch) -> None:
         """transcriber._ensure_embedding_extractor_fn 首次 build 后 cache, 后续 task 复用."""
         import src.core.qwen3_transcriber as qwen3_tx_mod
