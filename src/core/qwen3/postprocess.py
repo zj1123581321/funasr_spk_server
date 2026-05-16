@@ -5,13 +5,24 @@ Qwen3-Diarize 后处理 (PR2 short-segment guard).
 """
 from __future__ import annotations
 
+import re
+
+
+_BACKCHANNEL_TOKENS = {"对", "嗯嗯", "好的", "是的"}
+_PURE_PUNCT_RE = re.compile(r"^[，。！？!?,.\s]+$")
+
 
 def is_backchannel(text: str) -> bool:
-    """判断文本是否为 backchannel (空/单字短语气词).
+    """判断文本是否为 backchannel (空/单字短语气词/多字 backchannel/纯标点).
 
     Args:
         text: segment 的 ASR 文本.
     """
     if not text:
+        return True
+    stripped = text.strip()
+    if stripped in _BACKCHANNEL_TOKENS:
+        return True
+    if _PURE_PUNCT_RE.match(text):
         return True
     return False
