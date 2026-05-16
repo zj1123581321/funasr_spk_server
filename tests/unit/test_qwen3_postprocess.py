@@ -71,3 +71,87 @@ class TestIsQuestionTail:
         assert is_question_tail("今天天气好") is False
         assert is_question_tail("") is False
         assert is_question_tail("这是一段完整的陈述句") is False
+
+
+def _seg(start: float, end: float, speaker: str, text: str) -> dict:
+    """测试辅助: 构造一个 segment dict."""
+    return {"start": start, "end": end, "speaker": speaker, "text": text}
+
+
+class TestDropTinySegments:
+    """drop_tiny_segments: 合并 < min_sec 微短段到时间最近邻段."""
+
+    def test_keeps_normal_segments(self) -> None:
+        """全部段 ≥ min_sec, 应原样返回."""
+        from src.core.qwen3.postprocess import drop_tiny_segments
+
+        segments = [
+            _seg(0.0, 3.0, "0", "你好今天天气真好"),
+            _seg(3.0, 6.5, "1", "嗯是的我觉得也很好"),
+        ]
+        out, stats = drop_tiny_segments(segments, min_sec=1.5)
+        assert out == segments
+        assert stats["dropped_total"] == 0
+
+    def test_drops_zero_duration_ghost_with_text_into_nearer_prev(self) -> None:
+        """0s 幽灵段含 text, gap_prev=0 <= gap_next, 应合并到 prev."""
+        from src.core.qwen3.postprocess import drop_tiny_segments
+
+        segments = [
+            _seg(0.0, 3.0, "0", "前段文本"),
+            _seg(3.0, 3.0, "1", "幽灵"),  # dur=0
+            _seg(3.5, 6.0, "0", "后段文本"),
+        ]
+        out, stats = drop_tiny_segments(segments, min_sec=1.5)
+        assert len(out) == 2
+        assert out[0]["text"] == "前段文本幽灵"
+        assert out[0]["end"] == 3.0
+        assert out[1] == segments[2]
+        assert stats["dropped_total"] == 1
+        assert stats["merged_into_prev"] == 1
+
+    def test_chooses_next_when_gap_next_smaller(self) -> None:
+        """tiny 段中间, gap_next < gap_prev, 应合并到 next."""
+        from src.core.qwen3.postprocess import drop_tiny_segments
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(5.0, 5.5, "1", "中"),  # dur=0.5, gap_prev=3.0, gap_next=0.1
+            _seg(5.6, 8.0, "0", "后"),  # dur=2.4, 不算 tiny
+        ]
+        out, stats = drop_tiny_segments(segments, min_sec=1.5)
+        assert len(out) == 2
+        assert out[0] == segments[0]
+        assert out[1]["start"] == 5.0  # min(5.0, 5.6)
+        assert out[1]["text"] == "中后"
+        assert out[1]["end"] == 8.0
+        assert stats["merged_into_next"] == 1
+        assert stats["dropped_total"] == 1
+
+    def test_first_segment_tiny_merges_to_next(self) -> None:
+        """首段 tiny, 没有 prev, 只能合并到 next."""
+        from src.core.qwen3.postprocess import drop_tiny_segments
+
+        segments = [
+            _seg(0.0, 0.5, "0", "首"),  # tiny, 无 prev
+            _seg(0.6, 3.0, "1", "正文"),
+        ]
+        out, stats = drop_tiny_segments(segments, min_sec=1.5)
+        assert len(out) == 1
+        assert out[0]["start"] == 0.0
+        assert out[0]["text"] == "首正文"
+        assert stats["merged_into_next"] == 1
+
+    def test_last_segment_tiny_merges_to_prev(self) -> None:
+        """末段 tiny, 没有 next, 只能合并到 prev."""
+        from src.core.qwen3.postprocess import drop_tiny_segments
+
+        segments = [
+            _seg(0.0, 3.0, "0", "前段"),
+            _seg(3.0, 3.3, "1", "尾"),  # tiny, 无 next
+        ]
+        out, stats = drop_tiny_segments(segments, min_sec=1.5)
+        assert len(out) == 1
+        assert out[0]["text"] == "前段尾"
+        assert out[0]["end"] == 3.3
+        assert stats["merged_into_prev"] == 1
