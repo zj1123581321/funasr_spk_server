@@ -22,7 +22,8 @@ from typing import Any, Callable, Optional, Tuple, Union
 from loguru import logger
 
 from src.core.qwen3.asr import build_engine, run_asr
-from src.core.qwen3.diarize import run_diarization
+from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
+from src.core.qwen3.diarize import _load_audio_mono_16k, run_diarization
 from src.core.qwen3.merge import (
     Segment,
     filter_spurious_speakers,
@@ -33,6 +34,83 @@ from src.core.qwen3.merge import (
 from src.core.qwen3.postprocess import apply_short_segment_guard
 from src.models.schemas import TranscriptionResult, TranscriptionSegment
 from src.utils.file_utils import calculate_file_hash
+
+
+def build_embedding_extractor_fn(cfg_like):
+    """构造 sherpa SpeakerEmbeddingExtractor 包装成 callable.
+
+    返回 callable (audio, start, end) -> np.ndarray or None.
+    extractor 真正 build 是惰性的, 调一次创建后 closure 复用.
+
+    cfg_like: 鸭子类型, 需要 embedding_model / provider 属性 (Qwen3Config 或 self).
+    """
+    import sherpa_onnx
+    import numpy as np
+
+    cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+        model=cfg_like.embedding_model,
+        num_threads=4,
+        provider=getattr(cfg_like, "provider", "cpu"),
+        debug=False,
+    )
+    if not cfg.validate():
+        raise RuntimeError("embedding extractor config invalid")
+    extractor = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
+
+    def extractor_fn(audio_16k, start, end):
+        sr = 16000
+        a = int(max(0.0, start) * sr)
+        b = int(min(len(audio_16k) / sr, end) * sr)
+        if b - a < int(0.3 * sr):
+            return None
+        stream = extractor.create_stream()
+        stream.accept_waveform(sample_rate=sr, waveform=audio_16k[a:b])
+        stream.input_finished()
+        if not extractor.is_ready(stream):
+            return None
+        emb = np.asarray(extractor.compute(stream), dtype=np.float32)
+        norm = float(np.linalg.norm(emb))
+        return emb / norm if norm > 0 else emb
+
+    return extractor_fn
+
+
+def apply_cluster_centroid_merge_to_turns(
+    turns: list,
+    audio_path: str,
+    cfg_like,
+) -> tuple[list, list]:
+    """加载 audio + build extractor + 调 apply_cluster_centroid_merge.
+
+    enabled=False 时直接返回原 turns (零开销, 不加载 audio).
+
+    Args:
+        turns: List[dict] of {speaker, start, end} (sherpa diarize 输出).
+        audio_path: 音频文件路径.
+        cfg_like: 鸭子类型, 需要 cluster_merge_* 字段 + embedding_model + provider.
+
+    Returns:
+        (new_turns, log) — turns 的 speaker 字段被重写, log 是 merge events.
+    """
+    if not getattr(cfg_like, "cluster_merge_enabled", True):
+        return list(turns), []
+    audio_16k, _sr = _load_audio_mono_16k(audio_path)
+    extractor_fn = build_embedding_extractor_fn(cfg_like)
+    # turns 是 List[dict], speaker 字段是 int (sherpa 输出), apply_cluster_centroid_merge
+    # 内部用 str(speaker), 我们最后转回 int.
+    out, log = apply_cluster_centroid_merge(
+        turns,
+        extractor_fn,
+        audio_16k,
+        min_main_share=cfg_like.cluster_merge_min_main_share,
+        relabel_threshold=cfg_like.cluster_merge_relabel_threshold,
+        main_threshold=cfg_like.cluster_merge_main_threshold,
+        dominant_share=cfg_like.cluster_merge_dominant_share,
+        dominant_threshold=cfg_like.cluster_merge_dominant_threshold,
+    )
+    # speaker 字段转回 int (cluster_merge 内部按 str 比较)
+    out = [dict(t, speaker=int(t["speaker"])) for t in out]
+    return out, log
 
 
 def apply_short_segment_guard_to_segments(
@@ -107,6 +185,13 @@ class Qwen3DiarizeTranscriber:
         short_segment_drop_sec: float = 1.5,
         short_segment_aba_max_mid_sec: float = 1.5,
         short_segment_merge_same: bool = True,
+        # PR3 cluster centroid merge 参数
+        cluster_merge_enabled: bool = True,
+        cluster_merge_min_main_share: float = 0.03,
+        cluster_merge_relabel_threshold: float = 0.55,
+        cluster_merge_main_threshold: float = 0.78,
+        cluster_merge_dominant_share: float = 0.6,
+        cluster_merge_dominant_threshold: float = 0.6,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -123,6 +208,12 @@ class Qwen3DiarizeTranscriber:
         self.short_segment_drop_sec = short_segment_drop_sec
         self.short_segment_aba_max_mid_sec = short_segment_aba_max_mid_sec
         self.short_segment_merge_same = short_segment_merge_same
+        self.cluster_merge_enabled = cluster_merge_enabled
+        self.cluster_merge_min_main_share = cluster_merge_min_main_share
+        self.cluster_merge_relabel_threshold = cluster_merge_relabel_threshold
+        self.cluster_merge_main_threshold = cluster_merge_main_threshold
+        self.cluster_merge_dominant_share = cluster_merge_dominant_share
+        self.cluster_merge_dominant_threshold = cluster_merge_dominant_threshold
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -210,6 +301,21 @@ class Qwen3DiarizeTranscriber:
             min_speaker_share=self.spurious_min_share,
             audio_duration=asr_result.duration,
         )
+
+        # PR3: cluster centroid merge — 多人场景把过聚的 cluster 合并 (在切文本前做, 减少误派文本)
+        if self.cluster_merge_enabled:
+            try:
+                filtered_turns, cluster_log = apply_cluster_centroid_merge_to_turns(
+                    filtered_turns, audio_path, self
+                )
+                merge_events = [e for e in cluster_log if e.get("action", "").startswith("main_merged") or e.get("action") == "minor_to_main"]
+                if merge_events:
+                    logger.info(
+                        f"[{task_id}] cluster_merge: {len(merge_events)} merge events, "
+                        f"final clusters={len(set(t['speaker'] for t in filtered_turns))}"
+                    )
+            except Exception as exc:
+                logger.warning(f"[{task_id}] cluster_merge 失败, 跳过: {exc}")
 
         # 文本切分到 turns。优先使用 Qwen3-ASR 内部 chunk 时间窗，避免整段线性切字漂移。
         if asr_result.chunks:
@@ -332,7 +438,15 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         short_segment_drop_sec=q.short_segment_drop_sec,
         short_segment_aba_max_mid_sec=q.short_segment_aba_max_mid_sec,
         short_segment_merge_same=q.short_segment_merge_same,
+        cluster_merge_enabled=q.cluster_merge_enabled,
+        cluster_merge_min_main_share=q.cluster_merge_min_main_share,
+        cluster_merge_relabel_threshold=q.cluster_merge_relabel_threshold,
+        cluster_merge_main_threshold=q.cluster_merge_main_threshold,
+        cluster_merge_dominant_share=q.cluster_merge_dominant_share,
+        cluster_merge_dominant_threshold=q.cluster_merge_dominant_threshold,
     )
+    # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
+    _qwen3_singleton.embedding_model = q.embedding_model
     return _qwen3_singleton
 
 
