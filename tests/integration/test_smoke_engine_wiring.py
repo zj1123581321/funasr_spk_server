@@ -255,6 +255,69 @@ class TestSmokeCacheHit:
             assert task2.result.segments[0].text == "缓存内容"
 
     @pytest.mark.asyncio
+    async def test_same_hash_concurrent_submission_both_run_no_dedup(
+        self, smoke_env, server_engine_funasr, tmp_path
+    ):
+        """[现状回归] 同 hash 并发提交无 in-flight dedup, 两 task 都真转录.
+
+        背景: cache lookup 在 submit_task 串行查 db, 没有 by-hash 的
+        in-flight task 合并机制. 两个并发请求查 cache 都 miss 时, 两个
+        都会真跑转录, 浪费一份算力 (正确性不影响, 后写覆盖先写, 内容相同).
+
+        此 test 显式记录现状: 若未来加 in-flight dedup, 此 assert 会红,
+        作为 trigger 提醒维护者把断言改为 == 1.
+
+        触发 race 的关键: fake transcribe 含 await asyncio.sleep, 让两 task
+        真的并发 (而不是 A 跑完写 cache → B 才看 cache → 命中).
+        """
+        mgr, db = smoke_env
+        audio1 = tmp_path / "race-a.wav"
+        audio2 = tmp_path / "race-b.wav"
+        audio1.write_bytes(b"\x00" * 100)
+        audio2.write_bytes(b"\x00" * 100)
+
+        call_counter = {"n": 0}
+        fake = _make_fake_transcriber(text="并发同 hash", file_hash="h-race-1")
+        orig = fake.transcribe
+
+        async def slow_counting_transcribe(*a, **kw):
+            call_counter["n"] += 1
+            # 模拟真转录耗时, 让两 task 真的并发 (不是 A 完了 B 才开始)
+            await asyncio.sleep(0.2)
+            return await orig(*a, **kw)
+        fake.transcribe = slow_counting_transcribe
+
+        with patch("src.core.transcriber_dispatch.resolve_transcriber", return_value=fake):
+            req1 = FileUploadRequest(
+                file_name="race-a.wav", file_size=100, file_hash="h-race-1", output_format="json"
+            )
+            req2 = FileUploadRequest(
+                file_name="race-b.wav", file_size=100, file_hash="h-race-1", output_format="json"
+            )
+            await mgr.create_task(req1, task_id="ts-race-1")
+            await mgr.create_task(req2, task_id="ts-race-2")
+            # 几乎同时 submit, 让两个都在 A 写 cache 前查 cache
+            await asyncio.gather(
+                mgr.submit_task("ts-race-1", str(audio1)),
+                mgr.submit_task("ts-race-2", str(audio2)),
+            )
+            await _wait_for_task(mgr, "ts-race-1")
+            await _wait_for_task(mgr, "ts-race-2")
+
+        # 现状回归: 两次都跑了 (no dedup)
+        assert call_counter["n"] == 2, (
+            f"现状: 同 hash 并发应都真转录 (no in-flight dedup), 实际 {call_counter['n']} 次. "
+            "若 == 1, 说明加了 in-flight dedup, 请更新此 test 断言改为 == 1."
+        )
+        t1 = mgr.get_task("ts-race-1")
+        t2 = mgr.get_task("ts-race-2")
+        assert t1.status == TaskStatus.COMPLETED
+        assert t2.status == TaskStatus.COMPLETED
+        # 内容相同 (同 hash, 同 fake)
+        assert t1.result.segments[0].text == "并发同 hash"
+        assert t2.result.segments[0].text == "并发同 hash"
+
+    @pytest.mark.asyncio
     async def test_cross_engine_cache_hit_default(self, smoke_env, tmp_path):
         """server=funasr 留缓存 → 切 server=qwen3 同 hash → 跨引擎命中, fake 不被调"""
         mgr, db = smoke_env
