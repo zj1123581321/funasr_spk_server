@@ -11,13 +11,15 @@
 
 ## 🛠 开发（给改源码的人看）
 
+> **架构现状权威来源**：项目根 `CLAUDE.md` ASR 引擎章节（FunASR + Qwen3 双引擎、dispatch 路由、加新引擎步骤）
+
 | 文档 | 主题 |
 |---|---|
-| [重构计划-ASR引擎抽象](开发/重构计划-ASR引擎抽象.md) | **PR1 当前方案**（v2，PR1 已完成）：ASR 引擎可插拔架构 |
-| [Server-Client 交互协议](开发/Server-Client%20交互协议.md) | 服务端视角：任务状态机、并发控制、错误重试机制 |
+| [Server-Client 交互协议](开发/Server-Client%20交互协议.md) | 服务端视角：任务状态机、并发控制、错误重试、`engine` 字段路由 |
 | [WebSocket大文件传输最佳实践](开发/WebSocket大文件传输最佳实践.md) | 大文件分片上传方案 + 客户端实现参考 |
-| [兼容性开发文档](开发/FunASR音频转文本服务器兼容性开发文档.md) | 给想开发兼容服务器的人看的架构详解 |
+| [兼容性开发文档](开发/FunASR音频转文本服务器兼容性开发文档.md) | FunASR 生产路径详解（Qwen3 路径见 CLAUDE.md） |
 | [gpu加速/](开发/gpu加速/) | MPS 加速实施记录 + 长音频补丁方案（3 篇按日期） |
+| [archive/](开发/archive/) | 历史 PR/PoC 决策档案：ASR 引擎抽象计划、Qwen3 Mac 加速 PoC、PR4 长音频校对稿对比等 |
 
 ## 📚 背景资料
 
@@ -53,3 +55,23 @@
 - 删除：`windows_scripts/`（整个目录）
 - 简化：`README.md` / `CLAUDE.md` / `docs/部署.md` 移除「为什么不能 Docker」长解释
 - src/ 内尚有少量 Windows 平台分支代码（main.py / file_based_process_pool.py / utils/platform_utils.py），留待后续 PR 清理（见 TODOS.md）
+
+## 历史清理记录（2026-05-16）
+
+第四轮 — `docs/开发/` 文档清理，PR1-4 + Qwen3 Mac 加速工程化全部落地后整理：
+- 删除（已完成且无再生价值的 session prompt）：
+  - `集成-Qwen3-Diarize-引擎-新session-prompt.md`（路径已废，工程实际走 spike→工程化）
+  - `集成-Qwen3-多Worker池-新session-prompt.md`（多 worker pool 已全部落地）
+  - `PR4-工程化-新session-prompt.md`（short-segment guard + cluster merge 全部落地）
+  - `Qwen3-Mac硬件加速-工程化-新session-prompt.md`（Phase 1+2 工程化 8 commit 全落地）
+- 归档到 `开发/archive/`（PoC 决策档案 + 实测数据）：
+  - `重构计划-ASR引擎抽象.md`（ABC 抽象方案决策日志，全部落地后判定过度设计）
+  - `PR4-长音频质量与并发性能-新session-prompt.md`（PR4 问题清单）
+  - `Qwen3-Mac硬件加速-PoC-新session-prompt.md`（5 方向 PoC 路线）
+  - `PR4-Qwen3长音频POC验证结果.md`（分段参数 + RTF 基准）
+  - `PR4-149min校对稿对比分析.md`（长音频校对稿实测数据）
+- 打补丁：
+  - `Server-Client 交互协议.md` 加 §2.1 `engine` 字段路由 + 缓存隔离说明
+  - `FunASR音频转文本服务器兼容性开发文档.md` 开头加适用范围声明（FunASR 生产路径 + Qwen3 旁路）
+- `CLAUDE.md` ASR 引擎章节重写：反映双引擎并行接入现状 + ABC 抽象决策（"过度设计"判定）
+- 修复 broken link：`docs/部署.md` / `docs/项目起源.md` / `README.md`（2 处）/ `docs/README.md` 中指向旧"重构计划-ASR引擎抽象.md"的链接,统一改成指向 `CLAUDE.md` ASR 引擎章节

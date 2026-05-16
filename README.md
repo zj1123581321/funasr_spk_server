@@ -70,7 +70,7 @@
 6. **Transcriber Dispatch** (`src/core/transcriber_dispatch.py`)
    - **全局唯一引擎模式**: 服务器启动时由 `transcription.default_engine` 决定唯一引擎
    - upload_request.engine 字段严格 validate, 跨引擎请求立即 reject(不入队)
-   - 引擎注册表式扩展, 见 `docs/开发/重构计划-ASR引擎抽象.md`
+   - 引擎注册表式扩展, 见 `CLAUDE.md` ASR 引擎章节
 
 7. **Qwen3-Diarize Transcriber** (`src/core/qwen3_transcriber.py`) — PR2 落地
    - GGUF/ONNX 混合 ASR(vendor: `src/core/vendor/qwen_asr_gguf/`)
@@ -567,13 +567,14 @@ python tests/server/test_concurrent_transcription.py 8
 
 ## 开发扩展
 
-### 加新的 ASR 引擎（PR1 后推荐路径）
+### 加新的 ASR 引擎
 
-1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂
+详细步骤见 `CLAUDE.md` ASR 引擎章节的"加新引擎的步骤"。简述:
+
+1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂（或 pool wrapper，参考 `qwen3_pool_transcriber.py`）
 2. 在 `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 加 `if name == "<engine>"` 分支
 3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
-4. 跑 parity 确认 FunASR 路径无回归
-5. 如确认要长期共存，参考 `docs/开发/重构计划-ASR引擎抽象.md` 第 8 节决定是否触发 PR2
+4. 跑 parity 确认 FunASR + Qwen3 既有路径无回归
 
 ### 自定义输出格式支持
 
