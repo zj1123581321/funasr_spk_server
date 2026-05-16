@@ -83,7 +83,19 @@ def build_engine_config(
     import sys as _sys
 
     if onnx_provider is None:
-        onnx_provider = "COREML_ANE_FE" if _sys.platform == "darwin" else "CPU"
+        # 优先级: 显式参数 > config (含 env FUNASR_QWEN3_ASR_ENCODER_PROVIDER) > 平台感知
+        try:
+            from src.core import config as _config_module
+            cfg_value = (_config_module.config.qwen3.asr_encoder_provider or "auto").lower()
+        except Exception:
+            cfg_value = "auto"
+
+        if cfg_value == "cpu":
+            onnx_provider = "CPU"
+        elif cfg_value == "coreml_ane_fe":
+            onnx_provider = "COREML_ANE_FE"
+        else:  # auto / 未知值
+            onnx_provider = "COREML_ANE_FE" if _sys.platform == "darwin" else "CPU"
 
     return ASREngineConfig(
         model_dir=model_dir,

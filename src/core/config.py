@@ -69,6 +69,13 @@ class Qwen3Config(BaseModel):
     num_threads: int = 4
     provider: str = "cpu"
 
+    # Phase 2 escape hatch: 生产环境如果 ANE 出问题, 改 env 一键回退 CPU
+    # auto: build_engine_config 按平台感知 (macOS → COREML_ANE_FE, 其他 → CPU)
+    # cpu: 强制 CPU (关掉 ANE)
+    # coreml_ane_fe: 强制 frontend ANE (encoder 自身在非 macOS / 无 EP 时仍会 fallback CPU)
+    # 可通过 FUNASR_QWEN3_ASR_ENCODER_PROVIDER 环境变量覆盖
+    asr_encoder_provider: str = "auto"
+
     # ASR 参数
     language: str = "Chinese"
     temperature: float = 0.4
@@ -285,6 +292,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "cluster_threshold", "FUNASR_QWEN3_CLUSTER_THRESHOLD", float)
         cls._override_if_set(config_data["qwen3"], "num_threads", "FUNASR_QWEN3_NUM_THREADS", int)
         cls._override_if_set(config_data["qwen3"], "provider", "FUNASR_QWEN3_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "asr_encoder_provider", "FUNASR_QWEN3_ASR_ENCODER_PROVIDER")
         cls._override_if_set(config_data["qwen3"], "language", "FUNASR_QWEN3_LANGUAGE")
         cls._override_if_set(config_data["qwen3"], "temperature", "FUNASR_QWEN3_TEMPERATURE", float)
         # PR2 short-segment guard
