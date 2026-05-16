@@ -8,6 +8,18 @@
 >
 > ## 🟢 状态:PR1 + PR2 + PR3 + 多人场景 PR4 均已完成 (2026-05-16)
 >
+> **PR4 follow-up perf + e2e 加固** (2026-05-16, 同 session):
+> - sherpa embedding extractor 加 per-worker lazy singleton cache (`_ensure_embedding_extractor_fn`), 同 worker 多 task 复用, 省 ~3-5s/task
+> - `transcriber.initialize()` 同时 eager warm extractor (跟 ASR engine 对称), 第 1 个 task 不再含 extractor build overhead, 失败 fail-soft (extractor warm 失败不阻塞 ASR engine)
+> - `_ensure_embedding_extractor_fn` 加 `首次构造` INFO 日志 (与 `_ensure_engine` 对称, 排查 cache 失效)
+> - 新增 `tests/integration/test_qwen3_server_websocket_e2e.py` — 真 subprocess server + 真 websocket client + 真 Qwen3 模型 + 真 cache, 3 个 case (单 client / 并发不串台 / cache hit 1255x 加速)
+> - 新增 `tests/integration/test_smoke_engine_wiring.py::test_same_hash_concurrent_submission_both_run_no_dedup` — 显式记录现状: task_manager 无 in-flight dedup, 同 hash 并发提交两 task 都真转录 (未来加 dedup 时此 test 会红, 作为 trigger)
+> - 修 `FileBasedProcessPool.__del__` 解释器关闭路径 RuntimeError 静音 (try/except 兜底)
+> - 实测数据更新:
+>   - 真 server WS layer 并发 ratio = 1.42x serial (vs pool layer 1.36x, WS+cache 不带额外阻塞)
+>   - cache hit 0.01s vs 真转录 12.55s = **1255x 加速**
+>   - 长音频并发 (1人 16min + 4人 44min): wall 13.5min, RTF 单 0.10 → 并发 0.30-0.43 (GPU 满载分时, 节省 ~34%)
+>
 > **多人场景 PR4** (`spike/qwen3-diarize-poc` 分支, 2026-05-16):
 > - **核心目标**: 把 PoC 验证的 short-segment guard + cluster centroid merge 落到生产 path
 > - **严格 TDD**: 每个函数红→绿→commit, 全程可追溯, 11 个 commit

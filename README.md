@@ -20,6 +20,7 @@
     - **多人场景支持** (PR4 落地, 2026-05-16): cluster centroid merge + short-segment guard 后处理
     - 验证: PoC eval_set 1/2/3+/4/6 speaker 全场景 detected speakers 与真值 ±1
     - 默认全开, 可用 `FUNASR_QWEN3_CLUSTER_MERGE_ENABLED=false` / `FUNASR_QWEN3_SHORT_GUARD_ENABLED=false` 关闭
+    - **真生产路径 e2e 兜底** (`tests/integration/test_qwen3_server_websocket_e2e.py`): 真 subprocess server + websocket client + 真模型 + 真 cache (1255x 加速验证 + N=2 并发不串台), `FUNASR_RUN_INTEGRATION=1` 启用
 - 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
