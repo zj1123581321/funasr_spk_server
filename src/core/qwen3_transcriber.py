@@ -79,8 +79,10 @@ def apply_cluster_centroid_merge_to_turns(
     turns: list,
     audio_path: str,
     cfg_like,
+    *,
+    extractor_fn=None,
 ) -> tuple[list, list]:
-    """加载 audio + build extractor + 调 apply_cluster_centroid_merge.
+    """加载 audio + 调 apply_cluster_centroid_merge.
 
     enabled=False 时直接返回原 turns (零开销, 不加载 audio).
 
@@ -88,6 +90,8 @@ def apply_cluster_centroid_merge_to_turns(
         turns: List[dict] of {speaker, start, end} (sherpa diarize 输出).
         audio_path: 音频文件路径.
         cfg_like: 鸭子类型, 需要 cluster_merge_* 字段 + embedding_model + provider.
+        extractor_fn: 预 build 好的 extractor callable. None 时按 cfg_like 现 build
+            (老路径, 每次 task ~5-10s 浪费). 推荐 caller 用 lazy singleton 复用.
 
     Returns:
         (new_turns, log) — turns 的 speaker 字段被重写, log 是 merge events.
@@ -95,7 +99,8 @@ def apply_cluster_centroid_merge_to_turns(
     if not getattr(cfg_like, "cluster_merge_enabled", True):
         return list(turns), []
     audio_16k, _sr = _load_audio_mono_16k(audio_path)
-    extractor_fn = build_embedding_extractor_fn(cfg_like)
+    if extractor_fn is None:
+        extractor_fn = build_embedding_extractor_fn(cfg_like)
     # turns 是 List[dict], speaker 字段是 int (sherpa 输出), apply_cluster_centroid_merge
     # 内部用 str(speaker), 我们最后转回 int.
     out, log = apply_cluster_centroid_merge(
@@ -217,8 +222,20 @@ class Qwen3DiarizeTranscriber:
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
+        # PR3 sherpa embedding extractor 单例 — 同 worker 多 task 复用, 省 ~5-10s/task
+        self._embedding_extractor_fn = None
 
     # ==================== 引擎管理 ====================
+
+    def _ensure_embedding_extractor_fn(self):
+        """惰性构造 sherpa embedding extractor fn (per-worker singleton).
+
+        首次调用 ~3-5s (build sherpa SpeakerEmbeddingExtractor + onnx warm),
+        后续 task 复用同一 callable, 省每次 build 的开销.
+        """
+        if self._embedding_extractor_fn is None:
+            self._embedding_extractor_fn = build_embedding_extractor_fn(self)
+        return self._embedding_extractor_fn
 
     def _ensure_engine(self):
         """惰性构造 ASR 引擎(libllama + Metal context 加载耗时, 进程内复用)"""
@@ -305,8 +322,12 @@ class Qwen3DiarizeTranscriber:
         # PR3: cluster centroid merge — 多人场景把过聚的 cluster 合并 (在切文本前做, 减少误派文本)
         if self.cluster_merge_enabled:
             try:
+                # extractor lazy singleton: 同 worker 多 task 复用, 省 ~5-10s/task
+                extractor_fn = await loop.run_in_executor(
+                    None, self._ensure_embedding_extractor_fn
+                )
                 filtered_turns, cluster_log = apply_cluster_centroid_merge_to_turns(
-                    filtered_turns, audio_path, self
+                    filtered_turns, audio_path, self, extractor_fn=extractor_fn
                 )
                 merge_events = [e for e in cluster_log if e.get("action", "").startswith("main_merged") or e.get("action") == "minor_to_main"]
                 if merge_events:
