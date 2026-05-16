@@ -56,6 +56,61 @@ PoC 阶段尝试让 backend 走 CoreML 失败, 报错 `axis 4 not in [-4,3]` (`s
 
 **结论**: 用户原本以为是 D 路径 (1-2 周, 高风险), 实际上 A 路径只要 1-3 天。**这是 Phase 3 值得做的核心理由**。
 
+### 1.5 后端选型 — ANE, 不是 GPU (已锁定, 不要重新讨论)
+
+**结论**: backend ONNX 走 **CoreML ANE** (units = `CPUAndNeuralEngine`), 跟 Phase 2 frontend 同样配置。**不要走 GPU/Metal**, 也不要做 MLX 重写。
+
+#### 决策依据 1: 文章 [MLX vs CoreML on Apple Silicon](https://blog.ivan.digital/mlx-vs-coreml-on-apple-silicon-a-practical-guide-to-picking-the-right-backend-and-why-you-should-f77ddea7b27a) (Ivan, speech-swift 库作者, 2026-04)
+
+作者实测决策表(原话):
+- VAD (FireRedVAD, encoder) → **CoreML / ANE** (135x real-time, near-zero power)
+- ASR (Parakeet TDT, **non-autoregressive transducer encoder**) → **CoreML / ANE**
+- Translation (Qwen3 0.6B, **autoregressive LLM**) → MLX / GPU
+- TTS (CosyVoice3, autoregressive) → MLX / GPU
+
+文章核心论断 (本项目最关键):
+- **ANE 跟 GPU 是物理隔离的硬件**, 共享 400 GB/s 内存, **同时跑无 contention**
+- ANE 强项: conv / fixed matmul / softmax / layernorm — 我们 backend ONNX 全是这些 op
+- ANE 弱项: dynamic shapes / autoregressive loops / lookup tables → silent fallback CPU
+- 引文: *"MLX maintains a single Metal dispatch queue per process — every GPU operation goes into that queue and executes one after another"* — 即使不用 MLX 直接走 CoreML GPU units, Metal context 共享仍会引发串行化
+
+注意作者用 Qwen3 是 **0.6B autoregressive LLM 跑翻译**, 不是 encoder, 跟我们项目场景不同。**我们 backend 是 encoder, 类比作者的 Parakeet, 应走 ANE**。
+
+#### 决策依据 2: 本项目 PoC 已经验证 (`spikes/qwen3_mac_hw_accel/coreml_asr_encoder.md`)
+
+- Phase 2 frontend ANE (units=CPUAndNeuralEngine) ✅ 工作, 跟 llama.cpp Metal 完美解耦
+- ALL units (含 GPU) ❌ **llama.cpp llm_decode 从 37s → 110s (+200%)**, 净收益负
+- backend 是同一个 ONNX 系列, frontend 能跑 backend 大概率也能跑
+
+#### 走 GPU 唯一变通(不推荐, 仅备忘):
+多进程隔离 — backend 独立 process 跑 MLX GPU, llama.cpp Metal 在另一个 process。但作者明说 *"IPC overhead and the loss of shared memory between processes can reduce overall pipeline performance"*。我们已经是多 worker pool, 单 worker 内 ASR + LLM decode 是同一段音频的串行 stage, 无法跨 process。
+
+### 1.6 硬警告清单 (Phase 3 必须验证, 来自上面文章 + 我们 PoC)
+
+#### 警告 1: 内存放大 (最高优先级风险)
+- 文章数据: Parakeet INT4 332MB → ANE 加载 **1,677 MB (5x)**, INT8 → 2.2x
+- 我们的 backend ONNX 是 **FP16 583MB**, 推算 ANE 加载实际 RAM 可能 1-2 GB (放大 1.7-3.4x, FP16 不需要 dequant 应该少一些)
+- N=2 worker → 2-4 GB ANE 占用, M1 Max 64GB OK, 但仍要 RSS profiling
+- 文章解释: weight decompression + ANE 64-byte alignment padding + EnumeratedShapes "最大 shape 预留"
+- **Step 1 复现成功后, 加一步 measure RSS** — 跟 Phase 2 frontend ANE 加载前后对比
+
+#### 警告 2: dynamic time 维度
+- 文章警告: ANE 强项是 fixed shape, dynamic 要 EnumeratedShapes 预声明 N 个 shape, 否则可能 silent fallback CPU
+- 我们的 backend 输入 `time` 维度是 dynamic 的
+- Phase 2 frontend 用了 `RequireStaticInputShapes='0'` 跑通 (走 dynamic 路径), backend export 后**必须用同样配置验证**
+- 如果 dynamic 不行, 备选: 预声明若干 time 长度 (例如 5s / 10s / 30s × 13 = 65 / 130 / 390 frames), 用 EnumeratedShapes — 但工程复杂度上升, 是 Phase 3 备选 fallback
+
+#### 警告 3: 64-byte alignment
+- ANE 内部 dimension 要求 64 字节对齐 (FP16 = 2 字节, 即 dim 是 32 的倍数)
+- 我们的 hidden = 1024 / 2048 ✅ (1024 / 32 = 32, OK)
+- 我们的 num_heads / head_dim 看 modeling 源码 — 如果不对齐会 padding 32-64x, 严重浪费 RAM
+- **Step 2 export 前先验证**: 看 `modeling_qwen3_asr_onnx.py` 的 attention head 配置
+
+#### 警告 4: 不同 M 代 ANE 行为差异
+- 文章原话: *"Neural Engine architecture changed between M2, M3, M4 — numbers may vary across generations"*
+- 文章还报告: Parakeet 在 iPhone 17 Pro 上失败 "Unknown aneSubType", fallback CPU+GPU 使内存 3x
+- 我们生产机器是 **M1 Max**, dev 也是 M1 Max, **prompt 完成时部署文档要加一条"目前只在 M1 Max 验证, M2/M3/M4 行为未知"**
+
 ---
 
 ## 2. 必读 (按顺序)
@@ -186,15 +241,22 @@ deep research 资料(用户提供):
 - ❌ 在没拿到上游 PyTorch checkpoint 之前就承诺 Step 2-5 — checkpoint 找不到是最大风险点
 - ❌ 用 `onnxruntime.transformers.optimizer` 跑新 ONNX (会重新引入 com.microsoft 融合, 跟 Phase 3 目的相反)
 - ❌ 修改 frontend 路径 — Phase 2 已经验证有效, 不要碰
-- ❌ 让 CoreML units = ALL — 会抢 llama.cpp Metal (Phase 2 反例)
+- ❌ 让 CoreML units = ALL — 会抢 llama.cpp Metal (Phase 2 反例 + 文章 §1.5 论证)
+- ❌ **重新讨论 ANE vs GPU 选型** — §1.5 已锁定走 ANE, 不要再纠结。证据已经完备 (文章 + PoC), 改方向需要新证据反驳, 不是凭直觉
+- ❌ **跳过内存 RSS profiling** (警告 1) — 直接上 N=2 跑大模型可能 OOM, 必须先单 worker measure
+- ❌ 试 MLX backend 重写 — 跟 llama.cpp 抢同一个 GPU dispatch queue, 工程复杂度爆炸
 - ❌ Phase 3 失败就强行 ship — escape hatch 已经有 (`FUNASR_QWEN3_ASR_ENCODER_PROVIDER=cpu`), 失败就保留 Phase 2 现状
 
 ## 7. 完成标准
 
 - [ ] Step 1: axis 4 错误根因定锤 (具体 op 名 + 类型)
+- [ ] §1.6 警告 1 — backend ANE 加载 RSS profiling 完成 (单 worker, 跟 CPU baseline 对比 ΔRSS); N=2 内存预算可控 (< 8 GB)
+- [ ] §1.6 警告 2 — 验证 `RequireStaticInputShapes='0'` 下 backend dynamic time 不 silent fallback (用 `ort.set_default_logger_severity(0)` 看 EP 实际放到哪)
+- [ ] §1.6 警告 3 — modeling 源码里 attention head dim 是 32 倍数 (FP16 64-byte 对齐) ✅
 - [ ] Step 3 或 Step 4: unfused backend ONNX 在 CoreML EP 上加载成功 + inference 跟 CPU parity
 - [ ] (可选, 推荐) Step 5: 工程化, env knob + 默认值 + 文档
 - [ ] (可选, 推荐) 长音频 N=2 实测 wall < 380s (相比 Phase 2 的 415s 再 -10%)
+- [ ] §1.6 警告 4 — 部署文档加一条 "Phase 3 ANE 路径只在 M1 Max 验证, M2/M3/M4 未测"
 - [ ] 所有 unit test 通过
 - [ ] 所有 integration test (含 parity) 通过
 
