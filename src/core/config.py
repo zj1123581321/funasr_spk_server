@@ -64,7 +64,9 @@ class Qwen3Config(BaseModel):
     # Diarize preset (PoC 报告 preset=auto 普适最优)
     num_speakers: Optional[int] = None    # None = 自适应聚类
     cluster_threshold: float = 0.9
-    num_threads: int = 8
+    # PoC 验证 (M1 Max + pool=2): t=4 比 t=8 wall -11.5%, 总 threads 8 ≤ 10 cores 留 2 给系统
+    # 详见 spikes/qwen3_mac_hw_accel/num_threads_tuning.md
+    num_threads: int = 4
     provider: str = "cpu"
 
     # ASR 参数
