@@ -136,7 +136,10 @@ class QwenAudioEncoder:
         
         available_providers = ort.get_available_providers()
         providers = ['CPUExecutionProvider']
-        
+        # frontend / backend 默认共用 providers; COREML_ANE_FE 会分开覆盖
+        providers_fe = providers
+        providers_be = providers
+
         if self.onnx_provider in ('TRT', 'TENSORRT') and 'TensorrtExecutionProvider' in available_providers:
             providers.insert(0, ('TensorrtExecutionProvider', {
                 'trt_fp16_enable': True,
@@ -144,19 +147,45 @@ class QwenAudioEncoder:
                 'trt_engine_cache_path': Path(backend_path).parent / 'trt_cache',
             }))
         elif self.onnx_provider == 'DML' and 'DmlExecutionProvider' in available_providers:
-            providers.insert(0, 'DmlExecutionProvider') 
+            providers.insert(0, 'DmlExecutionProvider')
             self.active_dml = True
         elif self.onnx_provider == 'CUDA' and 'CUDAExecutionProvider' in available_providers:
             providers.insert(0, 'CUDAExecutionProvider')
-            
-        if self.verbose: 
-            print(f"--- [Encoder] 加载 Split ONNX 模型 (Provider: {providers[0]}, Pad: {dml_pad_to}s) ---")
+        elif self.onnx_provider == 'COREML_ANE_FE':
+            # macOS + Apple Silicon: frontend 走 CoreML ANE, backend 保 CPU
+            # PoC 验证 (M1 Max N=2): wall -7.5%, 跟 num_threads=4 组合 -16.1%
+            # 反例排查:
+            #   - units='ALL' 抢 llama.cpp Metal -> llm_decode +73s
+            #   - fmt='NeuralNetwork' silent fallback CPU 无收益
+            #   - backend 走 CoreML 卡 axis 4 op 兼容报错 (必须 CPU)
+            # 详见 spikes/qwen3_mac_hw_accel/coreml_asr_encoder.md
+            import sys as _sys
+            if _sys.platform != 'darwin':
+                if self.verbose:
+                    print("--- [Encoder] COREML_ANE_FE 仅 macOS 支持, fallback CPU ---")
+            elif 'CoreMLExecutionProvider' not in available_providers:
+                if self.verbose:
+                    print("--- [Encoder] onnxruntime 未编 CoreMLExecutionProvider, fallback CPU ---")
+            else:
+                providers_fe = [
+                    ('CoreMLExecutionProvider', {
+                        'ModelFormat': 'MLProgram',
+                        'MLComputeUnits': 'CPUAndNeuralEngine',
+                        'RequireStaticInputShapes': '0',
+                        'EnableOnSubgraphs': '0',
+                    }),
+                    'CPUExecutionProvider',
+                ]
+                providers_be = ['CPUExecutionProvider']
+
+        if self.verbose:
+            print(f"--- [Encoder] 加载 Split ONNX 模型 (FE: {providers_fe[0]}, BE: {providers_be[0]}, Pad: {dml_pad_to}s) ---")
             print(f"    Frontend: {os.path.basename(frontend_path)}")
             print(f"    Backend:  {os.path.basename(backend_path)}")
 
         # 加载两个 Session
-        self.sess_fe = ort.InferenceSession(frontend_path, sess_options=sess_opts, providers=providers)
-        self.sess_be = ort.InferenceSession(backend_path, sess_options=sess_opts, providers=providers)
+        self.sess_fe = ort.InferenceSession(frontend_path, sess_options=sess_opts, providers=providers_fe)
+        self.sess_be = ort.InferenceSession(backend_path, sess_options=sess_opts, providers=providers_be)
         
         self.mel_extractor = FastWhisperMel()
         
