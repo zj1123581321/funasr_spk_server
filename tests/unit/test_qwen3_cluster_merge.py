@@ -241,3 +241,62 @@ class TestMergeMinorToMain:
         )
         assert mapping_updates == {"2": "0", "3": "1"}
         assert len(log) == 2
+
+
+class TestMergeDominantMode:
+    """merge_dominant_mode: 合并后 dominant cluster share>=0.6 时, 其他 main 用更低阈值合到 dom."""
+
+    def test_dominant_share_above_threshold_merges_with_low_sim(self) -> None:
+        """dom share=0.7, 其他 main 与 dom cos=0.65 (>0.6) 应合并."""
+        from src.core.qwen3.cluster_merge import merge_dominant_mode
+
+        # dom = "0", other = "1", cos=0.65
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.65, 0.76]) / np.linalg.norm([0.65, 0.76]),  # cos~0.65 with [1,0]
+        }
+        current_shares = {"0": 0.7, "1": 0.3}
+        remaining_mains = ["0", "1"]
+        mapping_updates, log = merge_dominant_mode(
+            centroids, current_shares, remaining_mains,
+            dominant_share=0.6, dominant_merge_threshold=0.6,
+        )
+        assert mapping_updates == {"1": "0"}
+        assert len(log) == 1
+        assert log[0]["action"] == "main_merged_dominant_mode"
+
+    def test_dominant_share_below_threshold_not_triggered(self) -> None:
+        """dom share=0.55 < 0.6, dominant 模式不触发, 即使高相似也不合."""
+        from src.core.qwen3.cluster_merge import merge_dominant_mode
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.99, 0.01]) / np.linalg.norm([0.99, 0.01]),  # cos~1
+        }
+        current_shares = {"0": 0.55, "1": 0.45}  # 没有 dominant
+        remaining_mains = ["0", "1"]
+        mapping_updates, log = merge_dominant_mode(
+            centroids, current_shares, remaining_mains,
+            dominant_share=0.6, dominant_merge_threshold=0.6,
+        )
+        assert mapping_updates == {}
+        assert log == []
+
+    def test_dominant_triggered_but_sim_below_threshold_not_merged(self) -> None:
+        """dom share=0.8, 但 other main 与 dom cos=0.3 (<0.6 阈值), 不合."""
+        from src.core.qwen3.cluster_merge import merge_dominant_mode
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.3, 0.954]) / np.linalg.norm([0.3, 0.954]),  # cos~0.3
+        }
+        current_shares = {"0": 0.8, "1": 0.2}
+        remaining_mains = ["0", "1"]
+        mapping_updates, log = merge_dominant_mode(
+            centroids, current_shares, remaining_mains,
+            dominant_share=0.6, dominant_merge_threshold=0.6,
+        )
+        # dominant 触发了, 但 sim 0.3 < 0.6 阈值, 不合
+        assert mapping_updates == {}
+        # log 可能为空或记录"考虑但 reject", 这里至少没有 merge entry
+        assert all(entry.get("action") != "main_merged_dominant_mode" for entry in log)

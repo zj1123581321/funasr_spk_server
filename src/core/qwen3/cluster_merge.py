@@ -162,3 +162,50 @@ def merge_minor_to_main(
                 "share": round(shares.get(sp, 0.0), 4),
             })
     return mapping_updates, log
+
+
+def merge_dominant_mode(
+    centroids: dict,
+    current_shares: dict,
+    remaining_mains: list,
+    dominant_share: float = 0.6,
+    dominant_merge_threshold: float = 0.6,
+) -> tuple[dict, list]:
+    """dominant 模式: 合并后仍存在 share >= dominant_share 的 cluster,
+    用更低阈值 (dominant_merge_threshold) 把其他 main 合到 dominant.
+
+    适合单人/强主导场景, 避免声纹漂移让单人音频聚成多 cluster.
+
+    Args:
+        centroids: dict[sp -> np.ndarray (L2 normalized)].
+        current_shares: 合并后基于当前 mapping 重算的 share.
+        remaining_mains: 上一步剩余的 main speakers.
+        dominant_share: 触发 dominant 模式的 share 阈值, 默认 0.6.
+        dominant_merge_threshold: dominant 模式下合并阈值, 默认 0.6.
+
+    Returns:
+        (mapping_updates, log)
+        mapping_updates: dict[other_main_sp -> dominant_sp].
+    """
+    mapping_updates: dict = {}
+    log: list = []
+    if not remaining_mains or not current_shares:
+        return mapping_updates, log
+    dom_sp = max(current_shares.items(), key=lambda kv: kv[1])[0]
+    dom_share = current_shares[dom_sp]
+    if dom_share < dominant_share:
+        return mapping_updates, log
+    for sp in list(remaining_mains):
+        if sp == dom_sp:
+            continue
+        sim = cosine(centroids.get(sp), centroids.get(dom_sp))
+        if sim >= dominant_merge_threshold:
+            mapping_updates[sp] = dom_sp
+            log.append({
+                "action": "main_merged_dominant_mode",
+                "from": sp,
+                "to": dom_sp,
+                "sim": round(sim, 4),
+                "dom_share": round(dom_share, 3),
+            })
+    return mapping_updates, log
