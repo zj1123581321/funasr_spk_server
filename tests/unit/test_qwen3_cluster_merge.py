@@ -49,3 +49,71 @@ class TestCosine:
         assert cosine(a, None) == -1.0
         assert cosine(zero, a) == -1.0
         assert cosine(a, zero) == -1.0
+
+
+def _seg(start: float, end: float) -> dict:
+    """测试辅助: build_centroids 只关心 start/end."""
+    return {"start": start, "end": end}
+
+
+class TestBuildCentroids:
+    """build_centroids: 用 mock extractor_fn 算各 cluster centroid."""
+
+    def test_single_cluster_returns_normalized_centroid(self) -> None:
+        """1 speaker 多段, centroid = normalize(mean(embeddings))."""
+        from src.core.qwen3.cluster_merge import build_centroids
+
+        emb_map = {
+            (0.0, 2.0): np.array([3.0, 0.0, 0.0]),
+            (2.0, 4.0): np.array([1.0, 0.0, 0.0]),
+        }
+
+        def extractor_fn(audio, start, end):
+            return emb_map.get((start, end))
+
+        audio_16k = np.zeros(64000)  # dummy
+        segs_by_spk = {"0": [_seg(0.0, 2.0), _seg(2.0, 4.0)]}
+        centroids = build_centroids(extractor_fn, audio_16k, segs_by_spk)
+
+        assert set(centroids.keys()) == {"0"}
+        c = centroids["0"]
+        # mean = [2.0, 0.0, 0.0], normalize -> [1.0, 0.0, 0.0]
+        assert np.allclose(c, np.array([1.0, 0.0, 0.0]))
+
+    def test_multiple_clusters_return_separate_centroids(self) -> None:
+        """多 speaker, 每个独立 centroid."""
+        from src.core.qwen3.cluster_merge import build_centroids
+
+        emb_map = {
+            (0.0, 2.0): np.array([1.0, 0.0]),
+            (2.0, 4.0): np.array([0.0, 1.0]),
+        }
+
+        def extractor_fn(audio, start, end):
+            return emb_map.get((start, end))
+
+        segs_by_spk = {
+            "0": [_seg(0.0, 2.0)],
+            "1": [_seg(2.0, 4.0)],
+        }
+        centroids = build_centroids(extractor_fn, np.zeros(64000), segs_by_spk)
+        assert set(centroids.keys()) == {"0", "1"}
+        assert np.allclose(centroids["0"], np.array([1.0, 0.0]))
+        assert np.allclose(centroids["1"], np.array([0.0, 1.0]))
+
+    def test_speaker_with_all_none_embeddings_is_skipped(self) -> None:
+        """所有段都拿不到 embedding 的 speaker, 不出现在 centroids 中."""
+        from src.core.qwen3.cluster_merge import build_centroids
+
+        def extractor_fn(audio, start, end):
+            # speaker "1" 的段总是返回 None (e.g. 段太短)
+            if start >= 5.0:
+                return None
+            return np.array([1.0, 0.0])
+
+        segs_by_spk = {
+            "0": [_seg(0.0, 2.0)],
+            "1": [_seg(5.0, 5.5), _seg(6.0, 6.3)],  # 都返回 None
+        }
+        centroids = build_centroids(extractor_fn, np.zeros(64000), segs_by_spk)
+        assert set(centroids.keys()) == {"0"}

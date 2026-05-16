@@ -26,3 +26,36 @@ def cosine(a, b) -> float:
         return -1.0
     dot = float(np.dot(a, b))
     return dot / (norm_a * norm_b)
+
+
+def build_centroids(
+    extractor_fn,
+    audio_16k: np.ndarray,
+    segments_by_spk: dict,
+    max_per_speaker: int = 30,
+) -> dict:
+    """对每个 speaker, 抽取多段 embedding 求 L2 归一化的 centroid.
+
+    Args:
+        extractor_fn: callable (audio, start, end) -> np.ndarray or None.
+        audio_16k: 16kHz mono numpy array.
+        segments_by_spk: dict[str -> list[{start, end}]].
+        max_per_speaker: 每 speaker 最多取多少段 (取最长的 N 段).
+
+    Returns:
+        dict[str -> np.ndarray (L2 normalized)]. 跳过没法算 embedding 的 speaker.
+    """
+    centroids: dict = {}
+    for sp, segs in segments_by_spk.items():
+        chosen = sorted(segs, key=lambda s: float(s["end"]) - float(s["start"]), reverse=True)[:max_per_speaker]
+        embs = []
+        for s in chosen:
+            emb = extractor_fn(audio_16k, float(s["start"]), float(s["end"]))
+            if emb is not None:
+                embs.append(emb)
+        if not embs:
+            continue
+        c = np.mean(np.stack(embs), axis=0)
+        n = float(np.linalg.norm(c))
+        centroids[sp] = c / n if n > 0 else c
+    return centroids
