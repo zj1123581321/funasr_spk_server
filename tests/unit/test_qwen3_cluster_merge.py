@@ -300,3 +300,127 @@ class TestMergeDominantMode:
         assert mapping_updates == {}
         # log 可能为空或记录"考虑但 reject", 这里至少没有 merge entry
         assert all(entry.get("action") != "main_merged_dominant_mode" for entry in log)
+
+
+def _spk_seg(start: float, end: float, speaker: str, text: str = "x") -> dict:
+    return {"start": start, "end": end, "speaker": speaker, "text": text}
+
+
+class TestApplyClusterCentroidMerge:
+    """apply_cluster_centroid_merge: 入口函数, 串联 build_centroids + 3 个 merge step."""
+
+    def test_single_speaker_no_op(self) -> None:
+        """1 speaker, 没有 minor, 1 main, 无任何合并."""
+        from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
+
+        # 4 段全部 "0"
+        segments = [
+            _spk_seg(0.0, 10.0, "0"),
+            _spk_seg(10.0, 20.0, "0"),
+            _spk_seg(20.0, 30.0, "0"),
+        ]
+
+        def extractor_fn(audio, start, end):
+            return np.array([1.0, 0.0])
+
+        out, log = apply_cluster_centroid_merge(
+            segments, extractor_fn, np.zeros(64000)
+        )
+        # speaker 标签全部 "0"
+        assert all(s["speaker"] == "0" for s in out)
+        # 没有合并事件
+        assert not any(e.get("action", "").startswith("main_merged") for e in log)
+
+    def test_two_speakers_below_threshold_not_merged(self) -> None:
+        """2 main, cos 低, 不合并."""
+        from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
+
+        segments = [
+            _spk_seg(0.0, 10.0, "0"),
+            _spk_seg(10.0, 20.0, "1"),
+            _spk_seg(20.0, 30.0, "0"),
+            _spk_seg(30.0, 40.0, "1"),
+        ]
+        emb_map = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.0, 1.0]),  # 与 "0" 正交
+        }
+
+        def extractor_fn(audio, start, end):
+            # 通过 start 时间窗推断 speaker
+            for seg in segments:
+                if seg["start"] <= start < seg["end"]:
+                    return emb_map[seg["speaker"]]
+            return None
+
+        out, log = apply_cluster_centroid_merge(
+            segments, extractor_fn, np.zeros(64000)
+        )
+        # 2 speaker 保留
+        assert set(s["speaker"] for s in out) == {"0", "1"}
+        assert not any(e.get("action", "").startswith("main_merged") for e in log)
+
+    def test_music_cluster_kept_isolated_when_dissimilar(self) -> None:
+        """3 main + 1 minor "music" (低 share + cos < relabel_threshold), minor 保留独立."""
+        from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
+
+        # 3 个主 speaker 各 30s, 1 个音乐 cluster 1s 但 cos 极低
+        segments = [
+            _spk_seg(0.0, 30.0, "0"),
+            _spk_seg(30.0, 60.0, "1"),
+            _spk_seg(60.0, 90.0, "2"),
+            _spk_seg(90.0, 91.0, "3"),  # share=1/91 ~1.1% < 3% min_main_share -> minor
+        ]
+        emb_map = {
+            "0": np.array([1.0, 0.0, 0.0]),
+            "1": np.array([0.0, 1.0, 0.0]),
+            "2": np.array([0.0, 0.0, 1.0]),
+            "3": np.array([-1.0, -1.0, -1.0]) / np.linalg.norm([-1.0, -1.0, -1.0]),  # 反方向, cos<0
+        }
+
+        def extractor_fn(audio, start, end):
+            for seg in segments:
+                if seg["start"] <= start < seg["end"]:
+                    return emb_map[seg["speaker"]]
+            return None
+
+        out, log = apply_cluster_centroid_merge(
+            segments, extractor_fn, np.zeros(16000 * 100),
+            min_main_share=0.03, relabel_threshold=0.55, main_threshold=0.78,
+        )
+        # "3" 保持独立 (kept_isolated)
+        assert any(e.get("action") == "minor_kept_isolated" and e.get("from") == "3" for e in log)
+        # 最终 speakers 包含 "3"
+        assert "3" in set(s["speaker"] for s in out)
+
+    def test_six_speakers_with_dup_centroids_merged(self) -> None:
+        """6 个 cluster, 其中 2 对相似, 合并到 4 个."""
+        from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
+
+        # 6 个 speaker, 每个 20s
+        segments = [_spk_seg(i * 20.0, (i + 1) * 20.0, str(i)) for i in range(6)]
+        # 4 个独立方向, 2 个 dup (speaker 4 = speaker 0, speaker 5 = speaker 1)
+        emb_map = {
+            "0": np.array([1.0, 0.0, 0.0, 0.0]),
+            "1": np.array([0.0, 1.0, 0.0, 0.0]),
+            "2": np.array([0.0, 0.0, 1.0, 0.0]),
+            "3": np.array([0.0, 0.0, 0.0, 1.0]),
+            "4": np.array([1.0, 0.0, 0.0, 0.0]),  # 同 "0"
+            "5": np.array([0.0, 1.0, 0.0, 0.0]),  # 同 "1"
+        }
+
+        def extractor_fn(audio, start, end):
+            for seg in segments:
+                if seg["start"] <= start < seg["end"]:
+                    return emb_map[seg["speaker"]]
+            return None
+
+        out, log = apply_cluster_centroid_merge(
+            segments, extractor_fn, np.zeros(16000 * 200),
+            main_threshold=0.78,
+        )
+        # 6 -> 4 speakers
+        assert len(set(s["speaker"] for s in out)) == 4
+        # 至少有 2 个 main_merged_high_conf 事件
+        merged_evs = [e for e in log if e.get("action") == "main_merged_high_conf"]
+        assert len(merged_evs) >= 2

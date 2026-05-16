@@ -209,3 +209,100 @@ def merge_dominant_mode(
                 "dom_share": round(dom_share, 3),
             })
     return mapping_updates, log
+
+
+def apply_cluster_centroid_merge(
+    segments: list,
+    extractor_fn,
+    audio_16k: np.ndarray,
+    min_main_share: float = 0.03,
+    relabel_threshold: float = 0.55,
+    main_threshold: float = 0.78,
+    dominant_share: float = 0.6,
+    dominant_threshold: float = 0.6,
+    max_per_speaker: int = 30,
+) -> tuple[list, list]:
+    """cluster centroid merge 完整 pipeline 入口.
+
+    流程: build centroids -> minor->main -> main->main high-conf -> dominant adaptive.
+    最后按 final mapping 重写 segments 的 speaker 字段.
+
+    Args:
+        segments: list of {start, end, speaker, text}, speaker 为 str.
+        extractor_fn: callable (audio_16k, start, end) -> embedding or None.
+        audio_16k: 16kHz mono numpy 音频.
+        min_main_share: 主 cluster 阈值 (默认 3%).
+        relabel_threshold: minor -> main 阈值 (默认 0.55).
+        main_threshold: main 间 high-conf 合并阈值 (默认 0.78).
+        dominant_share: dominant 模式触发阈值 (默认 0.6).
+        dominant_threshold: dominant 模式合并阈值 (默认 0.6).
+        max_per_speaker: 每 speaker 最多取多少段算 centroid.
+
+    Returns:
+        (new_segments, log).
+    """
+    # 1) 按 speaker 分组 + 算 share
+    by_spk: dict = {}
+    spk_dur: dict = {}
+    for s in segments:
+        sp = str(s["speaker"])
+        by_spk.setdefault(sp, []).append(s)
+        spk_dur[sp] = spk_dur.get(sp, 0.0) + (float(s["end"]) - float(s["start"]))
+    total_dur = sum(spk_dur.values()) or 1.0
+    spk_share = {sp: dur / total_dur for sp, dur in spk_dur.items()}
+    main_set = sorted(
+        [sp for sp, sh in spk_share.items() if sh >= min_main_share],
+        key=lambda sp: -spk_share[sp],
+    )
+    minor_set = [sp for sp in spk_share if sp not in main_set]
+
+    log: list = []
+    mapping: dict = {sp: sp for sp in by_spk}
+
+    if not main_set:
+        # 没主 cluster: 不动
+        return list(segments), log
+
+    # 2) build centroids
+    centroids = build_centroids(extractor_fn, audio_16k, by_spk, max_per_speaker=max_per_speaker)
+
+    # 3) Step 1: minor -> main
+    minor_updates, minor_log = merge_minor_to_main(
+        centroids, spk_share, main_set, minor_set, relabel_threshold=relabel_threshold,
+    )
+    for k, v in minor_updates.items():
+        mapping[k] = v
+    log.extend(minor_log)
+
+    # 4) Step 2: main-to-main high-conf
+    main_updates, remaining_mains, main_log = merge_main_high_conf(
+        centroids, spk_share, main_set, merge_threshold=main_threshold,
+    )
+    for k, v in main_updates.items():
+        # 透传所有指向被 merge 的 main 的 mapping
+        for orig_sp, target in list(mapping.items()):
+            if target == k:
+                mapping[orig_sp] = v
+        mapping[k] = v
+    log.extend(main_log)
+
+    # 5) Step 3: dominant adaptive (重算 share)
+    current_dur: dict = {}
+    for orig_sp, final_sp in mapping.items():
+        current_dur[final_sp] = current_dur.get(final_sp, 0.0) + spk_dur.get(orig_sp, 0.0)
+    current_total = sum(current_dur.values()) or 1.0
+    current_shares = {sp: dur / current_total for sp, dur in current_dur.items()}
+    dom_updates, dom_log = merge_dominant_mode(
+        centroids, current_shares, remaining_mains,
+        dominant_share=dominant_share, dominant_merge_threshold=dominant_threshold,
+    )
+    for k, v in dom_updates.items():
+        for orig_sp, target in list(mapping.items()):
+            if target == k:
+                mapping[orig_sp] = v
+        mapping[k] = v
+    log.extend(dom_log)
+
+    # 6) 应用 mapping 重写 segments
+    new_segments = [dict(s, speaker=mapping[str(s["speaker"])]) for s in segments]
+    return new_segments, log
