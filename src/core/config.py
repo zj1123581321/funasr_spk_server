@@ -69,10 +69,12 @@ class Qwen3Config(BaseModel):
     num_threads: int = 4
     provider: str = "cpu"
 
-    # Phase 2 escape hatch: 生产环境如果 ANE 出问题, 改 env 一键回退 CPU
+    # Phase 2/3 escape hatch: 生产环境如果 ANE 出问题, 改 env 一键回退 CPU
     # auto: build_engine_config 按平台感知 (macOS → COREML_ANE_FE, 其他 → CPU)
     # cpu: 强制 CPU (关掉 ANE)
-    # coreml_ane_fe: 强制 frontend ANE (encoder 自身在非 macOS / 无 EP 时仍会 fallback CPU)
+    # coreml_ane_fe: Phase 2 — frontend ANE + backend ONNX CPU (生产稳定路径)
+    # coreml_ane_full: Phase 3 — frontend ANE + backend mlpackage ANE (需 .mlpackage 存在)
+    #                  encoder 自身在非 macOS / 无 EP / .mlpackage 缺失 时会降级 fallback
     # 可通过 FUNASR_QWEN3_ASR_ENCODER_PROVIDER 环境变量覆盖
     asr_encoder_provider: str = "auto"
 

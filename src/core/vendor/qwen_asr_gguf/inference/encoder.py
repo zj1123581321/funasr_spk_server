@@ -126,19 +126,24 @@ class QwenAudioEncoder:
         self.dml_pad_to = dml_pad_to
         # 预计算目标长度：每 1 秒对应 13 帧 hidden_states
         self.h_target_len = self.dml_pad_to * 13
-        
+        # backend mlpackage MLModel 句柄 (仅 COREML_ANE_FULL 启用), None 表示走 ONNX backend
+        self.sess_be_mlmodel = None
+        # mlpackage 走静态形状 T=h_target_len, _run_backend 走 padding 路径
+        self.active_static_be = False
+
         # 初始化 ONNX Session Options
         sess_opts = ort.SessionOptions()
         sess_opts.log_severity_level = 3
         sess_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         sess_opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        
+
         available_providers = ort.get_available_providers()
         providers = ['CPUExecutionProvider']
         # frontend / backend 默认共用 providers; COREML_ANE_FE 会分开覆盖
         providers_fe = providers
         providers_be = providers
+        load_backend_as_mlpackage = False  # COREML_ANE_FULL 触发
 
         if self.onnx_provider in ('TRT', 'TENSORRT') and 'TensorrtExecutionProvider' in available_providers:
             providers.insert(0, ('TensorrtExecutionProvider', {
@@ -151,21 +156,25 @@ class QwenAudioEncoder:
             self.active_dml = True
         elif self.onnx_provider == 'CUDA' and 'CUDAExecutionProvider' in available_providers:
             providers.insert(0, 'CUDAExecutionProvider')
-        elif self.onnx_provider == 'COREML_ANE_FE':
-            # macOS + Apple Silicon: frontend 走 CoreML ANE, backend 保 CPU
-            # PoC 验证 (M1 Max N=2): wall -7.5%, 跟 num_threads=4 组合 -16.1%
+        elif self.onnx_provider in ('COREML_ANE_FE', 'COREML_ANE_FULL'):
+            # macOS + Apple Silicon CoreML 路径
+            # - COREML_ANE_FE   : frontend 走 CoreML ANE, backend 仍 ONNX CPU (Phase 2)
+            # - COREML_ANE_FULL : frontend ANE + backend mlpackage ANE        (Phase 3)
+            # PoC 验证 (M1 Max):
+            #   - Phase 2 FE 单变量 -7.5%, 跟 num_threads=4 组合 -16.1%
+            #   - Phase 3 backend mlpackage cos 0.999069 max_abs 4.58e-3, warm 69ms/run
             # 反例排查:
             #   - units='ALL' 抢 llama.cpp Metal -> llm_decode +73s
             #   - fmt='NeuralNetwork' silent fallback CPU 无收益
-            #   - backend 走 CoreML 卡 axis 4 op 兼容报错 (必须 CPU)
-            # 详见 spikes/qwen3_mac_hw_accel/coreml_asr_encoder.md
+            #   - backend ONNX 走 CoreML EP 卡 axis 4 op 兼容报错 (改用 mlpackage 绕过)
+            # 详见 spikes/qwen3_mac_hw_accel/{coreml_asr_encoder.md,phase3_backend/}
             import sys as _sys
             if _sys.platform != 'darwin':
                 if self.verbose:
-                    print("--- [Encoder] COREML_ANE_FE 仅 macOS 支持, fallback CPU ---")
+                    print(f"--- [Encoder] {self.onnx_provider} 仅 macOS 支持, fallback CPU ---")
             elif 'CoreMLExecutionProvider' not in available_providers:
                 if self.verbose:
-                    print("--- [Encoder] onnxruntime 未编 CoreMLExecutionProvider, fallback CPU ---")
+                    print(f"--- [Encoder] onnxruntime 未编 CoreMLExecutionProvider, {self.onnx_provider} fallback CPU ---")
             else:
                 providers_fe = [
                     ('CoreMLExecutionProvider', {
@@ -177,15 +186,38 @@ class QwenAudioEncoder:
                     'CPUExecutionProvider',
                 ]
                 providers_be = ['CPUExecutionProvider']
+                if self.onnx_provider == 'COREML_ANE_FULL':
+                    # backend 路径必须是 .mlpackage 目录; 否则降级 COREML_ANE_FE 行为
+                    be_p = Path(backend_path)
+                    if be_p.suffix == '.mlpackage' and be_p.is_dir():
+                        load_backend_as_mlpackage = True
+                    else:
+                        if self.verbose:
+                            print(
+                                f"--- [Encoder] COREML_ANE_FULL: backend_path 不是 .mlpackage 目录, "
+                                f"降级 COREML_ANE_FE (frontend ANE + backend ONNX CPU) ---"
+                            )
 
         if self.verbose:
-            print(f"--- [Encoder] 加载 Split ONNX 模型 (FE: {providers_fe[0]}, BE: {providers_be[0]}, Pad: {dml_pad_to}s) ---")
+            be_label = '.mlpackage (CoreML ANE)' if load_backend_as_mlpackage else providers_be[0]
+            print(f"--- [Encoder] 加载 Split 模型 (FE: {providers_fe[0]}, BE: {be_label}, Pad: {dml_pad_to}s) ---")
             print(f"    Frontend: {os.path.basename(frontend_path)}")
             print(f"    Backend:  {os.path.basename(backend_path)}")
 
-        # 加载两个 Session
+        # 加载 frontend (ONNX, 必有)
         self.sess_fe = ort.InferenceSession(frontend_path, sess_options=sess_opts, providers=providers_fe)
-        self.sess_be = ort.InferenceSession(backend_path, sess_options=sess_opts, providers=providers_be)
+        if load_backend_as_mlpackage:
+            # COREML_ANE_FULL: backend 走 ct.models.MLModel + CPU_AND_NE
+            # 加载 24s (cold ANE plan compile); _run_backend 走 static pad (h_target_len)
+            import coremltools as _ct
+            self.sess_be_mlmodel = _ct.models.MLModel(
+                backend_path,
+                compute_units=_ct.ComputeUnit.CPU_AND_NE,
+            )
+            self.active_static_be = True
+            self.sess_be = None  # 跟 ONNX session 区分开
+        else:
+            self.sess_be = ort.InferenceSession(backend_path, sess_options=sess_opts, providers=providers_be)
         
         self.mel_extractor = FastWhisperMel()
         
@@ -241,15 +273,44 @@ class QwenAudioEncoder:
         return hidden_states
 
     def _run_backend(self, hidden_states: np.ndarray) -> np.ndarray:
-        """后端推理流水线：Mask -> Transformer (支持固定形状 Padding)"""
+        """后端推理流水线：Mask -> Transformer (支持固定形状 Padding + mlpackage)"""
         batch, seq_len, dim = hidden_states.shape
-        
+
+        # 路径 A: COREML_ANE_FULL mlpackage backend (static shape (1, h_target_len, dim))
+        if self.sess_be_mlmodel is not None:
+            target_t = self.h_target_len
+            if seq_len > target_t:
+                # 超过 static shape 不支持; 截断 + warn (上层 chunk_size_sec 应该匹配 dml_pad_to)
+                if self.verbose:
+                    print(f"--- [Encoder] WARN: mlpackage static T={target_t}, 输入 seq_len={seq_len}, 截断 ---")
+                hidden_states = hidden_states[:, :target_t, :]
+                seq_len = target_t
+            if seq_len < target_t:
+                pad_width = target_t - seq_len
+                hidden_input = np.pad(hidden_states, ((0, 0), (0, pad_width), (0, 0)), mode='constant')
+            else:
+                hidden_input = hidden_states
+            # 2D key_padding_mask: 前 seq_len = 1 (有效), 后 = 0 (pad)
+            key_padding_mask = np.zeros((batch, target_t), dtype=np.int32)
+            key_padding_mask[:, :seq_len] = 1
+            # mlpackage 接口是 fp32 (compute_precision=FLOAT16 内部 cast)
+            pred = self.sess_be_mlmodel.predict({
+                "hidden_states": hidden_input.astype(np.float32),
+                "key_padding_mask": key_padding_mask,
+            })
+            audio_embd = pred["last_hidden_state"]
+            # 切回有效长度
+            if audio_embd.shape[1] > seq_len:
+                audio_embd = audio_embd[:, :seq_len, :]
+            return audio_embd
+
+        # 路径 B: ONNX backend (CPU / GPU 等), 跟 Phase 2 行为一致
         # 1. 形状检查与 Padding (仅在 DML 开启时执行)
         if self.active_dml and seq_len < self.h_target_len:
             pad_width = self.h_target_len - seq_len
             # 对 hidden_states 进行零填充 -> (Batch, T_fixed, D)
-            hidden_input = np.pad(hidden_states, ((0,0), (0, pad_width), (0,0)), mode='constant')
-            
+            hidden_input = np.pad(hidden_states, ((0, 0), (0, pad_width), (0, 0)), mode='constant')
+
             # 构造 Mask：前 seq_len 为 0 (关注)，后 pad_width 为 -10000.0 (屏蔽)
             # 维度需要广播到 (Batch, 1, T_fixed, T_fixed)
             mask = np.zeros((batch, 1, self.h_target_len, self.h_target_len), dtype=self.input_dtype)
@@ -257,17 +318,17 @@ class QwenAudioEncoder:
         else:
             hidden_input = hidden_states
             mask = np.zeros((batch, 1, seq_len, seq_len), dtype=self.input_dtype)
-        
+
         # 2. 执行推理
         audio_embd = self.sess_be.run(None, {
             "hidden_states": hidden_input,
             "attention_mask": mask
         })[0]
-        
+
         # 3. 截断输出 -> (Batch, seq_len, D)
         if audio_embd.shape[1] > seq_len:
             audio_embd = audio_embd[:, :seq_len, :]
-            
+
         return audio_embd
 
     def encode(self, audio: np.ndarray) -> tuple:

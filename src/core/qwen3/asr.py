@@ -52,10 +52,14 @@ class ASRResult:
     rss_delta_mb: float      # ASR 调用引入的 RSS 增量 (MB)
 
 
+_DEFAULT_BACKEND_ONNX_FN = "qwen3_asr_encoder_backend.onnx"
+_DEFAULT_BACKEND_MLPACKAGE_FN = "qwen3_asr_encoder_backend.mlpackage"
+
+
 def build_engine_config(
     model_dir: str,
     encoder_frontend_fn: str = "qwen3_asr_encoder_frontend.onnx",
-    encoder_backend_fn: str = "qwen3_asr_encoder_backend.onnx",
+    encoder_backend_fn: Optional[str] = None,
     llm_fn: str = "qwen3_asr_llm.gguf",
     onnx_provider: Optional[str] = None,
     llm_use_gpu: bool = True,
@@ -66,12 +70,18 @@ def build_engine_config(
     Args:
         model_dir: Qwen3-ASR 模型目录(含 encoder/decoder 文件).
         encoder_frontend_fn/backend_fn: 实际文件名(production 转换版去掉了默认的 .int4 后缀).
+            backend_fn 默认按 onnx_provider 自动选:
+              COREML_ANE_FULL → "qwen3_asr_encoder_backend.mlpackage"
+              其他            → "qwen3_asr_encoder_backend.onnx"
+            显式传 backend_fn 则不覆盖.
         llm_fn: GGUF 文件名.
         onnx_provider: ONNX EP. None 时按平台感知:
             - macOS (darwin): "COREML_ANE_FE" — frontend 走 ANE 验证有效
               (PoC N=2 wall -7.5%, 跟 num_threads=4 组合 -16.1%), backend 卡
               axis 4 op 兼容用 CPU. 详见 spikes/qwen3_mac_hw_accel/SUMMARY.md
             - 其他平台: "CPU"
+            通过 FUNASR_QWEN3_ASR_ENCODER_PROVIDER=coreml_ane_full 可显式启用 Phase 3
+            (frontend ANE + backend mlpackage ANE); 详见 spikes/.../phase3_backend/.
             显式传值则不覆盖.
         llm_use_gpu: llama.cpp 是否走 Metal(Apple Silicon 上必开).
         enable_aligner: production 不带 aligner, 默认 False.
@@ -94,8 +104,18 @@ def build_engine_config(
             onnx_provider = "CPU"
         elif cfg_value == "coreml_ane_fe":
             onnx_provider = "COREML_ANE_FE"
+        elif cfg_value == "coreml_ane_full":
+            onnx_provider = "COREML_ANE_FULL"
         else:  # auto / 未知值
             onnx_provider = "COREML_ANE_FE" if _sys.platform == "darwin" else "CPU"
+
+    # backend_fn 按 provider 自动选 (用户显式给则不动)
+    if encoder_backend_fn is None:
+        encoder_backend_fn = (
+            _DEFAULT_BACKEND_MLPACKAGE_FN
+            if onnx_provider == "COREML_ANE_FULL"
+            else _DEFAULT_BACKEND_ONNX_FN
+        )
 
     return ASREngineConfig(
         model_dir=model_dir,

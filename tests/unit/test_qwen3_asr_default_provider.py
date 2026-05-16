@@ -44,3 +44,45 @@ class TestBuildEngineConfigExplicitOverride:
         monkeypatch.setattr(sys, "platform", "linux")
         cfg = build_engine_config(model_dir="/tmp/fake", onnx_provider="COREML_ANE_FE")
         assert cfg.onnx_provider == "COREML_ANE_FE"
+
+
+class TestBuildEngineConfigCoremlAneFull:
+    """Phase 3: COREML_ANE_FULL 通过 config knob 触发, backend_fn 自动指向 mlpackage"""
+
+    def test_config_value_coreml_ane_full(self, monkeypatch):
+        """config.qwen3.asr_encoder_provider='coreml_ane_full' → onnx_provider == COREML_ANE_FULL"""
+        monkeypatch.setattr(sys, "platform", "darwin")
+        import src.core.config as _config_module
+        monkeypatch.setattr(_config_module.config.qwen3, "asr_encoder_provider", "coreml_ane_full")
+        cfg = build_engine_config(model_dir="/tmp/fake")
+        assert cfg.onnx_provider == "COREML_ANE_FULL"
+
+    def test_coreml_ane_full_uses_mlpackage_backend_fn(self, monkeypatch):
+        """COREML_ANE_FULL 时 encoder_backend_fn 默认指向 .mlpackage"""
+        monkeypatch.setattr(sys, "platform", "darwin")
+        cfg = build_engine_config(
+            model_dir="/tmp/fake",
+            onnx_provider="COREML_ANE_FULL",
+        )
+        assert cfg.encoder_backend_fn.endswith(".mlpackage"), (
+            f"COREML_ANE_FULL 应当默认用 mlpackage backend 文件, 实际 {cfg.encoder_backend_fn!r}"
+        )
+
+    def test_coreml_ane_full_explicit_backend_fn_preserved(self, monkeypatch):
+        """用户显式传 encoder_backend_fn, 不被覆盖"""
+        monkeypatch.setattr(sys, "platform", "darwin")
+        cfg = build_engine_config(
+            model_dir="/tmp/fake",
+            onnx_provider="COREML_ANE_FULL",
+            encoder_backend_fn="custom_backend.mlpackage",
+        )
+        assert cfg.encoder_backend_fn == "custom_backend.mlpackage"
+
+    def test_coreml_ane_fe_uses_onnx_backend_fn_not_mlpackage(self, monkeypatch):
+        """COREML_ANE_FE (Phase 2) 保持用 .onnx backend, 不受 Phase 3 影响"""
+        monkeypatch.setattr(sys, "platform", "darwin")
+        cfg = build_engine_config(
+            model_dir="/tmp/fake",
+            onnx_provider="COREML_ANE_FE",
+        )
+        assert cfg.encoder_backend_fn.endswith(".onnx")
