@@ -24,13 +24,62 @@ from loguru import logger
 from src.core.qwen3.asr import build_engine, run_asr
 from src.core.qwen3.diarize import run_diarization
 from src.core.qwen3.merge import (
+    Segment,
     filter_spurious_speakers,
     merge_asr_chunks_and_diarize,
     merge_asr_and_diarize,
     segments_to_srt,
 )
+from src.core.qwen3.postprocess import apply_short_segment_guard
 from src.models.schemas import TranscriptionResult, TranscriptionSegment
 from src.utils.file_utils import calculate_file_hash
+
+
+def apply_short_segment_guard_to_segments(
+    merged_segments: list[Segment],
+    qwen3_config,
+) -> tuple[list[Segment], dict]:
+    """把 List[Segment] 经 apply_short_segment_guard 后转回 List[Segment].
+
+    enabled=False 时直接返回原列表 (零拷贝).
+
+    Args:
+        merged_segments: 来自 merge_asr_chunks_and_diarize 的 List[Segment].
+        qwen3_config: Qwen3Config 实例 (读 short_segment_* 字段).
+
+    Returns:
+        (new_segments, stats).
+    """
+    if not qwen3_config.short_segment_guard_enabled:
+        return merged_segments, {"enabled": False}
+    # 转 dict (speaker int -> str, postprocess 用字符串比较)
+    seg_dicts = [
+        {
+            "start": float(s.start),
+            "end": float(s.end),
+            "speaker": str(s.speaker),
+            "text": s.text,
+        }
+        for s in merged_segments
+    ]
+    out_dicts, stats = apply_short_segment_guard(
+        seg_dicts,
+        enabled=True,
+        short_drop_sec=qwen3_config.short_segment_drop_sec,
+        aba_max_mid_sec=qwen3_config.short_segment_aba_max_mid_sec,
+        merge_same=qwen3_config.short_segment_merge_same,
+    )
+    # 转回 Segment (speaker str -> int)
+    out_segments = [
+        Segment(
+            start=float(d["start"]),
+            end=float(d["end"]),
+            speaker=int(d["speaker"]),
+            text=d["text"],
+        )
+        for d in out_dicts
+    ]
+    return out_segments, stats
 
 
 class Qwen3DiarizeTranscriber:
@@ -53,6 +102,11 @@ class Qwen3DiarizeTranscriber:
         # filter_spurious 参数
         spurious_min_total: float = 2.0,
         spurious_min_share: float = 0.01,
+        # PR2 short-segment guard 参数 (与 Qwen3Config 字段对齐, 鸭子类型供 helper 读)
+        short_segment_guard_enabled: bool = True,
+        short_segment_drop_sec: float = 1.5,
+        short_segment_aba_max_mid_sec: float = 1.5,
+        short_segment_merge_same: bool = True,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -65,6 +119,10 @@ class Qwen3DiarizeTranscriber:
         self.temperature = temperature
         self.spurious_min_total = spurious_min_total
         self.spurious_min_share = spurious_min_share
+        self.short_segment_guard_enabled = short_segment_guard_enabled
+        self.short_segment_drop_sec = short_segment_drop_sec
+        self.short_segment_aba_max_mid_sec = short_segment_aba_max_mid_sec
+        self.short_segment_merge_same = short_segment_merge_same
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -158,6 +216,20 @@ class Qwen3DiarizeTranscriber:
             merged_segments = merge_asr_chunks_and_diarize(asr_result.chunks, filtered_turns)
         else:
             merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
+
+        # PR2: short-segment guard 后处理 (drop tiny / ABA 平滑 / 合并同 spk)
+        # 由 config 控制开关与阈值, 默认全开. SRT/JSON 都走 guard 后的 segments.
+        merged_segments, guard_stats = apply_short_segment_guard_to_segments(
+            merged_segments, self
+        )
+        if guard_stats.get("enabled"):
+            logger.info(
+                f"[{task_id}] short-guard: drop={guard_stats.get('drop', {}).get('dropped_total', 0)} "
+                f"aba={guard_stats.get('aba', {}).get('changed', 0)} "
+                f"merge_same={guard_stats.get('merge', {}).get('merged', 0)} "
+                f"final_segments={len(merged_segments)}"
+            )
+
         await self._report_progress(progress_callback, 90, task_id)
 
         file_hash = await calculate_file_hash(audio_path)
@@ -256,6 +328,10 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         provider=q.provider,
         language=q.language,
         temperature=q.temperature,
+        short_segment_guard_enabled=q.short_segment_guard_enabled,
+        short_segment_drop_sec=q.short_segment_drop_sec,
+        short_segment_aba_max_mid_sec=q.short_segment_aba_max_mid_sec,
+        short_segment_merge_same=q.short_segment_merge_same,
     )
     return _qwen3_singleton
 
