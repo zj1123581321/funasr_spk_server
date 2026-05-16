@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.dylib
 .Python
 env/
 venv/
@@ -22,6 +23,13 @@ nul
 *.sqlite
 ref_codes/
 /tests/output/
+# tmp_long_audio: 排除内部所有内容, 但保留 eval_set/README.md 文档入库
+/tmp_long_audio/*
+!/tmp_long_audio/eval_set/
+/tmp_long_audio/eval_set/*
+!/tmp_long_audio/eval_set/README.md
+# Claude Code local 配置不入库
+.claude/
 src/cpp
 version_backup/
 tests/manual/performance/output
