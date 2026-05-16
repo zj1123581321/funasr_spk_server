@@ -31,10 +31,20 @@ class WordItem:
 
 
 @dataclass
+class ASRChunkItem:
+    """Qwen3-ASR 内部分片的粗粒度时间戳."""
+    text: str
+    start: float
+    end: float
+    index: int
+
+
+@dataclass
 class ASRResult:
     """ASR 输出"""
     text: str
     items: List[WordItem]   # 词级时间戳
+    chunks: List[ASRChunkItem]  # 40s ASR chunk 级时间戳
     duration: float          # 音频时长 (sec)
     elapsed: float           # ASR 总耗时 (sec)
     rtf: float               # elapsed / duration
@@ -88,6 +98,80 @@ def build_engine(model_dir: str):
     return engine
 
 
+def _load_audio_file(audio_file: str, start_second: Optional[float] = None, duration: Optional[float] = None):
+    """Load audio through vendor helper.
+
+    Kept as a tiny wrapper so unit tests can patch it without importing the
+    vendor package, whose ``__init__`` eagerly loads llama.cpp dylibs.
+    """
+    from src.core.vendor.qwen_asr_gguf.inference.audio import load_audio
+
+    if start_second is None and duration is None:
+        return load_audio(audio_file)
+    return load_audio(audio_file, start_second=start_second, duration=duration)
+
+
+def _run_asr_loaded_audio(
+    audio,
+    engine,
+    language: str = "Chinese",
+    temperature: float = 0.4,
+    label: str = "audio",
+) -> ASRResult:
+    """Run ASR on an already-loaded 16kHz mono numpy array."""
+    proc = psutil.Process()
+    rss_before = proc.memory_info().rss
+
+    duration = len(audio) / 16000.0
+
+    t0 = time.time()
+    cfg = getattr(engine, "config", None)
+    result = engine.asr(
+        audio=audio,
+        context=None,
+        language=language,
+        chunk_size_sec=getattr(cfg, "chunk_size", 40.0),
+        memory_chunks=getattr(cfg, "memory_num", 1),
+        temperature=temperature,
+    )
+    elapsed = time.time() - t0
+
+    rss_after = proc.memory_info().rss
+    peak_rss = rss_after  # psutil 在 macOS 不支持 peak_rss, 用 after 作为代理
+
+    items: List[WordItem] = []
+    if result.alignment and result.alignment.items:
+        for it in result.alignment.items:
+            items.append(WordItem(text=it.text, start=it.start_time, end=it.end_time))
+
+    chunks: List[ASRChunkItem] = []
+    for chunk in getattr(result, "chunks", []) or []:
+        chunks.append(
+            ASRChunkItem(
+                text=chunk.text,
+                start=float(chunk.start_time),
+                end=float(chunk.end_time),
+                index=int(chunk.index),
+            )
+        )
+
+    rtf = elapsed / duration if duration > 0 else 0.0
+    logger.info(
+        f"ASR 完成: label={label} duration={duration:.2f}s elapsed={elapsed:.2f}s "
+        f"RTF={rtf:.3f} chars={len(result.text)}"
+    )
+    return ASRResult(
+        text=result.text,
+        items=items,
+        chunks=chunks,
+        duration=duration,
+        elapsed=elapsed,
+        rtf=rtf,
+        peak_rss_mb=peak_rss / (1024 * 1024),
+        rss_delta_mb=(rss_after - rss_before) / (1024 * 1024),
+    )
+
+
 def run_asr(
     audio_file: str,
     engine,
@@ -110,42 +194,38 @@ def run_asr(
       - 自己 load_audio(audio_file) 拿 numpy → engine.asr(audio, ...)
       - 不启 aligner — production 没 aligner 模型, 只拿全文 + segment 级时间(40s chunk)
     """
-    from src.core.vendor.qwen_asr_gguf.inference.audio import load_audio
-
-    proc = psutil.Process()
-    rss_before = proc.memory_info().rss
-
-    audio = load_audio(audio_file)
-    duration = len(audio) / 16000.0
-
-    t0 = time.time()
-    result = engine.asr(
+    audio = _load_audio_file(audio_file)
+    return _run_asr_loaded_audio(
         audio=audio,
-        context=None,
+        engine=engine,
         language=language,
         temperature=temperature,
+        label=audio_file,
     )
-    elapsed = time.time() - t0
 
-    rss_after = proc.memory_info().rss
-    peak_rss = rss_after  # psutil 在 macOS 不支持 peak_rss, 用 after 作为代理
 
-    items: List[WordItem] = []
-    if result.alignment and result.alignment.items:
-        for it in result.alignment.items:
-            items.append(WordItem(text=it.text, start=it.start_time, end=it.end_time))
+def run_asr_window(
+    audio_file: str,
+    engine,
+    start_second: float,
+    duration: float,
+    language: str = "Chinese",
+    temperature: float = 0.4,
+) -> ASRResult:
+    """Run ASR on a bounded audio window while reusing the same engine.
 
-    rtf = elapsed / duration if duration > 0 else 0.0
-    logger.info(
-        f"ASR 完成: duration={duration:.2f}s elapsed={elapsed:.2f}s "
-        f"RTF={rtf:.3f} chars={len(result.text)}"
-    )
-    return ASRResult(
-        text=result.text,
-        items=items,
-        duration=duration,
-        elapsed=elapsed,
-        rtf=rtf,
-        peak_rss_mb=peak_rss / (1024 * 1024),
-        rss_delta_mb=(rss_after - rss_before) / (1024 * 1024),
+    This is the PoC entry point for long-audio macro segments.  It avoids the
+    vendor ``transcribe(duration=0.0)`` footgun and keeps the wrapper's
+    ``ASRResult`` metrics shape.
+    """
+    if duration <= 0:
+        raise ValueError("duration must be > 0 for run_asr_window")
+
+    audio = _load_audio_file(audio_file, start_second=start_second, duration=duration)
+    return _run_asr_loaded_audio(
+        audio=audio,
+        engine=engine,
+        language=language,
+        temperature=temperature,
+        label=f"{audio_file}@{start_second:.1f}+{duration:.1f}",
     )

@@ -25,6 +25,7 @@ from src.core.qwen3.asr import build_engine, run_asr
 from src.core.qwen3.diarize import run_diarization
 from src.core.qwen3.merge import (
     filter_spurious_speakers,
+    merge_asr_chunks_and_diarize,
     merge_asr_and_diarize,
     segments_to_srt,
 )
@@ -152,8 +153,11 @@ class Qwen3DiarizeTranscriber:
             audio_duration=asr_result.duration,
         )
 
-        # 文本切分到 turns
-        merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
+        # 文本切分到 turns。优先使用 Qwen3-ASR 内部 chunk 时间窗，避免整段线性切字漂移。
+        if asr_result.chunks:
+            merged_segments = merge_asr_chunks_and_diarize(asr_result.chunks, filtered_turns)
+        else:
+            merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
         await self._report_progress(progress_callback, 90, task_id)
 
         file_hash = await calculate_file_hash(audio_path)
@@ -164,6 +168,15 @@ class Qwen3DiarizeTranscriber:
             "asr_rtf": asr_result.rtf,
             "asr_duration": asr_result.duration,
             "asr_elapsed": asr_result.elapsed,
+            "asr_chunks": [
+                {
+                    "index": c.index,
+                    "start": c.start,
+                    "end": c.end,
+                    "text": c.text,
+                }
+                for c in asr_result.chunks
+            ],
             "turns": turns,
             "filtered_turns": filtered_turns,
             "engine": "qwen3",

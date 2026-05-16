@@ -23,6 +23,7 @@ def _fake_asr_result(text: str = "你好啊我是说话人一你好啊我是说�
     return ASRResult(
         text=text,
         items=[],
+        chunks=[],
         duration=duration,
         elapsed=1.0,
         rtf=0.1,

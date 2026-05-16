@@ -112,3 +112,18 @@ class TranscribeResult:
     text: str
     alignment: Optional[ForcedAlignResult] = None
     performance: Optional[dict] = None
+    chunks: List["ASRChunk"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ASRChunk:
+    """ASR 内部分片文本及其音频时间窗.
+
+    这不是 forced alignment。它只表示 Qwen3-ASR 内部 40s chunk 的
+    粗粒度时间边界, 用于长音频场景下比整窗线性切字更稳地合并
+    diarization turn。
+    """
+    index: int
+    text: str
+    start_time: float
+    end_time: float

@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import deque
 from typing import Optional, List
 
-from .schema import MsgType, StreamingMessage, DecodeResult, ASREngineConfig, TranscribeResult, ForcedAlignItem, ForcedAlignResult
+from .schema import MsgType, StreamingMessage, DecodeResult, ASREngineConfig, TranscribeResult, ForcedAlignItem, ForcedAlignResult, ASRChunk
 from .utils import normalize_language_name, validate_language
 from .encoder import QwenAudioEncoder
 from . import llama
@@ -335,5 +335,15 @@ class QwenASREngine:
         return TranscribeResult(
             text=total_full_text,
             alignment=ForcedAlignResult(items=all_aligned_items) if all_aligned_items else None,
-            performance=stats
+            performance=stats,
+            chunks=[
+                ASRChunk(
+                    index=seg.idx,
+                    text=seg.text,
+                    start_time=float(seg.audio_start),
+                    end_time=float(seg.audio_end),
+                )
+                for seg in all_segments
+                if seg.text
+            ],
         )

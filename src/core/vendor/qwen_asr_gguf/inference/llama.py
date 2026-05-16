@@ -228,9 +228,35 @@ def bind_llama_lib():
         GGML_BASE_DLL = "libggml-base.so"
         LLAMA_DLL = "libllama.so"
 
-    ggml = ctypes.CDLL(os.path.join(lib_dir, GGML_DLL))
-    ggml_base = ctypes.CDLL(os.path.join(lib_dir, GGML_BASE_DLL))
-    llama = ctypes.CDLL(os.path.join(lib_dir, LLAMA_DLL))
+    # PR4: 新版 ggml 把 backend 拆成多个 dylib (cpu/blas/metal). libggml.dylib 通过
+    # @rpath 引用它们; nohup/SIP 等场景 DYLD_LIBRARY_PATH 会被 strip, 必须显式 preload
+    # 使后端 symbol 进入全局 namespace, 这样 libggml 加载 @rpath/libggml-cpu.0.dylib 时
+    # 已经被 dyld 当 alias 命中.
+    _preload_dlls = []
+    if sys.platform == "darwin":
+        _preload_dlls = [
+            "libggml-base.dylib",
+            "libggml-cpu.dylib",
+            "libggml-blas.dylib",  # 可选
+            "libggml-metal.dylib",  # Apple Silicon GPU 后端
+        ]
+    elif sys.platform.startswith("linux"):
+        _preload_dlls = [
+            "libggml-base.so",
+            "libggml-cpu.so",
+        ]
+    for dll_name in _preload_dlls:
+        dll_path = os.path.join(lib_dir, dll_name)
+        if os.path.exists(dll_path):
+            try:
+                ctypes.CDLL(dll_path, mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                # 缺少可选后端 (blas) 不阻塞
+                pass
+
+    ggml = ctypes.CDLL(os.path.join(lib_dir, GGML_DLL), mode=ctypes.RTLD_GLOBAL)
+    ggml_base = ctypes.CDLL(os.path.join(lib_dir, GGML_BASE_DLL), mode=ctypes.RTLD_GLOBAL)
+    llama = ctypes.CDLL(os.path.join(lib_dir, LLAMA_DLL), mode=ctypes.RTLD_GLOBAL)
 
     # 设置日志回调
     LOG_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
