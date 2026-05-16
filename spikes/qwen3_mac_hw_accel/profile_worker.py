@@ -32,8 +32,9 @@ def main():
     p.add_argument("--num-threads", type=int, default=8)
     p.add_argument("--provider", type=str, default="cpu", choices=["cpu", "coreml"])
     p.add_argument("--onnx-provider", type=str, default="CPU",
-                   choices=["CPU", "COREML"],
-                   help="ASR encoder ONNX EP (方向 1 用 COREML)")
+                   choices=["CPU", "COREML", "COREML_ANE_FE", "COREML_ANE_FULL"],
+                   help="ASR encoder ONNX EP. COREML_ANE_FE=Phase 2 (fe ANE), "
+                        "COREML_ANE_FULL=Phase 3 (fe ANE + be mlpackage ANE)")
     p.add_argument("--enable-coreml-asr-patch", action="store_true",
                    help="开启后, monkey-patch vendor encoder 强制走 CoreMLExecutionProvider")
     p.add_argument("--coreml-units", type=str, default="ALL",

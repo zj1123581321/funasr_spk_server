@@ -233,6 +233,11 @@ class QwenAudioEncoder:
             if self.verbose: print(f"--- [Encoder] 正在预热 (固定形状: {self.dml_pad_to}s)... ---")
             dummy_wav = np.zeros(int(16000 * self.dml_pad_to)).astype(np.float32)
             _ = self.encode(dummy_wav)
+        elif self.sess_be_mlmodel is not None:
+            # COREML_ANE_FULL: 预热必须 padding 到 h_target_len (mlpackage static shape)
+            if self.verbose: print(f"--- [Encoder] 正在预热 mlpackage (固定形状: {self.dml_pad_to}s)... ---")
+            dummy_wav = np.zeros(int(16000 * self.dml_pad_to)).astype(np.float32)
+            _ = self.encode(dummy_wav)
         else:
             # 非 DML 模式下，预热一个短音频即可，无需 Padding
             if self.verbose: print(f"--- [Encoder] 正在预热 (非 DML 模式)... ---")

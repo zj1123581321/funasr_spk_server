@@ -1,0 +1,19 @@
+{
+  "tag": "verify_phase3_d2_ane_full_t4",
+  "mode": "n2",
+  "num_threads": 4,
+  "provider": "cpu",
+  "onnx_provider": "COREML_ANE_FULL",
+  "coreml_asr_patch": false,
+  "wall_total": 75.96292400360107,
+  "tasks": {
+    "1spk-16min": {
+      "error": "no json",
+      "rc": -11
+    },
+    "4spk-44min": {
+      "error": "no json",
+      "rc": -11
+    }
+  }
+}
