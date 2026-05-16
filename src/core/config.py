@@ -71,6 +71,13 @@ class Qwen3Config(BaseModel):
     language: str = "Chinese"
     temperature: float = 0.4
 
+    # PR2: short-segment guard 后处理
+    # 默认开启 (PoC v12 数据显示对所有 baseline 都正向, 见 docs/开发/PR4-149min校对稿对比分析.md)
+    short_segment_guard_enabled: bool = True
+    short_segment_drop_sec: float = 1.5
+    short_segment_aba_max_mid_sec: float = 1.5
+    short_segment_merge_same: bool = True
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -269,6 +276,11 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "provider", "FUNASR_QWEN3_PROVIDER")
         cls._override_if_set(config_data["qwen3"], "language", "FUNASR_QWEN3_LANGUAGE")
         cls._override_if_set(config_data["qwen3"], "temperature", "FUNASR_QWEN3_TEMPERATURE", float)
+        # PR2 short-segment guard
+        cls._override_if_set(config_data["qwen3"], "short_segment_guard_enabled", "FUNASR_QWEN3_SHORT_GUARD_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "short_segment_drop_sec", "FUNASR_QWEN3_SHORT_DROP_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "short_segment_aba_max_mid_sec", "FUNASR_QWEN3_SHORT_ABA_MAX_MID_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "short_segment_merge_same", "FUNASR_QWEN3_SHORT_MERGE_SAME", cls._parse_bool)
         # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
         _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
         if _num_spk_env is not None:
