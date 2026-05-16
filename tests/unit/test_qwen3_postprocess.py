@@ -255,3 +255,56 @@ class TestMergeConsecutiveSameSpeaker:
         out, merged = merge_consecutive_same_speaker(segments, merge_gap_sec=0.05)
         assert len(out) == 2
         assert merged == 0
+
+
+class TestApplyShortSegmentGuard:
+    """apply_short_segment_guard: 入口函数, 串联 drop_tiny / aba / merge_same."""
+
+    def test_disabled_returns_original_segments(self) -> None:
+        """enabled=False 时直接返回原 segments, 不做任何处理."""
+        from src.core.qwen3.postprocess import apply_short_segment_guard
+
+        segments = [
+            _seg(0.0, 0.1, "0", "本来是 tiny 段"),  # tiny 但应保留
+            _seg(0.1, 0.5, "1", "对"),
+        ]
+        out, stats = apply_short_segment_guard(segments, enabled=False)
+        assert out == segments
+        assert stats == {} or stats.get("enabled") is False
+
+    def test_full_pipeline_drops_ghost_smooths_aba_merges_same(self) -> None:
+        """完整 pipeline: 0s ghost drop + ABA backchannel 平滑 + 同 speaker 合并.
+
+        显式 short_drop_sec=0.1 让 0s ghost 被 drop 但 0.3s "对" 段保留, ABA 才能处理.
+        """
+        from src.core.qwen3.postprocess import apply_short_segment_guard
+
+        segments = [
+            _seg(0.0, 3.0, "0", "前段"),
+            _seg(3.0, 3.0, "1", "幽灵"),  # 0s tiny ghost
+            _seg(3.5, 5.5, "0", "中段"),
+            _seg(5.5, 5.8, "1", "对"),  # ABA backchannel, dur=0.3
+            _seg(5.8, 8.0, "0", "后段"),
+        ]
+        out, stats = apply_short_segment_guard(
+            segments, short_drop_sec=0.1, aba_max_mid_sec=1.5
+        )
+        # 0s ghost 段应被 drop (并入 prev)
+        assert stats.get("drop", {}).get("dropped_total", 0) >= 1
+        # ABA backchannel "对" 应被改 speaker
+        assert stats.get("aba", {}).get("changed", 0) >= 1
+        # 全部成 speaker 0 之后, 应该被 merge_consecutive_same_speaker 合并
+        assert stats.get("merge", {}).get("merged", 0) >= 1
+        assert all(s["speaker"] == "0" for s in out)
+
+    def test_merge_same_flag_disables_consecutive_merge(self) -> None:
+        """merge_same=False 时, 同 speaker 段不合并 (但 drop/aba 仍跑)."""
+        from src.core.qwen3.postprocess import apply_short_segment_guard
+
+        segments = [
+            _seg(0.0, 2.0, "0", "前"),
+            _seg(2.0, 4.0, "0", "续"),  # 同 spk, gap=0, 默认会被 merge
+        ]
+        out, stats = apply_short_segment_guard(segments, merge_same=False)
+        assert len(out) == 2
+        assert stats.get("merge") is None or stats["merge"].get("merged", 0) == 0

@@ -135,6 +135,44 @@ def aba_smoothing(
     return out, {"changed": changed}
 
 
+def apply_short_segment_guard(
+    segments: list[dict],
+    enabled: bool = True,
+    short_drop_sec: float = 1.5,
+    aba_max_mid_sec: float = 1.5,
+    merge_same: bool = True,
+    merge_gap_sec: float = 0.05,
+) -> tuple[list[dict], dict]:
+    """short-segment guard 完整 pipeline 入口.
+
+    依次跑: drop_tiny_segments -> aba_smoothing -> merge_consecutive_same_speaker.
+    enabled=False 时直接返回原 segments.
+
+    Args:
+        segments: ordered list of {start, end, speaker, text}.
+        enabled: 是否启用 guard. False 时直接返回输入.
+        short_drop_sec: drop_tiny_segments 阈值.
+        aba_max_mid_sec: aba_smoothing 中间段最大时长.
+        merge_same: 是否在 ABA 后合并同 speaker.
+        merge_gap_sec: merge_consecutive_same_speaker 的 gap 阈值.
+
+    Returns:
+        (new_segments, stats) — stats 含各阶段子 stats + enabled flag.
+    """
+    if not enabled:
+        return list(segments), {"enabled": False}
+    cur = list(segments)
+    stats: dict = {"enabled": True}
+    cur, drop_stats = drop_tiny_segments(cur, min_sec=short_drop_sec)
+    stats["drop"] = drop_stats
+    cur, aba_stats = aba_smoothing(cur, max_mid_sec=aba_max_mid_sec)
+    stats["aba"] = aba_stats
+    if merge_same:
+        cur, merged = merge_consecutive_same_speaker(cur, merge_gap_sec=merge_gap_sec)
+        stats["merge"] = {"merged": merged}
+    return cur, stats
+
+
 def merge_consecutive_same_speaker(
     segments: list[dict], merge_gap_sec: float = 0.05
 ) -> tuple[list[dict], int]:
