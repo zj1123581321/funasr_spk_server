@@ -117,3 +117,65 @@ class TestBuildCentroids:
         }
         centroids = build_centroids(extractor_fn, np.zeros(64000), segs_by_spk)
         assert set(centroids.keys()) == {"0"}
+
+
+class TestMergeMainHighConf:
+    """merge_main_high_conf: 两个 main cluster cos ≥ threshold 合并, dominant 吃 recessive."""
+
+    def test_two_mains_above_threshold_merged(self) -> None:
+        """cos≥0.78, share 大的吃 share 小的."""
+        from src.core.qwen3.cluster_merge import merge_main_high_conf
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.99, 0.01]) / np.linalg.norm([0.99, 0.01]),  # cos~1
+        }
+        shares = {"0": 0.6, "1": 0.4}
+        main_set = ["0", "1"]
+        mapping_updates, remaining_mains, log = merge_main_high_conf(
+            centroids, shares, main_set, merge_threshold=0.78
+        )
+        # share 大的 "0" 吃 "1"
+        assert mapping_updates == {"1": "0"}
+        assert remaining_mains == ["0"]
+        assert len(log) == 1
+        assert log[0]["action"] == "main_merged_high_conf"
+        assert log[0]["from"] == "1" and log[0]["to"] == "0"
+
+    def test_two_mains_below_threshold_not_merged(self) -> None:
+        """cos<0.78, 不合并."""
+        from src.core.qwen3.cluster_merge import merge_main_high_conf
+
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.0, 1.0]),  # cos=0
+        }
+        shares = {"0": 0.6, "1": 0.4}
+        main_set = ["0", "1"]
+        mapping_updates, remaining_mains, log = merge_main_high_conf(
+            centroids, shares, main_set, merge_threshold=0.78
+        )
+        assert mapping_updates == {}
+        assert set(remaining_mains) == {"0", "1"}
+        assert log == []
+
+    def test_multi_round_until_stable(self) -> None:
+        """3 个 main 都相似 (cos~1), 多轮合并到 1 个 (share 最大者)."""
+        from src.core.qwen3.cluster_merge import merge_main_high_conf
+
+        # 3 个相似 cluster
+        centroids = {
+            "0": np.array([1.0, 0.0]),
+            "1": np.array([0.99, 0.01]) / np.linalg.norm([0.99, 0.01]),
+            "2": np.array([0.98, 0.02]) / np.linalg.norm([0.98, 0.02]),
+        }
+        shares = {"0": 0.5, "1": 0.3, "2": 0.2}
+        main_set = ["0", "1", "2"]
+        mapping_updates, remaining_mains, log = merge_main_high_conf(
+            centroids, shares, main_set, merge_threshold=0.78
+        )
+        # 都合并到 "0"
+        assert remaining_mains == ["0"]
+        assert mapping_updates.get("1") == "0"
+        assert mapping_updates.get("2") == "0"
+        assert len(log) == 2

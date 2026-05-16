@@ -59,3 +59,57 @@ def build_centroids(
         n = float(np.linalg.norm(c))
         centroids[sp] = c / n if n > 0 else c
     return centroids
+
+
+def merge_main_high_conf(
+    centroids: dict,
+    shares: dict,
+    main_set: list,
+    merge_threshold: float = 0.78,
+) -> tuple[dict, list, list]:
+    """两个 main cluster cos ≥ threshold 合并, dominant (share 大) 吃 recessive.
+
+    多轮直到无 merge.
+
+    Args:
+        centroids: dict[sp -> np.ndarray (L2 normalized)].
+        shares: dict[sp -> float], 用于决定 dominant.
+        main_set: list of speaker keys that are "main".
+        merge_threshold: cosine 阈值, 默认 0.78.
+
+    Returns:
+        (mapping_updates, remaining_mains, log)
+        mapping_updates: dict[recessive_sp -> dominant_sp]
+        remaining_mains: 合并后剩余的 main speakers.
+        log: list of {action, from, to, sim}.
+    """
+    mapping_updates: dict = {}
+    remaining_mains = list(main_set)
+    log: list = []
+    while True:
+        merged_any = False
+        for i, sp_i in enumerate(remaining_mains):
+            for sp_j in remaining_mains[i + 1:]:
+                sim = cosine(centroids.get(sp_i), centroids.get(sp_j))
+                if sim >= merge_threshold:
+                    dom = sp_i if shares.get(sp_i, 0) >= shares.get(sp_j, 0) else sp_j
+                    rec = sp_j if dom == sp_i else sp_i
+                    # 透传: 已被 map 走的 recessive, 要继续 map 到新 dom
+                    for k, v in list(mapping_updates.items()):
+                        if v == rec:
+                            mapping_updates[k] = dom
+                    mapping_updates[rec] = dom
+                    log.append({
+                        "action": "main_merged_high_conf",
+                        "from": rec,
+                        "to": dom,
+                        "sim": round(sim, 4),
+                    })
+                    remaining_mains.remove(rec)
+                    merged_any = True
+                    break
+            if merged_any:
+                break
+        if not merged_any:
+            break
+    return mapping_updates, remaining_mains, log
