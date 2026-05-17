@@ -26,6 +26,8 @@ PR4 长音频 speaker 识别评测用。统一时长 ≤ 60min，覆盖 1/2/4/6 
 
 ## 当前评测结果 (2026-05-16)
 
+> **Note**: 本表数据来源是 `tests/manual/server/qwen3_long_audio_poc.py` 三阶段手工脚本(直接 mp3/m4a 读, 不走 production worker)。Production pipeline (`Qwen3PoolTranscriber`) 曾在 `cd578a8` (2026-05-15 worker 加 ffmpeg 转换) 引入 2spk_60min over-detect 回归 (final 4 spk), `fix/qwen3-spk-overdetect` PR (commit `bbdb173` + `a843b27`, 2026-05-17) 修复后跟本 baseline 完全对齐。详见调研报告 `docs/开发/archive/spk-over-detect-归因调研结果.md` §9, production 路径回归测试见 `tests/integration/test_qwen3_spk_overdetect_fix.py`。
+
 | 样本 | 真实人数 | baseline 检测 | merged | final | 段数 | <1s% | 评估 |
 |---|---:|---:|---:|---:|---:|---:|---|
 | 1spk_real | **1** | 1 | 1 | **1** | 10 | 0.0% | ✓ **完美单人** |
