@@ -30,10 +30,12 @@ from src.core.qwen3.merge import (
     merge_asr_chunks_and_diarize,
     merge_asr_and_diarize,
     segments_to_srt,
+    snap_segments_to_silence,
 )
 from src.core.qwen3.postprocess import apply_short_segment_guard
 from src.models.schemas import TranscriptionResult, TranscriptionSegment
 from src.utils.file_utils import calculate_file_hash
+from src.utils.silence_detect import ffmpeg_speech_regions
 
 
 def build_embedding_extractor_fn(cfg_like):
@@ -118,6 +120,53 @@ def apply_cluster_centroid_merge_to_turns(
     return out, log
 
 
+def apply_silence_align_to_segments(
+    segments: list[Segment],
+    audio_path: str,
+    audio_duration: float,
+    qwen3_config,
+) -> tuple[list[Segment], dict]:
+    """对 Segment 列表做 silence-aware 切点吸附 (snap-to-silence).
+
+    enabled=False 时直接返回原列表 (零开销, 不跑 ffmpeg).
+    ffmpeg silencedetect 在 60min 上 ~2s, 整体 RTF 影响 <1%.
+
+    Args:
+        segments: merge_asr_chunks_and_diarize (+short_guard) 后的 Segment 列表.
+        audio_path: 已转好的 wav 路径 (worker 内 actual_audio_path).
+        audio_duration: 音频总时长 (秒).
+        qwen3_config: Qwen3Config 实例 (读 silence_* 字段).
+
+    Returns:
+        (new_segments, stats). stats 含 enabled / snapped_starts / snapped_ends 等.
+        ffmpeg 失败时返回原列表 + stats 含 error 字段, 不阻塞主流程.
+    """
+    if not getattr(qwen3_config, "silence_align_enabled", True):
+        return segments, {"enabled": False}
+    if not segments:
+        return segments, {"enabled": True, "skipped": "empty_segments"}
+    try:
+        speech_regions = ffmpeg_speech_regions(
+            audio_path,
+            audio_duration,
+            noise_db=qwen3_config.silence_vad_noise_db,
+            min_silence_sec=qwen3_config.silence_vad_min_silence_sec,
+        )
+    except Exception as exc:
+        # ffmpeg 失败不应阻塞转录, 退化为不做 snap
+        return segments, {"enabled": True, "error": str(exc)}
+    new_segs, stats = snap_segments_to_silence(
+        segments,
+        speech_regions,
+        audio_duration,
+        tolerance=qwen3_config.silence_align_tolerance_sec,
+        min_segment_dur=qwen3_config.silence_align_min_segment_dur_sec,
+    )
+    stats["enabled"] = True
+    stats["speech_regions_count"] = len(speech_regions)
+    return new_segs, stats
+
+
 def apply_short_segment_guard_to_segments(
     merged_segments: list[Segment],
     qwen3_config,
@@ -197,6 +246,12 @@ class Qwen3DiarizeTranscriber:
         cluster_merge_main_threshold: float = 0.78,
         cluster_merge_dominant_share: float = 0.6,
         cluster_merge_dominant_threshold: float = 0.6,
+        # silence-aware 切点对齐 (spike 405abf6)
+        silence_align_enabled: bool = True,
+        silence_align_tolerance_sec: float = 2.0,
+        silence_align_min_segment_dur_sec: float = 0.1,
+        silence_vad_noise_db: str = "-25dB",
+        silence_vad_min_silence_sec: float = 0.20,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -219,6 +274,11 @@ class Qwen3DiarizeTranscriber:
         self.cluster_merge_main_threshold = cluster_merge_main_threshold
         self.cluster_merge_dominant_share = cluster_merge_dominant_share
         self.cluster_merge_dominant_threshold = cluster_merge_dominant_threshold
+        self.silence_align_enabled = silence_align_enabled
+        self.silence_align_tolerance_sec = silence_align_tolerance_sec
+        self.silence_align_min_segment_dur_sec = silence_align_min_segment_dur_sec
+        self.silence_vad_noise_db = silence_vad_noise_db
+        self.silence_vad_min_silence_sec = silence_vad_min_silence_sec
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -372,6 +432,33 @@ class Qwen3DiarizeTranscriber:
                 f"final_segments={len(merged_segments)}"
             )
 
+        # silence-aware 切点对齐 (spike 405abf6): ffmpeg silencedetect 把段切点
+        # 吸附到最近静音中点. 60s podcast align_ratio +19pp, 60min long +33pp.
+        # 放在 short-guard 之后, 在干净段上吸附. ffmpeg 调用走线程池避免阻塞.
+        # ffmpeg 失败时 helper 内部 fallback 为原 segments, 不阻塞主流程.
+        merged_segments, silence_stats = await loop.run_in_executor(
+            None,
+            apply_silence_align_to_segments,
+            merged_segments,
+            audio_path,
+            asr_result.duration,
+            self,
+        )
+        if silence_stats.get("enabled"):
+            if silence_stats.get("error"):
+                logger.warning(
+                    f"[{task_id}] silence-align: ffmpeg 失败, 跳过 ({silence_stats['error']})"
+                )
+            else:
+                logger.info(
+                    f"[{task_id}] silence-align: "
+                    f"snap_starts={silence_stats.get('snapped_starts', 0)}/{silence_stats.get('total_starts', 0)} "
+                    f"snap_ends={silence_stats.get('snapped_ends', 0)}/{silence_stats.get('total_ends', 0)} "
+                    f"skip_zero={silence_stats.get('skipped_zero_dur', 0)} "
+                    f"tol={silence_stats.get('tolerance_sec')}s "
+                    f"speech_regions={silence_stats.get('speech_regions_count', 0)}"
+                )
+
         await self._report_progress(progress_callback, 90, task_id)
 
         file_hash = await calculate_file_hash(audio_path)
@@ -480,6 +567,11 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         cluster_merge_main_threshold=q.cluster_merge_main_threshold,
         cluster_merge_dominant_share=q.cluster_merge_dominant_share,
         cluster_merge_dominant_threshold=q.cluster_merge_dominant_threshold,
+        silence_align_enabled=q.silence_align_enabled,
+        silence_align_tolerance_sec=q.silence_align_tolerance_sec,
+        silence_align_min_segment_dur_sec=q.silence_align_min_segment_dur_sec,
+        silence_vad_noise_db=q.silence_vad_noise_db,
+        silence_vad_min_silence_sec=q.silence_vad_min_silence_sec,
     )
     # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
     _qwen3_singleton.embedding_model = q.embedding_model

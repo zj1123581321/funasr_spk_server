@@ -22,7 +22,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, List
 
 
@@ -239,6 +239,168 @@ def merge_asr_chunks_and_diarize(chunks: Iterable, turns: List[dict]) -> List[Se
             )
 
     return segments
+
+
+# ==================== silence-aware 段切点对齐 ====================
+#
+# 携进自 spikes/qwen3_silence_align (spike commit 405abf6).
+#
+# 目标: 把 merge_asr_chunks_and_diarize 输出的段切点吸附到最近静音中点,
+# 解决 Qwen3 chunk 硬边界 (40s 内部 chunk + 12min macro window) 引入的
+# "切在话中间" 问题. 60s podcast: align_ratio 54.55% → 73.68% (+19pp),
+# 60min long audio: 27.41% → 60.73% (+33pp).
+#
+# 设计:
+#   - 独立 snap 每个 segment 的 start / end (不强求段连续 — baseline 自带
+#     diarize overlap 插话场景, 强行同步会触发 0 时长段)
+#   - 容忍窗口 tolerance 内才动, 否则不变
+#   - snap 后段时长 < min_segment_dur 则回退该 snap, 保护段不退化
+
+
+@dataclass
+class SilenceInterval:
+    """静音区间 (start ~ end), 由 speech_regions 反向算出."""
+    start: float
+    end: float
+
+    @property
+    def mid(self) -> float:
+        return (self.start + self.end) / 2
+
+    def contains(self, ts: float) -> bool:
+        return self.start <= ts <= self.end
+
+
+def silence_intervals_from_speech(
+    speech_regions: List[dict],
+    audio_duration: float,
+) -> List[SilenceInterval]:
+    """把 speech_regions 反向解析为 silence_intervals.
+
+    Args:
+        speech_regions: ffmpeg_speech_regions 输出, list[{'start', 'end'}].
+        audio_duration: 音频总时长 (秒).
+
+    Returns:
+        相邻 speech 区段之间的 silence + 末尾 silence.
+    """
+    sorted_regions = sorted(
+        [{"start": float(r["start"]), "end": float(r["end"])} for r in speech_regions],
+        key=lambda r: r["start"],
+    )
+    silences: List[SilenceInterval] = []
+    cursor = 0.0
+    for r in sorted_regions:
+        if r["start"] > cursor:
+            silences.append(SilenceInterval(start=cursor, end=r["start"]))
+        cursor = max(cursor, r["end"])
+    if cursor < audio_duration:
+        silences.append(SilenceInterval(start=cursor, end=audio_duration))
+    return silences
+
+
+def _find_snap_target(
+    ts: float,
+    silences: List[SilenceInterval],
+    tolerance: float,
+) -> float | None:
+    """找 ts 应该吸附到的目标时间戳, None 表示距离过远不动.
+
+    规则:
+      1. ts 已在某个 silence 内 → 不动 (返回 ts 本身, caller 用 != 跳过)
+      2. ts 不在 silence 内 → 找最近 silence 中点, 距离 <= tolerance 才返回
+    """
+    for s in silences:
+        if s.contains(ts):
+            return ts
+    best_target: float | None = None
+    best_dist = tolerance
+    for s in silences:
+        d = abs(ts - s.mid)
+        if d < best_dist:
+            best_dist = d
+            best_target = s.mid
+    return best_target
+
+
+def snap_segments_to_silence(
+    segments: List[Segment],
+    speech_regions: List[dict],
+    audio_duration: float,
+    tolerance: float = 2.0,
+    min_segment_dur: float = 0.1,
+) -> tuple[List[Segment], dict]:
+    """对 segments 做 snap-to-silence (独立吸附 start 和 end).
+
+    设计:
+      - 每个 segment 的 start / end 独立 snap 到最近 silence (容忍 tolerance 内)
+      - 不强求 end[i] == start[i+1]: baseline 的 diarize overlap (插话场景)
+        必须保留, 否则会触发 0 时长段
+      - snap 后段时长 < min_segment_dur 时回退该 snap, 保护段时长
+      - 第一段 start 与最后一段 end 不动 (音频起止天然对齐)
+
+    Args:
+        segments: merge_asr_chunks_and_diarize 输出 (List[Segment]).
+        speech_regions: ffmpeg_speech_regions 输出.
+        audio_duration: 音频总时长 (秒).
+        tolerance: 吸附容忍窗口 (秒). 距离 > tolerance 不动.
+        min_segment_dur: snap 后段时长 < 此值则回退, 保护段不退化.
+
+    Returns:
+        (new_segments, stats). new_segments 是 dataclasses.replace 出的新 Segment 列表,
+        原 segments 不被修改.
+    """
+    if not segments:
+        return [], {
+            "snapped_starts": 0,
+            "snapped_ends": 0,
+            "total_starts": 0,
+            "total_ends": 0,
+            "skipped_zero_dur": 0,
+            "tolerance_sec": tolerance,
+            "min_segment_dur_sec": min_segment_dur,
+            "silence_intervals_count": 0,
+        }
+
+    silences = silence_intervals_from_speech(speech_regions, audio_duration)
+    new_segs = [replace(s) for s in segments]
+    snapped_starts = 0
+    snapped_ends = 0
+    skipped_zero_dur = 0
+    n = len(new_segs)
+    total_starts = max(0, n - 1)  # 跳过 segments[0].start
+    total_ends = max(0, n - 1)    # 跳过 segments[-1].end
+
+    for i, s in enumerate(new_segs):
+        if i > 0:
+            target = _find_snap_target(s.start, silences, tolerance)
+            if target is not None and target != s.start:
+                new_dur = s.end - target
+                if new_dur >= min_segment_dur:
+                    s.start = round(target, 3)
+                    snapped_starts += 1
+                else:
+                    skipped_zero_dur += 1
+        if i < n - 1:
+            target = _find_snap_target(s.end, silences, tolerance)
+            if target is not None and target != s.end:
+                new_dur = target - s.start
+                if new_dur >= min_segment_dur:
+                    s.end = round(target, 3)
+                    snapped_ends += 1
+                else:
+                    skipped_zero_dur += 1
+
+    return new_segs, {
+        "snapped_starts": snapped_starts,
+        "snapped_ends": snapped_ends,
+        "total_starts": total_starts,
+        "total_ends": total_ends,
+        "skipped_zero_dur": skipped_zero_dur,
+        "tolerance_sec": tolerance,
+        "min_segment_dur_sec": min_segment_dur,
+        "silence_intervals_count": len(silences),
+    }
 
 
 def segments_to_srt(segments: List[Segment]) -> str:

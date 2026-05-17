@@ -1,5 +1,13 @@
 # Spike: Qwen3 silence-aware 时间戳对齐 — 结论
 
+> **状态 (2026-05-17)**: ✅ 已携进 `src/`（默认开启）。
+> - 算法位等价复现 spike 数据: 60s podcast +19.14pp / 60min long +33.32pp
+> - 60s podcast RTF 实测 +1% (+95ms on 9.16s baseline)
+> - 接入点: `src/core/qwen3_transcriber.py::apply_silence_align_to_segments` (helper) + `src/core/qwen3/merge.py::snap_segments_to_silence` (算法)
+> - VAD 工具独立: `src/utils/silence_detect.py::ffmpeg_speech_regions`
+> - Env 关闭: `FUNASR_QWEN3_SILENCE_ALIGN_ENABLED=false`
+> - 完整 env 列表见 `src/core/config.py::Qwen3Config` 的 `silence_*` 字段
+
 **结论**: PoC 验证有效, **推荐携进 src/**, 改造范围小, 风险可控。
 
 ## 一句话总结

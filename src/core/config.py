@@ -102,6 +102,19 @@ class Qwen3Config(BaseModel):
     cluster_merge_dominant_share: float = 0.6
     cluster_merge_dominant_threshold: float = 0.6
 
+    # silence-aware 段切点对齐 (携进自 spike 405abf6, 见 spikes/qwen3_silence_align/SUMMARY.md)
+    # 在 merge_asr_chunks_and_diarize 输出后做 snap-to-silence 后处理:
+    #   60s podcast: align_ratio 54.55% → 73.68% (+19pp)
+    #   60min long: 27.41% → 60.73% (+33pp)
+    # tolerance=2.0 是用户拍板的平衡值 (sweep 数据见 SUMMARY)
+    # min_segment_dur=0.1 保护吸附后段不退化成 0 时长
+    # VAD 默认 -25dB/0.2s (生产 FunASR 默认 -35dB/0.8s 在 podcast 完全失效, 必须改)
+    silence_align_enabled: bool = True
+    silence_align_tolerance_sec: float = 2.0
+    silence_align_min_segment_dur_sec: float = 0.1
+    silence_vad_noise_db: str = "-25dB"
+    silence_vad_min_silence_sec: float = 0.20
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -313,6 +326,12 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "cluster_merge_main_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_MAIN_THRESHOLD", float)
         cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_share", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_SHARE", float)
         cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_THRESHOLD", float)
+        # silence-aware align (spike 405abf6)
+        cls._override_if_set(config_data["qwen3"], "silence_align_enabled", "FUNASR_QWEN3_SILENCE_ALIGN_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "silence_align_tolerance_sec", "FUNASR_QWEN3_SILENCE_ALIGN_TOLERANCE_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "silence_align_min_segment_dur_sec", "FUNASR_QWEN3_SILENCE_ALIGN_MIN_SEGMENT_DUR_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "silence_vad_noise_db", "FUNASR_QWEN3_SILENCE_VAD_NOISE_DB")
+        cls._override_if_set(config_data["qwen3"], "silence_vad_min_silence_sec", "FUNASR_QWEN3_SILENCE_VAD_MIN_SILENCE_SEC", float)
         # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
         _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
         if _num_spk_env is not None:
