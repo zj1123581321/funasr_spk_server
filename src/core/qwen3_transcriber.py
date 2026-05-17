@@ -114,6 +114,9 @@ def apply_cluster_centroid_merge_to_turns(
         main_threshold=cfg_like.cluster_merge_main_threshold,
         dominant_share=cfg_like.cluster_merge_dominant_share,
         dominant_threshold=cfg_like.cluster_merge_dominant_threshold,
+        dominant_minor_threshold=getattr(
+            cfg_like, "cluster_merge_dominant_minor_threshold", 0.5
+        ),
     )
     # speaker 字段转回 int (cluster_merge 内部按 str 比较)
     out = [dict(t, speaker=int(t["speaker"])) for t in out]
@@ -246,6 +249,7 @@ class Qwen3DiarizeTranscriber:
         cluster_merge_main_threshold: float = 0.78,
         cluster_merge_dominant_share: float = 0.6,
         cluster_merge_dominant_threshold: float = 0.6,
+        cluster_merge_dominant_minor_threshold: float = 0.5,
         # silence-aware 切点对齐 (spike 405abf6)
         silence_align_enabled: bool = True,
         silence_align_tolerance_sec: float = 2.0,
@@ -274,6 +278,7 @@ class Qwen3DiarizeTranscriber:
         self.cluster_merge_main_threshold = cluster_merge_main_threshold
         self.cluster_merge_dominant_share = cluster_merge_dominant_share
         self.cluster_merge_dominant_threshold = cluster_merge_dominant_threshold
+        self.cluster_merge_dominant_minor_threshold = cluster_merge_dominant_minor_threshold
         self.silence_align_enabled = silence_align_enabled
         self.silence_align_tolerance_sec = silence_align_tolerance_sec
         self.silence_align_min_segment_dur_sec = silence_align_min_segment_dur_sec
@@ -567,6 +572,7 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         cluster_merge_main_threshold=q.cluster_merge_main_threshold,
         cluster_merge_dominant_share=q.cluster_merge_dominant_share,
         cluster_merge_dominant_threshold=q.cluster_merge_dominant_threshold,
+        cluster_merge_dominant_minor_threshold=q.cluster_merge_dominant_minor_threshold,
         silence_align_enabled=q.silence_align_enabled,
         silence_align_tolerance_sec=q.silence_align_tolerance_sec,
         silence_align_min_segment_dur_sec=q.silence_align_min_segment_dur_sec,

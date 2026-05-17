@@ -211,6 +211,55 @@ def merge_dominant_mode(
     return mapping_updates, log
 
 
+def merge_minor_into_dominant(
+    centroids: dict,
+    current_shares: dict,
+    minor_set: list,
+    dominant_share: float = 0.6,
+    dominant_minor_threshold: float = 0.5,
+) -> tuple[dict, list]:
+    """dominant 模式下, 把跟 dominant centroid 接近的 minor cluster 合到 dominant.
+
+    用更宽松的阈值 (默认 0.5, 比 minor->main 的 0.55 宽松) 兜底处理小占比噪声 cluster,
+    避免它们漏成独立 speaker.
+
+    场景: 调研报告 (spk-over-detect-归因调研结果.md) 的 60min-2spk over-detect —
+    43.2s/61.6s 中长噪声 cluster, share 1.2%/1.7% (< min_main_share=0.03), 跟主 speaker
+    cos 略低于 0.55 (minor->main 漏), 旧 dominant_mode 只处理 mains (不处理 minor) 也漏.
+
+    Args:
+        centroids: dict[sp -> np.ndarray (L2 normalized)].
+        current_shares: 合并后基于当前 mapping 重算的 share.
+        minor_set: 仍独立的 minor speakers (share < min_main_share, 未被 step 1 合并).
+        dominant_share: 触发 dominant 模式的 share 阈值, 默认 0.6.
+        dominant_minor_threshold: dominant 模式下合并 minor 的阈值, 默认 0.5.
+
+    Returns:
+        (mapping_updates, log).
+        mapping_updates: dict[minor_sp -> dominant_sp].
+    """
+    mapping_updates: dict = {}
+    log: list = []
+    if not minor_set or not current_shares:
+        return mapping_updates, log
+    dom_sp = max(current_shares.items(), key=lambda kv: kv[1])[0]
+    dom_share = current_shares[dom_sp]
+    if dom_share < dominant_share:
+        return mapping_updates, log
+    for sp in minor_set:
+        sim = cosine(centroids.get(sp), centroids.get(dom_sp))
+        if sim >= dominant_minor_threshold:
+            mapping_updates[sp] = dom_sp
+            log.append({
+                "action": "minor_folded_into_dominant",
+                "from": sp,
+                "to": dom_sp,
+                "sim": round(sim, 4),
+                "dom_share": round(dom_share, 3),
+            })
+    return mapping_updates, log
+
+
 def apply_cluster_centroid_merge(
     segments: list,
     extractor_fn,
@@ -220,6 +269,7 @@ def apply_cluster_centroid_merge(
     main_threshold: float = 0.78,
     dominant_share: float = 0.6,
     dominant_threshold: float = 0.6,
+    dominant_minor_threshold: float = 0.5,
     max_per_speaker: int = 30,
 ) -> tuple[list, list]:
     """cluster centroid merge 完整 pipeline 入口.
@@ -235,7 +285,8 @@ def apply_cluster_centroid_merge(
         relabel_threshold: minor -> main 阈值 (默认 0.55).
         main_threshold: main 间 high-conf 合并阈值 (默认 0.78).
         dominant_share: dominant 模式触发阈值 (默认 0.6).
-        dominant_threshold: dominant 模式合并阈值 (默认 0.6).
+        dominant_threshold: dominant 模式合并 main 阈值 (默认 0.6).
+        dominant_minor_threshold: dominant 模式合并 minor 阈值 (默认 0.5, 比 relabel 宽松).
         max_per_speaker: 每 speaker 最多取多少段算 centroid.
 
     Returns:
@@ -303,6 +354,19 @@ def apply_cluster_centroid_merge(
         mapping[k] = v
     log.extend(dom_log)
 
-    # 6) 应用 mapping 重写 segments
+    # 6) Step 4: dominant 模式扩展到 minor (修 over-detect 兜底, 默认 0.5)
+    # 找出仍独立的 minor (step 1 没被合到 main 的), 用更宽松的阈值跟 dominant 比较合并.
+    # share 用 current_shares (合并后的视图) 判断 dominant.
+    still_minor = [sp for sp in minor_set if mapping.get(sp, sp) == sp]
+    minor_fold_updates, minor_fold_log = merge_minor_into_dominant(
+        centroids, current_shares, still_minor,
+        dominant_share=dominant_share,
+        dominant_minor_threshold=dominant_minor_threshold,
+    )
+    for k, v in minor_fold_updates.items():
+        mapping[k] = v
+    log.extend(minor_fold_log)
+
+    # 7) 应用 mapping 重写 segments
     new_segments = [dict(s, speaker=mapping[str(s["speaker"])]) for s in segments]
     return new_segments, log

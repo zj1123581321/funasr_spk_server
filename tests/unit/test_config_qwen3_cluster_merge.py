@@ -37,6 +37,10 @@ class TestQwen3ConfigClusterMergeDefaults:
     def test_default_cluster_merge_dominant_threshold(self) -> None:
         assert Qwen3Config().cluster_merge_dominant_threshold == 0.6
 
+    def test_default_cluster_merge_dominant_minor_threshold(self) -> None:
+        # 修 over-detect 兜底: dominant 模式吃 minor cluster 阈值 (默认 0.5)
+        assert Qwen3Config().cluster_merge_dominant_minor_threshold == 0.5
+
 
 class TestQwen3ConfigClusterMergeEnvOverride:
     def test_env_override_cluster_merge_enabled(self, monkeypatch, tmp_path) -> None:
@@ -80,3 +84,10 @@ class TestQwen3ConfigClusterMergeEnvOverride:
         config_file.write_text("{}")
         cfg = Config.load_from_file(str(config_file))
         assert cfg.qwen3.cluster_merge_dominant_threshold == 0.65
+
+    def test_env_override_cluster_merge_dominant_minor_threshold(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_MINOR_THRESHOLD", "0.42")
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        cfg = Config.load_from_file(str(config_file))
+        assert cfg.qwen3.cluster_merge_dominant_minor_threshold == 0.42

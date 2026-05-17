@@ -101,6 +101,9 @@ class Qwen3Config(BaseModel):
     cluster_merge_main_threshold: float = 0.78
     cluster_merge_dominant_share: float = 0.6
     cluster_merge_dominant_threshold: float = 0.6
+    # dominant 模式吃相似 minor cluster 的阈值 (修 over-detect 兜底, 见
+    # docs/开发/archive/spk-over-detect-归因调研结果.md). 默认 0.5, 比 relabel(0.55) 宽松.
+    cluster_merge_dominant_minor_threshold: float = 0.5
 
     # silence-aware 段切点对齐 (携进自 spike 405abf6, 见 spikes/qwen3_silence_align/SUMMARY.md)
     # 在 merge_asr_chunks_and_diarize 输出后做 snap-to-silence 后处理:
@@ -326,6 +329,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "cluster_merge_main_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_MAIN_THRESHOLD", float)
         cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_share", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_SHARE", float)
         cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_minor_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_MINOR_THRESHOLD", float)
         # silence-aware align (spike 405abf6)
         cls._override_if_set(config_data["qwen3"], "silence_align_enabled", "FUNASR_QWEN3_SILENCE_ALIGN_ENABLED", cls._parse_bool)
         cls._override_if_set(config_data["qwen3"], "silence_align_tolerance_sec", "FUNASR_QWEN3_SILENCE_ALIGN_TOLERANCE_SEC", float)
