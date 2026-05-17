@@ -109,7 +109,9 @@ Thread (libdispatch worker):
 3. N=1 单 worker 排除并发 — 同位置 crash, 是单进程 framework race
 4. 4 次重启相同位置 crash, `~/Library/Logs/DiagnosticReports/Python-*.ips` 4 份完全同 stack trace
 
-**结论**: 这是 `coremltools 9.0` + `macOS 26 Beta` + `Python framework dealloc race` 的已知 bug, 无法在 application layer 修。需要等 Apple Beta GM 修 / coremltools 添加 sync API。
+**结论**: 这是 `coremltools 9.0` + `CoreML framework dealloc race` 的已知 bug, 无法在 application layer 修。需要等 coremltools 添加 sync API / Apple 修 framework。
+
+**升级验证 2026-05-17 10:12**: macOS 26.0 Beta (25C56) → 26.5 正式版 (25F71) **仍崩**, 完全相同 stack trace。worker 撑时间 40s → 95s 可能是 lingerTime 配置变化, 但根因 `MLE5ExecutionStream._reset` 在 libdispatch worker 无 GIL 释放 numpy 内存 — 未修复。第 5 份 crash report: `Python-2026-05-17-101250.ips`。
 
 ## 决策 — 不切默认, escape hatch 保留
 
@@ -131,8 +133,10 @@ Thread (libdispatch worker):
 
 ## 未来重启 Phase 3 的触发条件
 
-- macOS GM 发布 (脱离 Beta), 重测 mlpackage + sherpa-onnx 端到端
-- coremltools 11+ 提供 `MLModel.predict(synchronous=True)` 或 `lingerTime=0` API
+- ~~macOS GM 发布 (脱离 Beta), 重测 mlpackage + sherpa-onnx 端到端~~ **26.5 正式版仍崩, 排除此项**
+- coremltools 10+ 提供 `MLModel.predict(synchronous=True)` 或 `lingerTime=0` API
+- 用 PyObjC `objc.autorelease_pool()` 显式管理 MLFeatureValue 生命周期 (deep workaround, 需要 vendor 改造)
+- 把 sherpa-onnx 换成不用 libdispatch 的实现 (例如 sherpa-rs 或 pyannote pytorch 直跑) — 但这是 sherpa 替换工程, 跟 Phase 3 解耦
 - `coremltools.optimize.coreml` INT8 量化跑通可压 mlpackage 到 ~150 MB on-disk, RSS Δ ~300 MB, N=4 worker 也可承受
 
 ## 相关文件

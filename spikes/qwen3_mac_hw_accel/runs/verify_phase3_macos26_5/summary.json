@@ -1,0 +1,19 @@
+{
+  "tag": "verify_phase3_macos26_5",
+  "mode": "n2",
+  "num_threads": 4,
+  "provider": "cpu",
+  "onnx_provider": "COREML_ANE_FULL",
+  "coreml_asr_patch": false,
+  "wall_total": 95.72638010978699,
+  "tasks": {
+    "1spk-16min": {
+      "error": "no json",
+      "rc": -11
+    },
+    "4spk-44min": {
+      "error": "no json",
+      "rc": -11
+    }
+  }
+}
