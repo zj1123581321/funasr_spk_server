@@ -1,6 +1,6 @@
-"""复现 60min-2spk over-detect regression — 调研产出, red test.
+"""60min-2spk over-detect regression guard — 修复后保留作历史档案.
 
-背景:
+历史背景 (修复前):
     `audio_2spk_60min.mp3` (60min 真实 2 人对话) 在 production 走过
     `ffmpeg → 16kHz mono wav` 转换后, sherpa-onnx 离线 diarize 输出
     11 个 cluster, 其中两个噪声 cluster 时长 (43.2s / 61.6s) 恰好
@@ -12,26 +12,27 @@
     sherpa-onnx 只吐 2 个主 cluster + 5 个 <3s 噪声 cluster, filter
     清干净后剩 2 spk ✓.
 
-根因:
+根因 (调研报告 docs/开发/archive/spk-over-detect-归因调研结果.md):
     `cd578a8` 提交在 `qwen3_worker_process.py` 中加了 `convert_to_wav`
-    (ffmpeg → 16kHz mono wav), 改变了喂给 sherpa diarize 的 audio bytes:
-    样本数一致 (57.6M samples / 3600s) 但 rms_diff ~ 0.004 (0.4%), 仅
-    4.8% 的样本接近一致. 这点差异通过 pyannote / NeMo embedding 放大,
-    最终在 FastClustering@threshold=0.9 边界 case 上把 cluster 数从 7
-    推到 11, 并把两个噪声 cluster 时长推高到刚刚突破 spurious 阈值.
+    (ffmpeg → 16kHz mono wav), 改变了喂给 sherpa diarize 的 audio bytes;
+    embedding 漂移把 cluster 数从 7 推到 11, 两个噪声 cluster 时长越过阈值.
 
-详细调研:
-    `docs/开发/archive/spk-over-detect-归因调研结果.md`
+修复 (本 PR fix/qwen3-spk-overdetect):
+    方向 2 (治本): worker 对 sherpa-supported 格式 (wav/flac/ogg/mp3/opus) 跳过
+        ffmpeg, mp3 走 librosa fallback 直读, sherpa 拿到的 audio 跟 PR3 PoC 一致
+    方向 4 (兜底): cluster_merge dominant 模式扩展到 minor — 即使将来又有 audio
+        触发同形 over-detect, 这些 minor 噪声 cluster 跟 dominant cos ≥ 0.5 会被合掉
 
-本测试:
-    在 *后处理层* 复现 over-detect — 用实测 sherpa 输出的 turns
-    驱动 `filter_spurious_speakers`, 期望 2 speaker, 实测得到 4
-    (xfail 标记, 修复后取消标记即变绿).
+本 test 保留作 *活档案 + regression guard*:
+1. clean_path: PR3 PoC 时期形态 (mp3 直读), filter_spurious 正常收敛 2 spk (修复前后都应过)
+2. full_pipeline_minor_fold: 即使 sherpa 又吐出 over-detect 形态 (反事实 4-spk turns),
+   cluster_merge minor-fold 兜底应恢复 2 spk (验证方向 4 兜底真的能用)
 """
 from __future__ import annotations
 
-import pytest
+import numpy as np
 
+from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
 from src.core.qwen3.merge import filter_spurious_speakers
 
 
@@ -71,18 +72,16 @@ AUDIO_DURATION_60MIN = 3600.0
 EXPECTED_SPK_COUNT = 2  # 真实是 2 人对话, PR3 PoC 输出也是 2
 
 
-@pytest.mark.xfail(
-    reason=(
-        "OVER-DETECT REGRESSION: ffmpeg → wav 后 sherpa diarize 多吐两个 "
-        "43.2s / 61.6s 噪声 cluster, 时长 > filter_spurious 的 36s "
-        "(1% × 3600s) 阈值, 滤不掉. 修复方向: 调高 min_speaker_share "
-        "/ 走 librosa fallback 避开 ffmpeg / cluster_merge 多人模式. "
-        "见 docs/开发/archive/spk-over-detect-归因调研结果.md."
-    ),
-    strict=True,
-)
-def test_filter_spurious_60min_2spk_ffmpeg_wav_over_detect() -> None:
-    """60min-2spk 走 ffmpeg→wav 路径后, filter_spurious 无法收敛到 2 spk."""
+def test_over_detect_turns_recovered_by_cluster_merge_minor_fold() -> None:
+    """over-detect 形态 turns 通过 cluster_merge dominant-minor-fold (方向 4) 兜底恢复 2 spk.
+
+    场景: filter_spurious 漏掉 43.2s/61.6s 噪声 cluster (突破 36s 阈值), 留下 4 spk.
+    cluster_merge minor-fold 应识别这两个 cluster 跟 dominant cos ≥ 0.5 → 合到 dominant.
+    main cluster 5 (跟 dominant cos = 0) 保留. 最终 2 spk.
+
+    意义 (regression guard): 即使将来又有 audio 触发同形 over-detect (新解码器 /
+    新 audio profile), 兜底层能拦截. 修复前 (no minor-fold) 4 spk, 修复后 2 spk.
+    """
     turns = _build_observed_turns()
     filtered = filter_spurious_speakers(
         turns,
@@ -90,10 +89,50 @@ def test_filter_spurious_60min_2spk_ffmpeg_wav_over_detect() -> None:
         min_speaker_share=0.01,
         audio_duration=AUDIO_DURATION_60MIN,
     )
-    speakers = {t["speaker"] for t in filtered}
-    assert len(speakers) == EXPECTED_SPK_COUNT, (
-        f"expected {EXPECTED_SPK_COUNT} speakers after filter, got "
-        f"{len(speakers)}: {sorted(speakers)}"
+    # filter 后剩 4 spk: 0 (dominant 86%), 5 (main 11%), 3 (minor 1.7%), 2 (minor 1.2%)
+    pre_merge_speakers = {t["speaker"] for t in filtered}
+    assert len(pre_merge_speakers) == 4, (
+        f"filter_spurious 阶段应留 4 spk (over-detect 形态), 实测 "
+        f"{len(pre_merge_speakers)}: {sorted(pre_merge_speakers)}"
+    )
+
+    # 转 segments 形式 (cluster_merge 内部按 str 比较 speaker)
+    segments = [
+        {
+            "start": float(t["start"]),
+            "end": float(t["end"]),
+            "speaker": str(t["speaker"]),
+            "text": "",
+        }
+        for t in filtered
+    ]
+
+    # mock embedding: 噪声 cluster 3/2 跟 dominant cos = 0.55 (≥ dominant_minor=0.5);
+    # main cluster 5 跟 dominant cos = 0 (保留 main, 不被合).
+    sqrt_orth = float(np.sqrt(1.0 - 0.55 * 0.55))
+    emb_by_spk = {
+        "0": np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        "5": np.array([0.0, 1.0, 0.0], dtype=np.float32),
+        "3": np.array([0.55, 0.0, sqrt_orth], dtype=np.float32),
+        "2": np.array([0.55, 0.0, sqrt_orth], dtype=np.float32),
+    }
+    start_to_sp = {round(s["start"], 6): s["speaker"] for s in segments}
+
+    def extractor(audio_16k, start, end):
+        return emb_by_spk.get(start_to_sp.get(round(float(start), 6)))
+
+    new_segs, _log = apply_cluster_centroid_merge(
+        segments,
+        extractor_fn=extractor,
+        audio_16k=np.zeros(16000, dtype=np.float32),
+        dominant_minor_threshold=0.5,
+    )
+
+    final_speakers = {s["speaker"] for s in new_segs}
+    assert len(final_speakers) == EXPECTED_SPK_COUNT, (
+        f"cluster_merge 兜底后应恢复 {EXPECTED_SPK_COUNT} spk, "
+        f"实测 {len(final_speakers)}: {sorted(final_speakers)}. "
+        f"如果 > 2, 说明 dominant minor-fold 没生效 (修复方向 4 回归)."
     )
 
 
