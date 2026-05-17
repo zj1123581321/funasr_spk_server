@@ -305,40 +305,8 @@ class TestAudioFormatConversion:
         # wav 不应触发转换
         mock_conv.assert_not_called()
 
-    def test_mp3_triggers_convert_to_wav(self, tmp_path):
-        """mp3 也必须转换 (sherpa diarize 用 libsndfile 不支持 mp3)"""
-        from src.core import qwen3_worker_process as wp
-        import json
-
-        task_file = tmp_path / "worker_0_t-mp3.task"
-        task = {
-            "task_id": "t-mp3",
-            "audio_path": "/temp/tasks_qwen3/abc.mp3",
-            "source_audio_path": "/orig/upload/my.mp3",
-            "output_format": "json",
-        }
-        task_file.write_text(json.dumps(task))
-
-        fake = MagicMock()
-
-        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
-            from src.models.schemas import TranscriptionResult
-            return (
-                TranscriptionResult(
-                    task_id=task_id, file_name="x", file_hash="h",
-                    duration=1.0, segments=[], speakers=[], processing_time=0.01,
-                ),
-                {"engine": "qwen3"},
-            )
-
-        fake.transcribe = fake_transcribe
-
-        with patch("src.utils.file_utils.convert_to_wav") as mock_conv:
-            mock_conv.side_effect = lambda inp, output_path=None: output_path
-            wp.process_task(worker_id=0, transcriber=fake, task_file=str(task_file), task_dir=str(tmp_path))
-
-        mock_conv.assert_called_once()
-
+    # 注: 历史 case test_mp3_triggers_convert_to_wav 已删除. mp3 现走 sherpa 直读 (librosa fallback),
+    # 不再触发 convert_to_wav. 新契约见 tests/unit/test_qwen3_worker_skip_ffmpeg_for_sherpa.py.
 
 class TestRewriteFileName:
     """pool 派发把 audio 复制到 task_dir/{uuid}.wav, worker transcribe 拿到的 basename 是 UUID.

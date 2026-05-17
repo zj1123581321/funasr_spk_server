@@ -78,12 +78,16 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
 
     print(f"[Qwen3-Worker-{os.getpid()}] 处理任务 {task_id}: {original_basename} (format={output_format})")
 
-    # Qwen3 vendor 内部 sherpa diarize 用 libsndfile 读 audio, 只支持 wav/flac/ogg.
-    # 非 wav 格式 (m4a/mp3/mp4 etc) 必须用 ffmpeg 先转 16kHz mono wav.
-    # FunASR 路径 funasr.AutoModel 内部自带 ffmpeg 转换, Qwen3 vendor 没有.
+    # Qwen3 vendor 内部 sherpa diarize 用 libsndfile + librosa fallback (qwen3/diarize.py
+    # _load_audio_mono_16k) 读 audio. wav/flac/ogg 走 libsndfile, mp3/opus 走 librosa fallback,
+    # 都不需要 ffmpeg 预转码. 只有 libsndfile + librosa 都读不了的格式 (m4a/aac/mp4/mov/webm) 才必须 ffmpeg.
+    # 历史教训: cd578a8 把 mp3 一并 ffmpeg 转 wav, 改变 audio 字节 → 触发 sherpa FastClustering
+    # over-detect (60min-2spk → 4 spk). 见 docs/开发/archive/spk-over-detect-归因调研结果.md.
+    SHERPA_SUPPORTED_EXTENSIONS = {".wav", ".flac", ".ogg", ".mp3", ".opus"}
     converted_wav_path = None
     actual_audio_path = audio_path
-    if not audio_path.lower().endswith(".wav"):
+    audio_ext = os.path.splitext(audio_path)[1].lower()
+    if audio_ext not in SHERPA_SUPPORTED_EXTENSIONS:
         try:
             from src.utils.file_utils import convert_to_wav
             converted_wav_path = audio_path.rsplit(".", 1)[0] + ".converted.wav"
