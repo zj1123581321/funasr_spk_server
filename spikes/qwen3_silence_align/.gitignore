@@ -1,5 +1,6 @@
 venv/
 data/*.json
+scripts/_bench_*_result.json
 output/
 __pycache__/
 *.pyc
