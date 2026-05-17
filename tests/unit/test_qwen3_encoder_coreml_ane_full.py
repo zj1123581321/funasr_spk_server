@@ -44,25 +44,19 @@ def fake_runtimes(monkeypatch, tmp_path):
         return_value=["CPUExecutionProvider", "CoreMLExecutionProvider"]
     )
 
-    # coremltools.models.MLModel mock
-    fake_ct = MagicMock()
-    fake_ct.ComputeUnit.CPU_AND_NE = "CPU_AND_NE_SENTINEL"
-    fake_ct.ComputeUnit.CPU_ONLY = "CPU_ONLY_SENTINEL"
+    # CoreMLZeroCopyRunner mock (PyObjC zero-copy 路径, 替代 coremltools.MLModel)
     mlmodels_created: list[dict] = []
 
-    def _fake_mlmodel(path, compute_units=None, **kwargs):
-        m = MagicMock()
-        m.predict.return_value = {"last_hidden_state": object()}  # placeholder
+    def _fake_runner_init(self, path, compute_units="CPU_AND_NE", verbose=True):
         mlmodels_created.append({"path": path, "compute_units": compute_units})
-        return m
-
-    fake_ct.models = MagicMock()
-    fake_ct.models.MLModel = _fake_mlmodel
+        self.predict = lambda inputs: {"last_hidden_state": object()}
 
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
-    monkeypatch.setitem(sys.modules, "coremltools", fake_ct)
 
     import importlib
+    import src.core.vendor.qwen_asr_gguf.inference.coreml_runner as cr_mod
+    monkeypatch.setattr(cr_mod.CoreMLZeroCopyRunner, "__init__", _fake_runner_init)
+
     import src.core.vendor.qwen_asr_gguf.inference.encoder as enc_mod
     importlib.reload(enc_mod)
 
@@ -74,7 +68,6 @@ def fake_runtimes(monkeypatch, tmp_path):
 
     yield {
         "ort": fake_ort,
-        "ct": fake_ct,
         "sessions": sessions_created,
         "mlmodels": mlmodels_created,
         "enc_mod": enc_mod,
@@ -82,7 +75,6 @@ def fake_runtimes(monkeypatch, tmp_path):
     }
 
     monkeypatch.delitem(sys.modules, "onnxruntime", raising=False)
-    monkeypatch.delitem(sys.modules, "coremltools", raising=False)
     importlib.reload(enc_mod)
 
 
@@ -109,11 +101,11 @@ class TestCoremlAneFullOnMacos:
         assert opts["MLComputeUnits"] == "CPUAndNeuralEngine"
         assert "CPUExecutionProvider" in fe["providers"]
 
-        # backend mlmodel 加载并配 CPU_AND_NE
+        # backend mlmodel 加载并配 CPU_AND_NE (CoreMLZeroCopyRunner)
         assert len(fx["mlmodels"]) == 1
         mlp = fx["mlmodels"][0]
         assert mlp["path"] == fx["mlpackage_path"]
-        assert mlp["compute_units"] == "CPU_AND_NE_SENTINEL"
+        assert mlp["compute_units"] == "CPU_AND_NE"
 
 
 class TestCoremlAneFullFallback:

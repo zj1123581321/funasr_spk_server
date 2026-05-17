@@ -207,12 +207,20 @@ class QwenAudioEncoder:
         # 加载 frontend (ONNX, 必有)
         self.sess_fe = ort.InferenceSession(frontend_path, sess_options=sess_opts, providers=providers_fe)
         if load_backend_as_mlpackage:
-            # COREML_ANE_FULL: backend 走 ct.models.MLModel + CPU_AND_NE
-            # 加载 24s (cold ANE plan compile); _run_backend 走 static pad (h_target_len)
-            import coremltools as _ct
-            self.sess_be_mlmodel = _ct.models.MLModel(
+            # COREML_ANE_FULL: backend 走 PyObjC zero-copy CoreML runner + CPU_AND_NE
+            # 加载 ~24-40s (cold ANE plan compile); _run_backend 走 static pad (h_target_len)
+            #
+            # 为什么用 PyObjC 而不用 coremltools.models.MLModel?
+            # coremltools 的 pybind11 binding 在 MLE5ExecutionStream 后台 lingering reset
+            # 时调 _PyObject_Free 但不持 GIL, 跟 sherpa-onnx 共存会 SIGSEGV (macOS 26+).
+            # PyObjC zero-copy (initWithDataPointer + deallocator=None) 让 MLMultiArray
+            # 只持 numpy 裸 C 指针, dealloc 不调 Python C API, 绕开 race.
+            # 详见 spikes/qwen3_mac_hw_accel/phase3_backend/poc_pyobjc_zerocopy.py
+            from .coreml_runner import CoreMLZeroCopyRunner
+            self.sess_be_mlmodel = CoreMLZeroCopyRunner(
                 backend_path,
-                compute_units=_ct.ComputeUnit.CPU_AND_NE,
+                compute_units="CPU_AND_NE",
+                verbose=self.verbose,
             )
             self.active_static_be = True
             self.sess_be = None  # 跟 ONNX session 区分开
