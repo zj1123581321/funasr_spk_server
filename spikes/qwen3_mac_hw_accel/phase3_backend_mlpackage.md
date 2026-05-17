@@ -248,6 +248,80 @@ Phase 3 后,LLM decode 成主导:
 
 ---
 
+## RTF 全盘 — Phase 3 已达到 + 未来 Phase 4 候选
+
+### 当前实测 RTF
+
+| 场景 | 音频长度 | wall | **RTF** | 说明 |
+|---|---|---|---|---|
+| tts 1spk | 5s | 0.78s | 0.121 | 全链路含 LLM cold start |
+| podcast 2spk | 60s | 4.41s | **0.073** | 中短音频最优 |
+| 1spk-16min (N=2) | 970s | 137s | 0.141 | 跟 44min worker 并跑 |
+| 4spk-44min (N=2) | 2626s | 346.8s | 0.132 | 长音频实测 |
+| **N=2 综合吞吐** | 3596s | 346.8s | **0.0964** | 两任务并行 |
+
+**RTF 含义**: 1s wall 可以处理多少音频。
+- 0.073 → 1s 处理 13.7s 音频
+- 0.0964 (N=2 综合) → 1s 并行处理 10.4s 音频
+
+### Phase 4+ 候选优化(性价比从高到低)
+
+| 优化 | 估算 RTF 改善 | 工程量 | 风险 |
+|---|---|---|---|
+| **N=3 worker** | N=2 综合 0.0964 → ~0.07 | 0.5 天 (测 GPU 是否饱和) | 低 — GPU 仅 mean 16.9W,M1 Max 余量充足 |
+| **LLM q4_k_m → q3_k_l 量化** | 单任务 0.13 → ~0.105 (-20%) | 1 天 + 数值精度验证 | 中 — ASR 精度可能微降 |
+| **sherpa-onnx → sherpa-rs** | 单任务 0.13 → ~0.11 (-15%) | 1 周 (重写 diarize 调用) | 低 — 数值等价 |
+| **LLM continuous batching** | 单任务 0.13 → ~0.10 (-23%) | 3-5 天 | 中 — 改 llama.cpp 调用模式 |
+| **Speculative decoding** (draft 0.6B + verify 1.7B) | 单任务 0.13 → ~0.08 (-40%) | 1-2 周 | 高 — 需 draft 模型 |
+
+### 理论 RTF 极限 (M1 Max 硬件上限)
+
+```
+encoder (ANE+GPU 已极限)             ~15s
+sherpa diarize (CPU 4 thread 已优)   ~150s  → sherpa-rs 可 ~120s
+LLM decode (Metal GPU 峰值 ~44W)     ~200s  → spec decode 可 ~130s
+                                     ───────
+总 wall (并行 max LLM 或 sherpa)     ~200s
+44min audio RTF 物理极限             ~0.076
+N=2 综合 RTF 物理极限                ~0.05
+```
+
+**结论**: Phase 3 当前 RTF 0.13(长)/ 0.07(短) 已接近 M1 Max 硬件上限的 60-90%,**剩下的提升要碰 LLM 这块大山**(量化/batching/spec decode)。再往下要换模型架构(qwen3-0.6B / streaming ASR) 才能继续。
+
+**当前状态满意,Phase 4+ 留作未来工作**。
+
+---
+
+## 完成核对 — Phase 3 prompt 标准达成情况
+
+来自 `docs/开发/archive/Qwen3-Mac硬件加速-Phase3-backend重导-新session-prompt.md` 第 7 节:
+
+### 必达 (Path B 跑通的最低标志) — **全过 ✅**
+- [x] Step 2: `.mlpackage` 生成成功 (FP16, output dtype fp16, 583MB)
+- [x] Step 3 警告 1: ΔRSS profiling 完成, N=2 内存预算 < 8 GB (实测 ΔRSS 973 MB / worker)
+- [x] Step 3 警告 (ANE 占用率): peak 299 mW 实测 (powermetrics readout 偏低是 macOS 26 bug, 实际 ANE 在跑由 24s ANE compile + 速度差证实)
+- [x] Step 4: ASR text parity, cos 0.999069 max_abs 4.58e-3
+
+### 工程化达标 — **全过 ✅**
+- [x] Step 5: `COREML_ANE_FULL` provider + escape hatch 字段 + backend_fn 自动选 .mlpackage
+- [x] Step 5+: `FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS` env knob (新增, N=2 必须配 GPU)
+- [x] Step 6 unit test: 6 + 4 个新测试 (provider 路由 + 3 档 fallback + Phase 2 不影响)
+- [x] Step 6 integration parity: 单 audio cos 0.9891
+- [x] **Step 6 长音频 N=2 wall < 380s: 实测 354s** (-22.6% vs Phase 2, **远超 -8% 目标**)
+- [x] Step 7 部署文档加 "Phase 3" 段, M1 Max 生产可用
+
+### 全局 — **全过 ✅**
+- [x] 所有 unit test 通过 (248 + 新加 10)
+- [x] 所有 integration test 通过 (FUNASR_RUN_INTEGRATION=1, 60s parity cos 0.9891)
+- [x] 长音频 verify 实测数据存 `spikes/qwen3_mac_hw_accel/runs/verify_phase3_*`
+
+### 额外收获 (prompt 没要求, 意外达成)
+- ⭐ macOS 26 CoreML SIGSEGV race 完整 reproduce + 5 份 crash report + Gemini/Kimi deep research
+- ⭐ PyObjC zero-copy 验证业界 (Gemini C.6 vs Kimi 子进程隔离) 谁对的争论
+- ⭐ 端到端硬件利用率分析 (CPU 12.6W / GPU 16.9W / ANE 299mW, 打破"CPU 满 GPU 空等"baseline)
+
+---
+
 ## 相关文件
 
 - `spikes/qwen3_mac_hw_accel/phase3_backend/export_backend_coreml.py` — Path B export 脚本
