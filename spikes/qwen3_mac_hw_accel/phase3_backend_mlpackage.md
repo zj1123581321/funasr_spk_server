@@ -113,6 +113,22 @@ Thread (libdispatch worker):
 
 **升级验证 2026-05-17 10:12**: macOS 26.0 Beta (25C56) → 26.5 正式版 (25F71) **仍崩**, 完全相同 stack trace。worker 撑时间 40s → 95s 可能是 lingerTime 配置变化, 但根因 `MLE5ExecutionStream._reset` 在 libdispatch worker 无 GIL 释放 numpy 内存 — 未修复。第 5 份 crash report: `Python-2026-05-17-101250.ips`。
 
+## Workaround 排查 (2026-05-17 第二轮)
+
+| 方案 | PoC 状态 | 生产 N=2 长音频 |
+|---|---|---|
+| C.1 子进程隔离 mlpackage | ✅ 50 iter dummy 不崩 | **未集成** (工程量 1-2 天) |
+| C.2 `objc.autorelease_pool()` 包 `_run_backend` | ✅ 5s 短音频跑通 | ❌ **N=2 仍崩** (`110859`/`110936`.ips) |
+
+**autoreleasepool 失败原因**: pool 只同步释放 autoreleased temporaries, 但 `MLE5InputPort` 内部 **retained** 的 `MLFeatureValue` 仍走 `resetAfterLingering` 异步路径; 短跑累积少不撞, 长跑累积多触发 race。
+
+**子进程隔离假说成立**(根本架构隔离, 父进程不触碰 CoreML.framework), 但端到端工程化未做, 因为:
+1. 工程量 1-2 天 (IPC + 进程生命周期 + 错误恢复 + 与 worker pool 嵌套)
+2. 已等 deep research 输出, 可能有更轻量方案
+3. Phase 2 生产稳定 (-16.1%), Phase 3 优先级不再紧迫
+
+详见 `docs/ref/coreml_lingering_race/deep_research_prompt.md` 已派去 Gemini/Kimi。
+
 ## 决策 — 不切默认, escape hatch 保留
 
 按 Phase 3 prompt 第 5 节失败处理:
