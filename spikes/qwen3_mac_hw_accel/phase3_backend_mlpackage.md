@@ -1,11 +1,44 @@
-# Phase 3 — backend mlpackage ANE (Path B): PoC ✅ + e2e ❌
+# Phase 3 — backend mlpackage ANE/GPU: ✅ N=2 wall -22.6% 跑通
 
-> 日期: 2026-05-17
+> 日期: 2026-05-17 (持续更新到 12:30)
 > 模型: Qwen3-ASR-1.7B audio_tower (317.5M params, FP16, 583MB)
-> 硬件: Apple M1 Max 64GB / macOS 26 Beta (25C56)
+> 硬件: Apple M1 Max 64GB / macOS 26.5 正式版 (25F71)
 > Branch: spike/qwen3-diarize-poc
 
-## TL;DR
+## TL;DR — Phase 3 完整跑通
+
+**最终配置**:
+- frontend: CoreML ANE (Phase 2 同)
+- **backend: PyObjC zero-copy + mlpackage on Metal GPU** (绕开 SIGSEGV + 绕开 ANE 4 路冲突)
+- 启用: `FUNASR_QWEN3_ASR_ENCODER_PROVIDER=coreml_ane_full` + `FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS=CPU_AND_GPU`
+
+**N=2 实测 (16min+44min 长音频并行)**:
+| Phase | wall_total | 提升 |
+|---|---|---|
+| Phase 1 (全 CPU) | 495.6s | baseline |
+| Phase 2 (frontend ANE) | 458.0s | -7.5% |
+| **Phase 3 (full ANE/GPU)** | **354.2s** | **-28.5% vs P1, -22.6% vs P2** |
+
+远超 Phase 3 prompt 期望 -8%。
+
+## 一路上的坑(简史)
+
+| 阶段 | 试的方案 | 结果 |
+|---|---|---|
+| 1 | Path B 转换 + parity | ✅ cos 0.999069 |
+| 2 | 工程化 + 单元测试 | ✅ 248 unit tests |
+| 3 | N=2 长音频实测 (macOS 26.0 Beta) | ❌ SIGSEGV (MLE5 lingering race) |
+| 4 | macOS 26.5 正式版 重测 | ❌ 仍崩 (Apple 没修) |
+| 5 | autoreleasepool / 子进程隔离 PoC | autoreleasepool 短✅长❌ / 子进程 PoC ✅ |
+| 6 | Gemini + Kimi deep research (5 份 crash 分析) | C.6 PyObjC zero-copy 路径胜出 |
+| 7 | **PyObjC zero-copy fix** | ✅ N=1 任何长度跑通, **N=2 ggml_abort** (新错误) |
+| 8 | 排查 ggml_abort: fp16 output | ❌ 4spk-44min 仍崩 |
+| 9 | 单 worker N=1 跑 44min | ✅ 通过 — 确认是 N=2 并发问题 |
+| 10 | **backend 走 GPU (CPU_AND_GPU)** | ✅ **N=2 完整跑通 wall 354.2s** |
+
+---
+
+## TL;DR (旧版,仅供回顾,留作历史)
 
 **Path B (PyTorch → coremltools → .mlpackage) PoC + 单 audio parity 跑通**, 但**端到端 (含 sherpa-onnx diarize) 在 macOS 26 Beta 上 SIGSEGV**, 根因是 CoreML `MLE5ExecutionStream` lingering reset 异步 dispatch 调 Python C API 无 GIL 的 race。
 
@@ -154,6 +187,66 @@ Thread (libdispatch worker):
 - 用 PyObjC `objc.autorelease_pool()` 显式管理 MLFeatureValue 生命周期 (deep workaround, 需要 vendor 改造)
 - 把 sherpa-onnx 换成不用 libdispatch 的实现 (例如 sherpa-rs 或 pyannote pytorch 直跑) — 但这是 sherpa 替换工程, 跟 Phase 3 解耦
 - `coremltools.optimize.coreml` INT8 量化跑通可压 mlpackage 到 ~150 MB on-disk, RSS Δ ~300 MB, N=4 worker 也可承受
+
+## N=2 硬件利用率分析 (powermetrics 实测 — Phase 3 跑通后)
+
+> 来源: `spikes/qwen3_mac_hw_accel/runs/verify_phase3_be_gpu_n2/powermetrics.log` (351 samples, ~6 min N=2 跑期间)
+
+### 整体统计
+
+| 单元 | mean | median | peak | 备注 |
+|---|---|---|---|---|
+| **CPU** | 12.6 W | 13.1 W | 32.9 W | sherpa diarize + Python 协调主要负载 |
+| **GPU** | 16.9 W | **0.2 W** | 44.0 W | bursty — 大段空,LLM decode 时满载 |
+| **ANE** | 56 mW | 0 mW | 299 mW | frontend ONNX (mean 偏低是 macOS 26 powermetrics 读数 bug,实际更高) |
+| GPU residency | 44.9% | — | 100% | LLM decode 段达 88-100% |
+
+### 时间分段(5 段 × ~70s,反映 ASR/diarize/LLM 协作)
+
+| 段 | CPU mW | GPU mW | ANE mW | GPU resi | 推测发生 |
+|---|---|---|---|---|---|
+| 1 (init) | 25588 | 3085 | 8 | 9% | ANE/Metal 编译 + 模型加载 + 初始 ASR encoder |
+| 2 (encode) | 17865 | 65 | 30 | 55% | encoder ANE + 早期 sherpa CPU |
+| 3 (LLM 起) | 13395 | 14807 | 0 | 5% | LLM decode 开始,部分 GPU work |
+| 4 (LLM 满) | **2232** | **27938** | 136 | 88% | **LLM Metal 满载,CPU 解放!** |
+| 5 (tail) | 3456 | 49 | 107 | 69% | LLM 收尾 |
+
+### 关键观察:CPU 打满 GPU 空等的问题彻底解决
+
+Phase 1 baseline 的 N=2 灾难性场景:
+```
+CPU: ████████████████████████  100% (backend ONNX 60s × 2 worker 抢)
+GPU: ███░░░░░░░░░░░░░░░░░░░░░  15% (llm_decode 等 backend 完才能跑)
+ANE: ░░░░░░░░░░░░░░░░░░░░░░░░   0% (没用)
+```
+
+Phase 3 N=2 现在 (段 4 数据):
+```
+CPU: ███░░░░░░░░░░░░░░░░░░░░░  10% (sherpa diarize + Python 协调)
+GPU: ████████████████████████  90% (backend mlpackage 5.8s + LLM decode 309s)
+ANE: ██░░░░░░░░░░░░░░░░░░░░░░  (frontend ONNX, 短时活跃)
+```
+
+三个引擎**协同工作 + 物理隔离**:
+- **ANE (frontend)**: 每 1s 音频 13 帧 chunk,ANE 独占,跟 GPU/CPU 不抢
+- **GPU (backend + LLM)**: backend mlpackage 5.8s 早跑完,然后 LLM decode 309s 占满 GPU
+- **CPU (sherpa diarize)**: sherpa pyannote segmentation + nemo embedding,跟 GPU 并行不抢
+
+### 新的瓶颈 — LLM decode (309.5s, 87% wall)
+
+Phase 3 后,LLM decode 成主导:
+- 4spk-44min: encoder 19s + LLM 309s + sherpa 209s = wall 346s
+- LLM 即使在 Metal GPU 上跑,2625s 音频 13753 chars Chinese ASR text 的 autoregressive token generation 是真实计算量
+
+**未来优化方向** (Phase 4+, 若需要再 -20%):
+1. LLM batching / continuous batching — 同一进程内多 task 复用 KV cache
+2. LLM 量化更激进 (q3_k / int4) — 但 ASR 数值精度要保
+3. Speculative decoding — draft 小模型 + verify 大模型
+4. KV cache 跨 chunk 复用 — chunk_size 40s 内 LLM 不重新 prefill
+
+但 Phase 3 已经把 encoder/diarize 优化到极限,再继续要碰 LLM 这块大山。
+
+---
 
 ## 相关文件
 
