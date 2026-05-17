@@ -197,7 +197,7 @@ def convert_to_mlpackage(traced, time_dim: int, dim: int, precision: str, units:
             ct.TensorType(name="hidden_states", shape=(1, time_dim, dim), dtype=np.float32),
             ct.TensorType(name="key_padding_mask", shape=(1, time_dim), dtype=np.int32),
         ],
-        outputs=[ct.TensorType(name="last_hidden_state", dtype=np.float32)],
+        outputs=[ct.TensorType(name="last_hidden_state", dtype=np.float16)],
         minimum_deployment_target=ct.target.macOS15,
         compute_units=units_map[units],
         compute_precision=precision_map[precision],
