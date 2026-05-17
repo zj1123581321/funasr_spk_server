@@ -217,9 +217,16 @@ class QwenAudioEncoder:
             # 只持 numpy 裸 C 指针, dealloc 不调 Python C API, 绕开 race.
             # 详见 spikes/qwen3_mac_hw_accel/phase3_backend/poc_pyobjc_zerocopy.py
             from .coreml_runner import CoreMLZeroCopyRunner
+            # env override: 默认 CPU_AND_NE (ANE), 但 N=2 时 ANE 跟 frontend 4 路冲突可能触发
+            # llama.cpp ggml_abort (N=1 work, N=2 fail). 设 FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS=CPU_AND_GPU
+            # 让 backend 走 Metal GPU, frontend 独占 ANE.
+            # 注意: Phase 2 警告 units=ALL 抢 llama.cpp Metal, 这里 backend mlpackage CPU_AND_GPU
+            # 跟 llama.cpp 同 Metal dispatch queue 可能 llm_decode 退化, 实测.
+            import os as _os
+            be_units = _os.environ.get("FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS", "CPU_AND_NE")
             self.sess_be_mlmodel = CoreMLZeroCopyRunner(
                 backend_path,
-                compute_units="CPU_AND_NE",
+                compute_units=be_units,
                 verbose=self.verbose,
             )
             self.active_static_be = True
