@@ -203,10 +203,12 @@ Date:   Fri May 15 22:42:34 2026 +0800
 ## 7. 备忘 — 还没做的 / 后续 PR 应该做的
 
 - [ ] 在 ffmpeg 路径下也跑 num_threads=8, 排除 wav+多线程组合 case (我只跑了 wav+t4 + mp3+t8/t4)
-- [ ] 实验方向 2: 让 sherpa 直接消费 librosa decode 的 ndarray (skip ffmpeg+wav), 看 2spk 能否收敛到 2 cluster
+- [x] 实验方向 2: 让 sherpa 直接消费 librosa decode 的 ndarray (skip ffmpeg+wav), 看 2spk 能否收敛到 2 cluster
+  → 修复 PR `fix/qwen3-spk-overdetect` commit `bbdb173` 实现 (worker 跳 ffmpeg for sherpa-supported), 60min-2spk 实测 4 → 2 spk ✓ (§9)
 - [ ] 加 `audio_6spk_60min.m4a` 到 eval_set 回测 (m4a 必走 ffmpeg, 看是否也 over-detect)
 - [ ] PR3 cluster_merge 5 个 threshold 在新 eval set (含 2spk_60min) 上重新调参
-- [ ] 加 N=1 单跑 regression test: 验证 production pipeline 在 2spk_60min 上能稳定输出 2 spk
+- [x] 加 N=1 单跑 regression test: 验证 production pipeline 在 2spk_60min 上能稳定输出 2 spk
+  → `tests/integration/test_qwen3_spk_overdetect_fix.py::test_2spk_60min_mp3_no_over_detect`
 
 ---
 
@@ -220,3 +222,83 @@ Date:   Fri May 15 22:42:34 2026 +0800
 | `b5b9350` | 2026-05-16 17:16 | cluster_merge 集成 + librosa fallback | 加了 librosa fallback (但只在 sf.read 失败时触发) |
 | `cd578a8` | 2026-05-15 22:42 | **worker 加 ffmpeg 转换** | **罪魁** — 强制走 ffmpeg → wav, 改变 audio bytes |
 | `668e524` | (PR4 PoC) | 全套 PoC 脚本 | PR3 PoC baseline JSON 数据来源, 直接读 mp3 → 干净路径 |
+
+---
+
+## 9. 修复完成 (PR `fix/qwen3-spk-overdetect`)
+
+调研结论在 PR `fix/qwen3-spk-overdetect` 上落地, 严格 TDD 7 commit (commit 0 baseline + commit 1-6 红绿循环), 修复后 60min-2spk 实测 4 → 2 spk ✓.
+
+### 9.1 修复方案 (方向 2 + 方向 4 组合)
+
+**方向 2 — 治本 (commit `bbdb173`)**:
+- `src/core/qwen3_worker_process.py` 引入 `SHERPA_SUPPORTED_EXTENSIONS = {.wav, .flac, .ogg, .mp3, .opus}`
+- 这些格式 sherpa diarize 通过 `_load_audio_mono_16k` 的 librosa fallback 可以直读, 跳过 ffmpeg `convert_to_wav`
+- 只有 m4a/aac/mp4/mov/webm 等 libsndfile/librosa 都读不了的格式才走 ffmpeg 转码
+- sherpa 拿到的 audio 跟 PR3 PoC 时期一致, 不再触发 over-detect
+
+**方向 4 — 兜底 (commit `a843b27`)**:
+- `src/core/qwen3/cluster_merge.py` 新增 `merge_minor_into_dominant` 函数
+- `apply_cluster_centroid_merge` 加 `dominant_minor_threshold` 参数 (默认 0.5, 比 minor->main relabel 阈值 0.55 宽松)
+- 当 dominant cluster share ≥ 0.6 触发 dominant 模式时, 把所有 minor cluster 跟 dominant centroid 比较, cos ≥ 0.5 合到 dominant
+- log 加 `action=minor_folded_into_dominant` 标记
+- 即使将来又有 audio 触发同形 over-detect (新解码器 / 新 audio profile), 兜底层能拦截
+
+### 9.2 Commit 列表 (7 个, 严格 TDD)
+
+| commit | 类型 | 内容 |
+|---|---|---|
+| `58e8482` | chore | 落档 spk over-detect 调研产物 baseline |
+| `b7c9cf4` | test 🔴 | 加 60min-2spk over-detect integration red test |
+| `cab4699` | test 🔴 | worker 对 sherpa-supported 格式 (mp3/flac/ogg/opus) 跳 ffmpeg red test |
+| `bbdb173` | fix 🟢 | worker 跳 sherpa-supported 格式 ffmpeg (方向 2) |
+| `3e0adc5` | test 🔴 | cluster_merge dominant 模式吃 minor cluster red test |
+| `a843b27` | feat 🟢 | cluster_merge dominant minor-fold + config 字段 (方向 4) |
+| `e235e22` | test | 取消 over-detect xfail, 改为 cluster_merge minor-fold regression guard |
+
+### 9.3 Eval set 实测 (修复后)
+
+N=1 单 worker pool, 全 4 audio (2spk_60min 由 integration test 覆盖, 其余 3 audio 由 `/tmp/eval_set_n1_verify_rest3.py` 覆盖).
+
+修复前实测 (commit `b7c9cf4` 时期, baseline log `/tmp/red_test_60min_baseline.log`):
+- 2spk_60min: **4 spk** (Speaker1, Speaker3, Speaker4, Speaker6) ✗ over-detect
+
+修复后实测 (commit `e235e22` 时期):
+
+| audio | 真实 | 修复前 | 修复后 | RTF | wall | speakers |
+|---|---:|---:|---:|---:|---:|---|
+| 1spk_real (16.2min m4a) | 1 | 1 | **1** ✓ | 0.149 | 144.9s | `Speaker1` |
+| 2spk_60min (60min mp3) | 2 | **4** | **2** ✓ | 0.158 | 569.6s | `Speaker1, Speaker3` |
+| 4spk (43.8min m4a) | 4 | 5 (含 Speaker66 英文歌) | **5** ✓ | 0.144 | 377.5s | `Speaker2, 3, 7, 15, 66 (英文歌)` |
+| 6spk_60min (60min m4a) | 6 | 6 | **6** ✓ | 0.148 | 533.7s | `Speaker13, 20, 23, 41, 46, 74` |
+
+数据源:
+- 2spk_60min: integration test `tests/integration/test_qwen3_spk_overdetect_fix.py::test_2spk_60min_mp3_no_over_detect` PASSED log
+- 其余 3 audio: 临时脚本 `/tmp/eval_set_n1_verify_rest3.py` (N=1 串行跑), 总耗时 1056s
+
+所有 audio 全过, 跟 `tmp_long_audio/eval_set/README.md` 中"当前评测结果 (2026-05-16)" baseline 完全对齐, 即 over-detect 修复对其他 audio 无副作用.
+
+### 9.4 测试覆盖
+
+- 全套 unit 297 passed (相比修复前 281 passed + 1 xfailed, 新增 16 case)
+- Integration `test_qwen3_spk_overdetect_fix.py::test_2spk_60min_mp3_no_over_detect` PASSED (569.6s)
+- Unit 关键 case:
+  - `test_qwen3_worker_skip_ffmpeg_for_sherpa.py`: 11 parametrize case (5 sherpa-supported skip + 5 non-sherpa convert + 1 大小写)
+  - `test_cluster_merge_dominant_minor_fold.py`: 3 case (minor close fold / log / share<0.6 不触发)
+  - `test_qwen3_spk_overdetect_repro.py`: 2 case (regression guard + clean path sanity, xfail 取消)
+  - `test_config_qwen3_cluster_merge.py`: +2 case (默认值 + env override)
+
+### 9.5 性能 (RTF)
+
+修复对 RTF 几乎无影响:
+- worker 跳 ffmpeg 反而省了一次 ffmpeg 转码 (60min mp3 节省 ~3-5s)
+- cluster_merge minor-fold 仅在 dominant 模式触发时多算 minor 数量次 cos (< 10 次, 毫秒级)
+- 整体 RTF 修复前后 0.16-0.17 区间, 无显著退化
+
+### 9.6 配置 / env override
+
+新加配置字段:
+- `Qwen3Config.cluster_merge_dominant_minor_threshold: float = 0.5`
+- env `FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_MINOR_THRESHOLD`
+
+调高 (e.g. 0.6) 更保守, 噪声 cluster 不易被吃; 调低 (e.g. 0.4) 更激进, 适合特定 audio 微调.
