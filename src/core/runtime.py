@@ -42,18 +42,27 @@ class RuntimeEnvironment(Protocol):
         ...
 
 
+def _available_ort_providers() -> list[str]:
+    """返回 onnxruntime 当前可用 provider 列表; 加载失败时返回空 list.
+
+    跟 _has_cuda_runtime_available() 分开是为了让 validate() mock 更细 (能区分
+    "ort 装了但 CUDA EP 缺" vs "ort 完全没装").
+    """
+    try:
+        import onnxruntime as ort  # type: ignore
+
+        return list(ort.get_available_providers())
+    except Exception:
+        return []
+
+
 def _has_cuda_runtime_available() -> bool:
     """探测 onnxruntime-gpu CUDAExecutionProvider 是否可加载.
 
     在 import 阶段不真实 init session, 只看 ort.get_available_providers() 列表是否含 CUDA.
     silent fallback 留给 validate(), 这里只做能力探测.
     """
-    try:
-        import onnxruntime as ort  # type: ignore
-
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
+    return "CUDAExecutionProvider" in _available_ort_providers()
 
 
 @dataclass
@@ -75,7 +84,15 @@ class CudaRuntime:
     name: str = "cuda"
 
     def validate(self) -> None:
-        return None
+        """fail-fast: ORT 默认会 silent 回 CPU, 这里显式校验 CUDAExecutionProvider 真的在 list 里."""
+        providers = _available_ort_providers()
+        if "CUDAExecutionProvider" not in providers:
+            raise RuntimeError(
+                "CudaRuntime.validate(): onnxruntime CUDAExecutionProvider 不可用. "
+                f"available_providers={providers}. "
+                "通常意味着 onnxruntime-gpu 未装、LD_LIBRARY_PATH 缺 cudnn/cublas, "
+                "或者 cuda 版本不匹配. 用 FUNASR_RUNTIME=cpu 强制 fallback 或修依赖."
+            )
 
     def recommend_diarize_backend(self) -> str:
         return "ort_cuda"

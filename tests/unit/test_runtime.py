@@ -70,3 +70,43 @@ def test_detect_runtime_force_override_via_env(monkeypatch):
 
         r = detect_runtime()
         assert r.name == "cpu"
+
+
+# ==================== validate() fail-fast ====================
+
+
+def test_mac_validate_is_no_op():
+    """MacRuntime.validate() 不做任何检查, 保持当前 production 行为 — 任何状态都不 raise."""
+    from src.core.runtime import MacRuntime
+
+    MacRuntime().validate()  # 不抛即通过
+
+
+def test_cpu_validate_is_no_op():
+    from src.core.runtime import CpuRuntime
+
+    CpuRuntime().validate()
+
+
+def test_cuda_validate_raises_when_cuda_ep_missing():
+    """CUDA runtime 强制要求 CUDAExecutionProvider 可用, 缺则 fail-fast (替代 ORT silent fallback)."""
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CudaRuntime
+
+    with patch.object(
+        runtime_mod, "_available_ort_providers", return_value=["CPUExecutionProvider"]
+    ):
+        with pytest.raises(RuntimeError, match="CUDAExecutionProvider"):
+            CudaRuntime().validate()
+
+
+def test_cuda_validate_ok_when_cuda_ep_present():
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CudaRuntime
+
+    with patch.object(
+        runtime_mod,
+        "_available_ort_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ):
+        CudaRuntime().validate()  # 不抛即通过
