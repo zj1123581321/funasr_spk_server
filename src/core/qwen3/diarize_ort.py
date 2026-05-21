@@ -260,19 +260,24 @@ def compute_titanet_embedding(
 def fast_clustering(
     embeddings: np.ndarray,
     num_clusters: Optional[int] = None,
-    threshold: float = 0.7,
+    threshold: float = 0.9,
+    method: str = "complete",
 ) -> np.ndarray:
-    """sherpa-onnx FastClustering 兼容: cosine distance + average linkage agglomerative.
+    """sherpa-onnx FastClustering 兼容: cosine distance + agglomerative linkage.
 
     Args:
-        embeddings: (N, D) float32, 建议 L2-normalized (input 没 normalize 也能跑,
-            cosine distance 自带归一化).
+        embeddings: (N, D) float32, 建议 L2-normalized.
         num_clusters: 固定簇数; None 时按 threshold 截断.
-        threshold: distance > threshold 时停止合并. sherpa 默认 0.5 但 production
-            config 用 0.9, 实际签名跟 sherpa.FastClusteringConfig.threshold 对齐.
+        threshold: distance > threshold 时停止合并. cosine distance ∈ [0, 2].
+            实测 sherpa 默认 0.9 在我们的 scipy complete linkage 下 60s 双人
+            podcast 能稳定出 2 speakers; average linkage 太激进合并出 1 speaker.
+        method: scipy.cluster.hierarchy.linkage method.
+            - "complete" (默认): 最远距离合并, 跟 sherpa parity 更近
+            - "average": 平均距离合并, 容易 over-merge
+            - "single": 最近距离合并, 容易链式分裂
 
     Returns:
-        (N,) int32 labels in [0, K) — 0-based, 连续 (不留间隙).
+        (N,) int32 labels in [0, K) — 0-based 连续.
     """
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import pdist
@@ -284,12 +289,11 @@ def fast_clustering(
         return np.array([0], dtype=np.int32)
 
     dist = pdist(embeddings.astype(np.float64), metric="cosine")
-    Z = linkage(dist, method="average")
+    Z = linkage(dist, method=method)
     if num_clusters is not None:
         labels = fcluster(Z, t=num_clusters, criterion="maxclust")
     else:
         labels = fcluster(Z, t=threshold, criterion="distance")
-    # fcluster 返回 1-based, 重映射到 0-based 连续
     uniq = np.unique(labels)
     remap = {old: new for new, old in enumerate(uniq)}
     return np.array([remap[v] for v in labels], dtype=np.int32)
