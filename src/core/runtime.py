@@ -65,6 +65,31 @@ def _has_cuda_runtime_available() -> bool:
     return "CUDAExecutionProvider" in _available_ort_providers()
 
 
+def _cpu_count() -> int:
+    """物理核数兜底; os.cpu_count() 偶尔返回 None (容器), 兜底 4."""
+    n = os.cpu_count()
+    return int(n) if n else 4
+
+
+def _env_diarize_backend_override() -> str | None:
+    """读 FUNASR_QWEN3_DIARIZE_BACKEND, 空串/未设视为无 override."""
+    v = os.environ.get("FUNASR_QWEN3_DIARIZE_BACKEND", "").strip().lower()
+    return v if v else None
+
+
+def _recommend_num_threads_for_vcpu(vcpu: int) -> int:
+    """ASR + diarize 通过 asyncio.gather 真并行时, sherpa num_threads ≤ vCPU/2 是 sweet spot.
+
+    实测 (3060, 4 vCPU): num_threads=8 让 ASR mel 等 9.5s, num_threads=4 摊薄到长音频后最优.
+    通用规则:
+    - vCPU ≤ 4 → 2 (避免 oversubscribe)
+    - vCPU ≥ 5 → 4 (mel 慢一次, 长音频摊薄掉)
+    """
+    if vcpu <= 4:
+        return 2
+    return 4
+
+
 @dataclass
 class MacRuntime:
     name: str = "mac_ane"
@@ -73,9 +98,10 @@ class MacRuntime:
         return None
 
     def recommend_diarize_backend(self) -> str:
-        return "sherpa"
+        return _env_diarize_backend_override() or "sherpa"
 
     def recommend_num_threads(self) -> int:
+        # Mac 上 PoC 验证 4 最优 (10 cores M1/M2), 不依赖 cpu_count, 防 production 回归.
         return 4
 
 
@@ -95,10 +121,10 @@ class CudaRuntime:
             )
 
     def recommend_diarize_backend(self) -> str:
-        return "ort_cuda"
+        return _env_diarize_backend_override() or "ort_cuda"
 
     def recommend_num_threads(self) -> int:
-        return 2
+        return _recommend_num_threads_for_vcpu(_cpu_count())
 
 
 @dataclass
@@ -109,10 +135,10 @@ class CpuRuntime:
         return None
 
     def recommend_diarize_backend(self) -> str:
-        return "sherpa"
+        return _env_diarize_backend_override() or "sherpa"
 
     def recommend_num_threads(self) -> int:
-        return 2
+        return _recommend_num_threads_for_vcpu(_cpu_count())
 
 
 def detect_runtime() -> RuntimeEnvironment:

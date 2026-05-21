@@ -110,3 +110,84 @@ def test_cuda_validate_ok_when_cuda_ep_present():
         return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
     ):
         CudaRuntime().validate()  # 不抛即通过
+
+
+# ==================== recommend_num_threads() — cpu_count 适配 ====================
+
+
+def test_mac_recommend_num_threads_returns_4():
+    """MacRuntime 固定 4 — Mac PoC 验证最优, 不依赖 cpu_count, 防 production 回归."""
+    from src.core.runtime import MacRuntime
+
+    assert MacRuntime().recommend_num_threads() == 4
+
+
+def test_cuda_recommend_num_threads_small_vcpu_returns_2():
+    """4 vCPU 上 sherpa num_threads=2 是 short audio sweet spot (60s wall 7.18s)."""
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CudaRuntime
+
+    with patch.object(runtime_mod, "_cpu_count", return_value=4):
+        assert CudaRuntime().recommend_num_threads() == 2
+
+
+def test_cuda_recommend_num_threads_big_vcpu_returns_4():
+    """≥8 vCPU 上推荐 4 — 长音频 sweet spot, 跟实测 5min wall 28.09s 一致."""
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CudaRuntime
+
+    with patch.object(runtime_mod, "_cpu_count", return_value=8):
+        assert CudaRuntime().recommend_num_threads() == 4
+
+
+def test_cpu_recommend_num_threads_small_vcpu_returns_2():
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CpuRuntime
+
+    with patch.object(runtime_mod, "_cpu_count", return_value=4):
+        assert CpuRuntime().recommend_num_threads() == 2
+
+
+def test_cpu_recommend_num_threads_big_vcpu_returns_4():
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CpuRuntime
+
+    with patch.object(runtime_mod, "_cpu_count", return_value=16):
+        assert CpuRuntime().recommend_num_threads() == 4
+
+
+# ==================== recommend_diarize_backend() — env override ====================
+
+
+def test_mac_recommend_diarize_backend_returns_sherpa():
+    from src.core.runtime import MacRuntime
+
+    assert MacRuntime().recommend_diarize_backend() == "sherpa"
+
+
+def test_cuda_recommend_diarize_backend_default_ort_cuda():
+    from src.core.runtime import CudaRuntime
+
+    assert CudaRuntime().recommend_diarize_backend() == "ort_cuda"
+
+
+def test_cpu_recommend_diarize_backend_returns_sherpa():
+    from src.core.runtime import CpuRuntime
+
+    assert CpuRuntime().recommend_diarize_backend() == "sherpa"
+
+
+def test_recommend_diarize_backend_env_override_forces_sherpa_on_cuda(monkeypatch):
+    """FUNASR_QWEN3_DIARIZE_BACKEND=sherpa 防回归 escape hatch, CUDA runtime 也能切回 sherpa."""
+    monkeypatch.setenv("FUNASR_QWEN3_DIARIZE_BACKEND", "sherpa")
+    from src.core.runtime import CudaRuntime
+
+    assert CudaRuntime().recommend_diarize_backend() == "sherpa"
+
+
+def test_recommend_diarize_backend_env_override_forces_ort_cuda_on_mac(monkeypatch):
+    """env 强制 ort_cuda — 给 CUDA dev 在 Mac 上做 schema 验证留口子."""
+    monkeypatch.setenv("FUNASR_QWEN3_DIARIZE_BACKEND", "ort_cuda")
+    from src.core.runtime import MacRuntime
+
+    assert MacRuntime().recommend_diarize_backend() == "ort_cuda"
