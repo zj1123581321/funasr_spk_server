@@ -319,7 +319,17 @@ class Qwen3DiarizeTranscriber:
         cluster_merge task 不含 3-5s 的 extractor build overhead. extractor
         warmup 独立 try/except, 失败不阻塞 ASR engine 可用性 (生产时 sherpa
         模型缺失/加载慢等场景, ASR 仍能跑, cluster_merge 在 task 内 lazy 重试).
+
+        ORT-CUDA sprint: 启动前打一行 runtime summary, 给运维确认当前 runtime
+        + diarize backend + sherpa num_threads, 排查环境问题用. Mac 上保持 no-op
+        (MacRuntime.validate() 不抛), Linux + CUDA 上 validate() 会 fail-fast.
         """
+        from src.core.runtime import describe_runtime, detect_runtime
+
+        runtime = detect_runtime()
+        runtime.validate()
+        logger.info(f"[qwen3] {describe_runtime(runtime)}")
+
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._ensure_engine)
         try:

@@ -141,6 +141,18 @@ class CpuRuntime:
         return _recommend_num_threads_for_vcpu(_cpu_count())
 
 
+def describe_runtime(runtime: RuntimeEnvironment) -> str:
+    """格式化 runtime 关键字段成单行启动日志, 给运维快速判断当前环境.
+
+    格式: `runtime=<name> diarize_backend=<x> num_threads=<n>`
+    """
+    return (
+        f"runtime={runtime.name} "
+        f"diarize_backend={runtime.recommend_diarize_backend()} "
+        f"num_threads={runtime.recommend_num_threads()}"
+    )
+
+
 def detect_runtime() -> RuntimeEnvironment:
     """根据 sys.platform + CUDA 探测 + env override 选 runtime.
 

@@ -191,3 +191,27 @@ def test_recommend_diarize_backend_env_override_forces_ort_cuda_on_mac(monkeypat
     from src.core.runtime import MacRuntime
 
     assert MacRuntime().recommend_diarize_backend() == "ort_cuda"
+
+
+# ==================== describe_runtime() — 启动可观测性 ====================
+
+
+def test_describe_runtime_includes_name_backend_threads_for_mac():
+    """启动日志一行讲清楚 runtime, 给运维快速判断."""
+    from src.core.runtime import MacRuntime, describe_runtime
+
+    line = describe_runtime(MacRuntime())
+    assert "runtime=mac_ane" in line
+    assert "diarize_backend=sherpa" in line
+    assert "num_threads=4" in line
+
+
+def test_describe_runtime_for_cuda_runtime():
+    from src.core import runtime as runtime_mod
+    from src.core.runtime import CudaRuntime, describe_runtime
+
+    with patch.object(runtime_mod, "_cpu_count", return_value=8):
+        line = describe_runtime(CudaRuntime())
+    assert "runtime=cuda" in line
+    assert "diarize_backend=ort_cuda" in line
+    assert "num_threads=4" in line
