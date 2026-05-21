@@ -220,6 +220,81 @@ def compute_titanet_log_mel(
     return log_mel.T.astype(np.float32)
 
 
+def compute_titanet_embedding(
+    audio: np.ndarray,
+    ort_session,
+    input_name: Optional[str] = None,
+    length_input_name: Optional[str] = None,
+) -> np.ndarray:
+    """跑 TitaNet ONNX embedding 单 audio segment.
+
+    Args:
+        audio: (T,) float32 16kHz mono. 期望 >= 0.3s 才有意义 embedding.
+        ort_session: 已加载的 onnxruntime InferenceSession 或 mock.
+        input_name: mel 输入名; None 则用 session.get_inputs()[0].name.
+        length_input_name: T_mel length 输入名 (sherpa nemo-titanet 有 2 inputs);
+            None 则按 inputs[1].name 自动取.
+
+    Returns:
+        (192,) float32 L2-normalized embedding. 全 0 audio 时 norm=0, 返回原始
+        embedding 不再 normalize (避免除零 NaN).
+    """
+    mel = compute_titanet_log_mel(audio)  # (80, T_mel)
+    mel_in = mel[np.newaxis, :, :].astype(np.float32)  # (1, 80, T_mel)
+
+    inputs = ort_session.get_inputs()
+    in_name = input_name or inputs[0].name
+    feed: dict = {in_name: mel_in}
+    if len(inputs) >= 2:
+        ln_name = length_input_name or inputs[1].name
+        feed[ln_name] = np.array([mel_in.shape[-1]], dtype=np.int64)
+
+    out = ort_session.run(None, feed)[0]
+    emb = np.asarray(out).flatten().astype(np.float32)
+    norm = float(np.linalg.norm(emb))
+    if norm > 1e-12:
+        emb = emb / norm
+    return emb
+
+
+def fast_clustering(
+    embeddings: np.ndarray,
+    num_clusters: Optional[int] = None,
+    threshold: float = 0.7,
+) -> np.ndarray:
+    """sherpa-onnx FastClustering 兼容: cosine distance + average linkage agglomerative.
+
+    Args:
+        embeddings: (N, D) float32, 建议 L2-normalized (input 没 normalize 也能跑,
+            cosine distance 自带归一化).
+        num_clusters: 固定簇数; None 时按 threshold 截断.
+        threshold: distance > threshold 时停止合并. sherpa 默认 0.5 但 production
+            config 用 0.9, 实际签名跟 sherpa.FastClusteringConfig.threshold 对齐.
+
+    Returns:
+        (N,) int32 labels in [0, K) — 0-based, 连续 (不留间隙).
+    """
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import pdist
+
+    n = int(embeddings.shape[0])
+    if n == 0:
+        return np.array([], dtype=np.int32)
+    if n == 1:
+        return np.array([0], dtype=np.int32)
+
+    dist = pdist(embeddings.astype(np.float64), metric="cosine")
+    Z = linkage(dist, method="average")
+    if num_clusters is not None:
+        labels = fcluster(Z, t=num_clusters, criterion="maxclust")
+    else:
+        labels = fcluster(Z, t=threshold, criterion="distance")
+    # fcluster 返回 1-based, 重映射到 0-based 连续
+    uniq = np.unique(labels)
+    remap = {old: new for new, old in enumerate(uniq)}
+    return np.array([remap[v] for v in labels], dtype=np.int32)
+
+
 def pyannote_segmentation_pipeline(
     audio: np.ndarray,
     ort_session,
