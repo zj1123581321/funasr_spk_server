@@ -81,14 +81,36 @@ def detect_runtime() -> RuntimeEnvironment: ...
 - [ ] **保留所有现有后处理**(`filter_spurious_speakers / cluster_centroid_merge / short_segment_guard / silence_align`)不动 — 新 backend 只换 segment+embed+cluster 这一段, 后处理依赖不变
 - [ ] 跟 LLM CUDA 共存稳定, 跑 e2e test 不 segfault(整个 sprint 的核心假设)
 
+## 自主推进准则(非常重要 — 别中途停下来问)
+
+**用户已经明确授权**: 整个 sprint 按 TDD 推, 测试通过就 commit, **持续推进直到全部任务完成**. 不要在每个小决策上停下来问用户.
+
+### 什么时候 **不要** 中途询问
+- ✅ 测试绿了 → 直接 commit, 不要问"要不要 commit"
+- ✅ 完成一个 acceptance criterion → 直接进下一个, 不要问"接下来做什么"
+- ✅ 已知陷阱里有的事(LD_LIBRARY_PATH / num_threads / mel preprocessing 等)→ 按 prompt 里写的执行, 不要问
+- ✅ commit message 风格 → 仿照 `git log --oneline -20` 已有风格, 不要问要怎么写
+- ✅ 测试设计 / fixture 命名 / 工程小决策 → 自己拍板, 不要问
+
+### 什么时候 **必须** 停下来
+- ❌ 卡在底层不可调和的问题(比如 ORT CUDA 又撞 LLM、模型权重坏掉 download 不下来), 多次尝试无解
+- ❌ 准确度 parity 测试反复失败, 已经怀疑 sherpa baseline 本身不稳定
+- ❌ 用户的工程意图明显有冲突(比如某 acceptance criterion 跟 CLAUDE.md 约定冲突)
+- ❌ 发现需要做 >1 天工程量的预料外重构, 该说服用户调整 scope
+
+简单原则: **能往下推就往下推, 不能往下推就讲清楚阻塞 + 选项**.
+
 ## TDD 流程要求(严格执行, 用户原话: "先红再绿再 commit")
 
-### 红 → 绿 → commit 是最小单位
+### 红 → 绿 → commit 是最小单位, 测试一通过立刻 commit
 
 **不要积累多个改动一次性提交**. 每个改动:
-1. 先写测试, 跑 → 红
+1. 先写测试, 跑 → 红(失败 + 写下你期望什么样的 API)
 2. 写最小代码让测试绿 → 绿
-3. 立刻 commit(包含测试 + 最小 impl), commit message 写清楚解决什么问题
+3. **立刻 `git add` + `git commit`** — 包含测试 + 最小 impl, 不要继续往下写下一个 feature 再 commit
+4. 继续下一个 红 → 绿 → commit 循环
+
+一次 sprint 期望产生 10+ 个细粒度 commit, 不是 2-3 个大 commit. 单 commit 改动 < 200 行更健康.
 
 参考项目里之前的 commit 风格(`git log --oneline -20`):
 - `feat(qwen3): cluster_merge dominant 模式吃相似 minor cluster (新 dominant_minor_threshold=0.5)`
@@ -151,9 +173,9 @@ ssh zlx@100.103.92.95 'bash -lc "cd ~/Dev/projects/funasr_spk_server && \
 # 远端 background 长跑用 Bash run_in_background=true, 不要本地 poll
 ```
 
-## 起手第一个 commit 建议
+## 起手第一个 commit + 整体推进节奏
 
-按 TDD, 第一个 commit 应该是:
+### 起手第一个 commit
 
 **`test(runtime): 添加 detect_runtime() 红灯单测`**
 
@@ -173,10 +195,30 @@ def test_detect_runtime_returns_cuda_when_libs_present():
     # ... 
 ```
 
-跑 `pytest tests/unit/test_runtime.py` → 红(`src.core.runtime` 模块不存在). 然后写最小实现让它绿. 然后 commit.
+跑 `pytest tests/unit/test_runtime.py` → 红(`src.core.runtime` 模块不存在). 然后写最小实现让它绿. 然后 commit. 然后下一个红灯.
 
-按这个节奏推下去就行.
+### 整体推进节奏
+
+按 "推荐的 commit 拆分" 那节的 10 个 commit 串行推, **一鼓作气推到全部 acceptance criteria 都过**, 不要中途等用户确认每个步骤.
+
+每个 commit 完成后:
+- ✅ 测试在远端 CUDA 机器上跑过(`bash scripts/_remote_run_provider.sh ...`)
+- ✅ Mac 路径的 parity test 仍然过(可在本地 venv 跑, 或者远端模拟)
+- ✅ commit message 清晰
+
+**只在以下情况向用户汇报**:
+- 全部 10 个 commit 都完成, 准备总结成果
+- 卡在不可调和的问题, 多次尝试无解
+- 发现 scope 严重偏离原 prompt(比如要做重构远超 1.5 天)
+
+否则就是 — **写测试 → 跑测试 → 改代码 → 测试绿 → commit → 下一个**.
+
+最后一个 commit 落档后, 给用户 summary:
+- 实际 wall RTF 数据(60s / 5min / 30min)
+- 跟 sherpa CPU baseline 的 parity 比对
+- 总 commit 数和改动行数
+- 已知遗留问题(if any)
 
 ---
 
-**Good luck. 整个 sprint 完成后, 项目应该是 — Linux + CUDA 下端到端 wall RTF < 0.05, Mac 路径零变化, 一个清晰的 runtime + backend 抽象, 全套 TDD 单测覆盖.**
+**Good luck. 整个 sprint 完成后, 项目应该是 — Linux + CUDA 下端到端 wall RTF < 0.05, Mac 路径零变化, 一个清晰的 runtime + backend 抽象, 全套 TDD 单测覆盖. 一次性推到底, 不要在中间停.**
