@@ -23,7 +23,11 @@ from loguru import logger
 
 from src.core.qwen3.asr import build_engine, run_asr
 from src.core.qwen3.cluster_merge import apply_cluster_centroid_merge
-from src.core.qwen3.diarize import _load_audio_mono_16k, run_diarization
+from src.core.qwen3.diarize import (
+    _load_audio_mono_16k,
+    run_diarization,
+    run_diarization_dispatched,
+)
 from src.core.qwen3.merge import (
     Segment,
     filter_spurious_speakers,
@@ -386,7 +390,7 @@ class Qwen3DiarizeTranscriber:
         )
         diarize_future = loop.run_in_executor(
             None,
-            lambda: run_diarization(
+            lambda: run_diarization_dispatched(
                 audio_path,
                 segmentation_model=self.segmentation_model,
                 embedding_model=self.embedding_model,

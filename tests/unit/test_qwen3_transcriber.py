@@ -61,7 +61,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="hash-stub")):
             ret = await transcriber.transcribe(
@@ -79,7 +79,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(duration=10.0)), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="hash-stub")):
             result, _raw = await transcriber.transcribe(
@@ -100,7 +100,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             result, _ = await transcriber.transcribe(
@@ -127,7 +127,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
             {"start": 6.0, "end": 9.0, "speaker": 1},  # 重复
         ]
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(duration=9.0)), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=turns), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=turns), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             result, _ = await transcriber.transcribe(
@@ -142,7 +142,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
         audio.write_bytes(b"\x00")
         asr_text = "测试文本"
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(text=asr_text)), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             _, raw = await transcriber.transcribe(
@@ -164,7 +164,7 @@ class TestQwen3DiarizeTranscriberJsonMode:
             {"start": 151.5, "end": 300.0, "speaker": 1},
         ]
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(duration=300.0)), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=spurious_turns), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=spurious_turns), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             result, _ = await transcriber.transcribe(
@@ -182,7 +182,7 @@ class TestQwen3DiarizeTranscriberSrtMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             ret = await transcriber.transcribe(
@@ -198,7 +198,7 @@ class TestQwen3DiarizeTranscriberSrtMode:
         audio = tmp_path / "podcast.mp3"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(duration=10.0)), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="hash-x")):
             ret = await transcriber.transcribe(
@@ -217,7 +217,7 @@ class TestQwen3DiarizeTranscriberSrtMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(text="abcdefghij")), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             ret = await transcriber.transcribe(
@@ -239,7 +239,7 @@ class TestQwen3DiarizeTranscriberSrtMode:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result(text="测试")), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             ret = await transcriber.transcribe(
@@ -261,7 +261,7 @@ class TestProgressCallback:
         audio.write_bytes(b"\x00")
         cb = MagicMock()
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             await transcriber.transcribe(
@@ -278,7 +278,7 @@ class TestProgressCallback:
         audio.write_bytes(b"\x00")
         cb = AsyncMock()
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             await transcriber.transcribe(
@@ -296,7 +296,7 @@ class TestProgressCallback:
         def cb(_pct):
             raise RuntimeError("bad callback")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             result, _ = await transcriber.transcribe(
@@ -310,7 +310,7 @@ class TestProgressCallback:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()), \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             # progress_callback=None 是默认, 不应抛
@@ -328,7 +328,7 @@ class TestEngineSingletonReuse:
         audio = tmp_path / "x.wav"
         audio.write_bytes(b"\x00")
         with patch("src.core.qwen3_transcriber.run_asr", return_value=_fake_asr_result()), \
-             patch("src.core.qwen3_transcriber.run_diarization", return_value=_fake_turns()), \
+             patch("src.core.qwen3_transcriber.run_diarization_dispatched", return_value=_fake_turns()), \
              patch("src.core.qwen3_transcriber.build_engine", return_value=object()) as mock_build, \
              patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
             await transcriber.transcribe(audio_path=str(audio), task_id="t1", output_format="json")

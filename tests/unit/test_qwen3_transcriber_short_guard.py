@@ -108,7 +108,7 @@ class TestTranscribePipelineAppliesGuard:
                 {"speaker": 0, "start": 3.5, "end": 10.0},
             ]
 
-        monkeypatch.setattr(qwen3_tx_mod, "run_diarization", _stub_run_diarization)
+        monkeypatch.setattr(qwen3_tx_mod, "run_diarization_dispatched", _stub_run_diarization)
 
         # 关键: mock merge_asr_chunks_and_diarize 注入 0s ghost 段
         from src.core.qwen3.merge import Segment

@@ -295,6 +295,157 @@ def fast_clustering(
     return np.array([remap[v] for v in labels], dtype=np.int32)
 
 
+def _extract_turns_from_activity(
+    activity: np.ndarray,
+    frame_rate_hz: float = PYANNOTE_FRAME_RATE_HZ,
+    min_duration_on: float = 0.3,
+    min_duration_off: float = 0.5,
+) -> list[dict]:
+    """从 (T_frame, S) multi-label binary 提取 turn list (per-local-speaker).
+
+    每个 speaker 维度独立扫: 连续 active frame 段为一个 turn. min_duration_on
+    过滤短段. min_duration_off 用于 future gap-closing (暂未实现, 占位).
+
+    Returns:
+        sorted by (start, end), 每项 {"start": float, "end": float, "local_speaker": int}.
+        local_speaker 来自 pyannote chunk 内的 spk slot, 跨 chunk 不一定同一人 —
+        cluster 阶段会用 TitaNet embedding 合并 / 拆分.
+    """
+    turns: list[dict] = []
+    if activity.size == 0:
+        return turns
+    T, S = activity.shape
+    for spk in range(S):
+        active = activity[:, spk] > 0
+        i = 0
+        while i < T:
+            if not active[i]:
+                i += 1
+                continue
+            j = i
+            while j < T and active[j]:
+                j += 1
+            start = i / frame_rate_hz
+            end = j / frame_rate_hz
+            if (end - start) >= min_duration_on:
+                turns.append({"start": start, "end": end, "local_speaker": spk})
+            i = j
+    turns.sort(key=lambda t: (t["start"], t["end"]))
+    return turns
+
+
+# ==================== ORT session cache ====================
+
+_PYANNOTE_SESSION_CACHE: dict[str, object] = {}
+_TITANET_SESSION_CACHE: dict[str, object] = {}
+
+
+def _default_providers() -> list:
+    """优先 CUDA → CoreML(Mac) → CPU. ORT 自动 fallback 到第一个可用."""
+    return ["CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"]
+
+
+def _get_pyannote_session(model_path: str, providers: Optional[list] = None):
+    """加载 / cache pyannote-seg ONNX session (按 model_path key)."""
+    if model_path in _PYANNOTE_SESSION_CACHE:
+        return _PYANNOTE_SESSION_CACHE[model_path]
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(model_path, providers=providers or _default_providers())
+    _PYANNOTE_SESSION_CACHE[model_path] = sess
+    return sess
+
+
+def _get_titanet_session(model_path: str, providers: Optional[list] = None):
+    if model_path in _TITANET_SESSION_CACHE:
+        return _TITANET_SESSION_CACHE[model_path]
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(model_path, providers=providers or _default_providers())
+    _TITANET_SESSION_CACHE[model_path] = sess
+    return sess
+
+
+def reset_session_cache() -> None:
+    """测试 helper / 进程结束清理用."""
+    _PYANNOTE_SESSION_CACHE.clear()
+    _TITANET_SESSION_CACHE.clear()
+
+
+def run_diarization_ort_cuda(
+    audio_path: str,
+    segmentation_model: str,
+    embedding_model: str,
+    num_speakers: Optional[int] = None,
+    cluster_threshold: float = 0.9,
+    min_duration_on: float = 0.3,
+    min_duration_off: float = 0.5,
+    providers: Optional[list] = None,
+    min_embedding_audio_sec: float = 0.3,
+) -> list[dict]:
+    """ORT 直 wrap diarize 端到端: pyannote sliding window + TitaNet embedding + cluster.
+
+    跟 src.core.qwen3.diarize.run_diarization (sherpa-onnx) 行为 parity, 输出 schema
+    一致: [{"start": float, "end": float, "speaker": int}, ...]
+
+    Mac/Linux 通用 — providers 没传时按 CUDA → CoreML → CPU fallback. CUDA 平台
+    走 GPU, mac 上 CoreML/CPU 也能跑 (慢但功能正确), 给 dev 阶段 debug 方便.
+    """
+    # 复用 sherpa 的 audio loading 跟 fallback 链 (libsndfile + librosa)
+    from src.core.qwen3.diarize import _load_audio_mono_16k
+
+    audio, _ = _load_audio_mono_16k(audio_path)
+
+    seg_sess = _get_pyannote_session(segmentation_model, providers=providers)
+    emb_sess = _get_titanet_session(embedding_model, providers=providers)
+
+    # 1. pyannote sliding window → (T_frame, 3) binary
+    activity = pyannote_segmentation_pipeline(audio, seg_sess)
+
+    # 2. 提取 turn (per local spk slot)
+    turns_local = _extract_turns_from_activity(
+        activity,
+        frame_rate_hz=PYANNOTE_FRAME_RATE_HZ,
+        min_duration_on=min_duration_on,
+        min_duration_off=min_duration_off,
+    )
+    if not turns_local:
+        return []
+
+    # 3. 每个 turn 跑 TitaNet embedding (要求 audio segment ≥ min_embedding_audio_sec)
+    sample_rate = 16000
+    min_samples = int(min_embedding_audio_sec * sample_rate)
+    embeddings: list[np.ndarray] = []
+    valid_turns: list[dict] = []
+    for t in turns_local:
+        a = int(t["start"] * sample_rate)
+        b = int(t["end"] * sample_rate)
+        if b - a < min_samples:
+            continue
+        emb = compute_titanet_embedding(audio[a:b], emb_sess)
+        embeddings.append(emb)
+        valid_turns.append(t)
+
+    if not embeddings:
+        return []
+
+    # 4. cluster 跨 chunk 重组 global speaker
+    emb_matrix = np.stack(embeddings).astype(np.float32)
+    labels = fast_clustering(
+        emb_matrix,
+        num_clusters=num_speakers,
+        threshold=cluster_threshold,
+    )
+
+    # 5. 输出 turn list (跟 sherpa schema 对齐)
+    out = [
+        {"start": float(t["start"]), "end": float(t["end"]), "speaker": int(lbl)}
+        for t, lbl in zip(valid_turns, labels)
+    ]
+    out.sort(key=lambda x: x["start"])
+    return out
+
+
 def pyannote_segmentation_pipeline(
     audio: np.ndarray,
     ort_session,

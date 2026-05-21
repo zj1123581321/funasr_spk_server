@@ -144,3 +144,54 @@ def run_diarization(
         {"start": float(r.start), "end": float(r.end), "speaker": int(r.speaker)}
         for r in result
     ]
+
+
+def run_diarization_dispatched(
+    audio_path: str,
+    segmentation_model: str,
+    embedding_model: str,
+    num_speakers: Optional[int] = None,
+    cluster_threshold: float = 0.9,
+    num_threads: int = 8,
+    provider: str = "cpu",
+    min_duration_on: float = 0.3,
+    min_duration_off: float = 0.5,
+    backend: Optional[str] = None,
+) -> list[dict]:
+    """根据 runtime / env / 显式 backend 参数选 sherpa 或 ort_cuda 跑 diarize.
+
+    优先级: backend 参数 > FUNASR_QWEN3_DIARIZE_BACKEND env > runtime 推荐.
+
+    跟 run_diarization (sherpa) 行为 parity, 输出 schema 一致:
+    [{"start": float, "end": float, "speaker": int}, ...]
+    """
+    if backend is None:
+        from src.core.runtime import detect_runtime
+
+        backend = detect_runtime().recommend_diarize_backend()
+
+    if backend == "ort_cuda":
+        from src.core.qwen3.diarize_ort import run_diarization_ort_cuda
+
+        return run_diarization_ort_cuda(
+            audio_path,
+            segmentation_model=segmentation_model,
+            embedding_model=embedding_model,
+            num_speakers=num_speakers,
+            cluster_threshold=cluster_threshold,
+            min_duration_on=min_duration_on,
+            min_duration_off=min_duration_off,
+        )
+
+    # default: sherpa-onnx
+    return run_diarization(
+        audio_path,
+        segmentation_model=segmentation_model,
+        embedding_model=embedding_model,
+        num_speakers=num_speakers,
+        cluster_threshold=cluster_threshold,
+        num_threads=num_threads,
+        provider=provider,
+        min_duration_on=min_duration_on,
+        min_duration_off=min_duration_off,
+    )
