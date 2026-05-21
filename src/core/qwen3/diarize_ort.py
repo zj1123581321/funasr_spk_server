@@ -16,6 +16,22 @@ from typing import Iterator, Optional, Tuple
 
 import numpy as np
 
+# 延迟 import: librosa/scipy 只在 mel 计算时用, 不污染 module import 路径
+def _scipy_hann_window(size: int) -> np.ndarray:
+    from scipy.signal.windows import hann as _hann
+
+    return _hann(size, sym=False).astype(np.float32)
+
+
+def _librosa_mel_filterbank(
+    sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float
+) -> np.ndarray:
+    import librosa
+
+    return librosa.filters.mel(
+        sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax
+    ).astype(np.float32)
+
 # pyannote-segmentation-3.0 模型常量 (固定)
 PYANNOTE_CHUNK_SAMPLES = 160000  # 10s @ 16k
 PYANNOTE_CHUNK_FRAMES = 589  # 每 chunk 输出 frame 数
@@ -118,6 +134,90 @@ def _aggregate_chunk_outputs(
     # 短 audio (< 1 frame, 极端 case) 返回 chunk 维度避免空数组; 正常 audio 截到 floor frame 数.
     slice_to = audio_frames if audio_frames > 0 else total_frames
     return out_frames[:slice_to]
+
+
+def compute_titanet_log_mel(
+    audio: np.ndarray,
+    sample_rate: int = 16000,
+    n_window_size: int = 400,
+    n_window_stride: int = 160,
+    n_fft: int = 512,
+    n_mels: int = 80,
+    fmin: float = 0.0,
+    fmax: Optional[float] = None,
+    preemph: float = 0.97,
+    log_zero_guard: float = 2**-24,
+    norm_eps: float = 1e-5,
+) -> np.ndarray:
+    """NeMo TitaNet 风格 80-band log-mel preprocessing (numpy + librosa/scipy).
+
+    步骤跟 NeMo AudioToMelSpectrogramPreprocessor 对齐:
+    1. preemphasis: y[t] = x[t] - preemph * x[t-1]  (preemph=0 跳过)
+    2. STFT: n_fft=512, hann window n_window_size=400 zero-pad 到 n_fft, hop=160,
+       center=True (reflect pad)
+    3. power spectrum (|spec|^2)
+    4. mel filterbank: librosa.filters.mel(sr, n_fft, n_mels, fmin, fmax=sr/2)
+    5. log(mel + log_zero_guard)
+    6. per_feature normalize: 沿 time axis 做 z-score, 每个 mel band 独立
+
+    输入: audio (T,) float32 @ sample_rate
+    输出: (n_mels, T_mel) float32. ONNX 期望 (B, n_mels, T_mel), 调用方加 batch dim.
+    """
+    if fmax is None:
+        fmax = sample_rate / 2
+
+    audio = np.asarray(audio, dtype=np.float32)
+
+    # 1. preemphasis
+    if preemph and preemph != 0.0:
+        audio = np.concatenate(
+            [[audio[0]], audio[1:] - preemph * audio[:-1]]
+        ).astype(np.float32)
+
+    # 2. center=True reflect pad
+    pad = n_fft // 2
+    if audio.shape[0] < n_fft:
+        audio = np.concatenate(
+            [audio, np.zeros(n_fft - audio.shape[0], dtype=np.float32)]
+        )
+    audio_padded = np.pad(audio, pad, mode="reflect")
+
+    # 切 STFT frames
+    n_frames = 1 + (audio_padded.shape[0] - n_fft) // n_window_stride
+    if n_frames < 1:
+        n_frames = 1
+    frames = np.lib.stride_tricks.as_strided(
+        audio_padded,
+        shape=(n_frames, n_fft),
+        strides=(audio_padded.strides[0] * n_window_stride, audio_padded.strides[0]),
+    ).copy()
+
+    # hann window n_window_size, zero-pad 到 n_fft
+    win = _scipy_hann_window(n_window_size)
+    if n_window_size < n_fft:
+        win = np.pad(win, (0, n_fft - n_window_size)).astype(np.float32)
+    windowed = frames * win  # (n_frames, n_fft)
+
+    # 3. STFT power
+    spec = np.fft.rfft(windowed, n=n_fft, axis=-1)
+    mag_power = (spec.real ** 2 + spec.imag ** 2).astype(np.float32)
+
+    # 4. mel filterbank
+    mel_basis = _librosa_mel_filterbank(
+        sr=sample_rate, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax
+    )  # (n_mels, n_fft//2 + 1)
+    mel_spec = mag_power @ mel_basis.T  # (n_frames, n_mels)
+
+    # 5. log
+    log_mel = np.log(mel_spec + log_zero_guard).astype(np.float32)
+
+    # 6. per_feature normalize (沿 time axis z-score, 每个 band 独立)
+    mean = log_mel.mean(axis=0, keepdims=True)
+    std = log_mel.std(axis=0, keepdims=True)
+    log_mel = (log_mel - mean) / (std + norm_eps)
+
+    # 转 (n_mels, n_frames) 跟 NeMo / sherpa 期望对齐
+    return log_mel.T.astype(np.float32)
 
 
 def pyannote_segmentation_pipeline(
