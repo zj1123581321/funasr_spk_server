@@ -102,6 +102,10 @@ def build_engine_config(
 
         if cfg_value == "cpu":
             onnx_provider = "CPU"
+        elif cfg_value == "cuda":
+            onnx_provider = "CUDA"
+        elif cfg_value in ("tensorrt", "trt"):
+            onnx_provider = "TENSORRT"
         elif cfg_value == "coreml_ane_fe":
             onnx_provider = "COREML_ANE_FE"
         elif cfg_value == "coreml_ane_full":

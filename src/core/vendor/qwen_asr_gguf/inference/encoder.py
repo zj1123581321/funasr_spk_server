@@ -254,9 +254,15 @@ class QwenAudioEncoder:
             dummy_wav = np.zeros(int(16000 * self.dml_pad_to)).astype(np.float32)
             _ = self.encode(dummy_wav)
         else:
-            # 非 DML 模式下，预热一个短音频即可，无需 Padding
-            if self.verbose: print(f"--- [Encoder] 正在预热 (非 DML 模式)... ---")
-            dummy_wav = np.zeros(int(16000 * 2.0)).astype(np.float32)
+            # 非 DML 模式下，预热用 dml_pad_to 大小 (>= chunk_size_sec) 让 numpy.fft / BLAS
+            # 在冷启动时就按真实 chunk size 构建 plan 与 thread pool, 避免 chunk 1 第一次
+            # 跑 40s 真实 mel 时 fft plan miss / BLAS spawn 触发 ~10s cold start.
+            # 必须用 non-zero data: np.zeros 在 BLAS/MKL 的 dot product 可能走 sparse
+            # shortcut, 不会触发完整 GEMM kernel JIT, warmup 失效.
+            warmup_sec = max(self.dml_pad_to, 2.0)
+            if self.verbose: print(f"--- [Encoder] 正在预热 (非 DML 模式, {warmup_sec}s)... ---")
+            _rng = np.random.default_rng(0)
+            dummy_wav = _rng.standard_normal(int(16000 * warmup_sec)).astype(np.float32) * 0.1
             _ = self.encode(dummy_wav)
         if self.verbose: print("--- [Encoder] 预热完成 ---")
 
@@ -354,20 +360,33 @@ class QwenAudioEncoder:
     def encode(self, audio: np.ndarray) -> tuple:
         """执行编码 (Mel -> Frontend -> Backend)，返回 (embedding, 耗时)"""
         t0 = time.time()
-        
+
         # 1. 提取 Mel 特征
         # audio: (N_samples,) -> mel: (128, T)
-        mel = self.mel_extractor(audio, dtype=self.input_dtype) 
-        
+        t_mel = time.time()
+        mel = self.mel_extractor(audio, dtype=self.input_dtype)
+        dt_mel = time.time() - t_mel
+
         # 2. Frontend (Loop)
+        t_fe = time.time()
         hidden_states = self._run_frontend(mel)
-        
+        dt_fe = time.time() - t_fe
+
         # 3. Backend (Transformer)
+        t_be = time.time()
         audio_embd = self._run_backend(hidden_states)
-        
+        dt_be = time.time() - t_be
+
         # 4. 去除 Batch 维 -> (T, D)
-        if audio_embd.ndim == 3: 
+        if audio_embd.ndim == 3:
             audio_embd = audio_embd[0]
-            
+
         elapsed = time.time() - t0
+        if os.environ.get("FUNASR_QWEN3_ENCODER_TIMING") == "1":
+            print(
+                f"[encoder-timing] mel={dt_mel*1000:.1f}ms "
+                f"frontend={dt_fe*1000:.1f}ms backend={dt_be*1000:.1f}ms "
+                f"total={elapsed*1000:.1f}ms",
+                flush=True,
+            )
         return audio_embd, elapsed
