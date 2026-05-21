@@ -95,6 +95,26 @@ ASR 的 numpy.fft 排队等, ort_cuda 走 GPU 不抢 CPU thread, ASR 解放出�
 
 短音频 ASR 时间砍半是 e2e wall 加倍 win 的重要原因.
 
+### 资源占用 — 1800s ort_cuda e2e (8 vCPU, 1Hz 采样)
+
+跑法: `scripts/_remote_resource_probe.sh` 同步抓 `nvidia-smi` + `ps` (83 samples,
+83.5s wall 内). 同一份 podcast 1800s.
+
+| 指标 | peak | avg | 备注 |
+|---|---|---|---|
+| GPU 显存 | **2839 MiB (~2.77 GB)** | 2608 MiB | RTX 3060 12G 用 23% |
+| GPU util% | 100% | 82% | 中段 ASR + diarize 共用 GPU 跑满 |
+| Python CPU% | 393% | 250% | 8 vCPU 平均占 2.5 个 core |
+| Python RSS | **1758 MB** | 1498 MB | 模型权重 + audio + KV cache |
+
+阶段形态:
+- **t=0-1s**: model load — RSS 18MB → 752MB → 1460MB, GPU mem 1 → 2633 MiB
+- **t=1-80s**: ASR + diarize 并行跑, GPU util ~100% 稳定, CPU 240% (mel + cluster + llm token gen)
+- **t=80-83s**: 后处理 — GPU 0% (cluster_centroid_merge / silence_align 都 CPU), CPU 280%, RSS 升到 peak 1758MB (audio 重读 + ffmpeg silencedetect)
+
+显存预算: ASR encoder + LLM gguf + pyannote-seg ONNX + TitaNet ONNX 共 ~2.8GB,
+跟 llama.cpp CUDA buffer ~300MB 共存稳定 (跟 PoC 同方向).
+
 ### Sweet spot (60s) — threshold + linkage sweep
 
 | linkage | threshold | speakers (sherpa baseline=2) |
