@@ -92,14 +92,21 @@ def build_engine_config(
     from src.core.vendor.qwen_asr_gguf.inference.schema import ASREngineConfig
     import sys as _sys
 
+    # 治理 D4: 从 config 一次性读 asr_encoder_provider / backend_mlpackage_units /
+    # encoder_timing_enabled, 透传给 ASREngineConfig → QwenAudioEncoder, vendor 不再读 env
+    try:
+        from src.core import config as _config_module
+        qwen3_cfg = _config_module.config.qwen3
+        cfg_value = (getattr(qwen3_cfg, "asr_encoder_provider", None) or "auto").lower()
+        backend_mlpackage_units = getattr(qwen3_cfg, "backend_mlpackage_units", "CPU_AND_NE")
+        encoder_timing_enabled = getattr(qwen3_cfg, "encoder_timing_enabled", False)
+    except Exception:
+        cfg_value = "auto"
+        backend_mlpackage_units = "CPU_AND_NE"
+        encoder_timing_enabled = False
+
     if onnx_provider is None:
         # 优先级: 显式参数 > config (含 env FUNASR_QWEN3_ASR_ENCODER_PROVIDER) > 平台感知
-        try:
-            from src.core import config as _config_module
-            cfg_value = (_config_module.config.qwen3.asr_encoder_provider or "auto").lower()
-        except Exception:
-            cfg_value = "auto"
-
         if cfg_value == "cpu":
             onnx_provider = "CPU"
         elif cfg_value == "cuda":
@@ -129,6 +136,8 @@ def build_engine_config(
         onnx_provider=onnx_provider,
         llm_use_gpu=llm_use_gpu,
         enable_aligner=enable_aligner,
+        backend_mlpackage_units=backend_mlpackage_units,
+        encoder_timing_enabled=encoder_timing_enabled,
     )
 
 

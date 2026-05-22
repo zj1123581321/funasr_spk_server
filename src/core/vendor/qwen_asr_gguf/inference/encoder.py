@@ -119,11 +119,24 @@ def get_feat_extract_output_lengths(input_lengths):
 
 class QwenAudioEncoder:
     """Qwen3 音频编码器 (Split Frontend + Backend)"""
-    def __init__(self, frontend_path: str, backend_path: str, onnx_provider: str = 'CPU', dml_pad_to: int = 30, verbose: bool = True):
+    def __init__(
+        self,
+        frontend_path: str,
+        backend_path: str,
+        onnx_provider: str = 'CPU',
+        dml_pad_to: int = 30,
+        verbose: bool = True,
+        backend_mlpackage_units: str = "CPU_AND_NE",
+        encoder_timing_enabled: bool = False,
+    ):
         self.verbose = verbose
         self.onnx_provider = onnx_provider.upper()
         self.active_dml = False
         self.dml_pad_to = dml_pad_to
+        # 治理 (上层 Qwen3Config D4): 老 env FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS /
+        # FUNASR_QWEN3_ENCODER_TIMING 提升为参数, vendor 不再读 os.environ
+        self.backend_mlpackage_units = backend_mlpackage_units
+        self.encoder_timing_enabled = encoder_timing_enabled
         # 预计算目标长度：每 1 秒对应 13 帧 hidden_states
         self.h_target_len = self.dml_pad_to * 13
         # backend mlpackage MLModel 句柄 (仅 COREML_ANE_FULL 启用), None 表示走 ONNX backend
@@ -217,16 +230,14 @@ class QwenAudioEncoder:
             # 只持 numpy 裸 C 指针, dealloc 不调 Python C API, 绕开 race.
             # 详见 spikes/qwen3_mac_hw_accel/phase3_backend/poc_pyobjc_zerocopy.py
             from .coreml_runner import CoreMLZeroCopyRunner
-            # env override: 默认 CPU_AND_NE (ANE), 但 N=2 时 ANE 跟 frontend 4 路冲突可能触发
-            # llama.cpp ggml_abort (N=1 work, N=2 fail). 设 FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS=CPU_AND_GPU
+            # 老默认 CPU_AND_NE (ANE), 但 N=2 时 ANE 跟 frontend 4 路冲突可能触发
+            # llama.cpp ggml_abort (N=1 work, N=2 fail). 设 Qwen3Config.backend_mlpackage_units=CPU_AND_GPU
             # 让 backend 走 Metal GPU, frontend 独占 ANE.
             # 注意: Phase 2 警告 units=ALL 抢 llama.cpp Metal, 这里 backend mlpackage CPU_AND_GPU
             # 跟 llama.cpp 同 Metal dispatch queue 可能 llm_decode 退化, 实测.
-            import os as _os
-            be_units = _os.environ.get("FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS", "CPU_AND_NE")
             self.sess_be_mlmodel = CoreMLZeroCopyRunner(
                 backend_path,
-                compute_units=be_units,
+                compute_units=self.backend_mlpackage_units,
                 verbose=self.verbose,
             )
             self.active_static_be = True
@@ -382,7 +393,7 @@ class QwenAudioEncoder:
             audio_embd = audio_embd[0]
 
         elapsed = time.time() - t0
-        if os.environ.get("FUNASR_QWEN3_ENCODER_TIMING") == "1":
+        if self.encoder_timing_enabled:
             print(
                 f"[encoder-timing] mel={dt_mel*1000:.1f}ms "
                 f"frontend={dt_fe*1000:.1f}ms backend={dt_be*1000:.1f}ms "

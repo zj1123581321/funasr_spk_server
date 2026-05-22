@@ -90,6 +90,11 @@ class ASREngineConfig:
     verbose: bool = True
     enable_aligner: bool = False
     align_config: Optional[AlignerConfig] = None
+    # 治理 (上层 Qwen3Config D4): COREML_ANE_FULL backend mlpackage compute_units, 老 env
+    # FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS 提升为参数
+    backend_mlpackage_units: str = "CPU_AND_NE"
+    # 治理: encoder 打印 mel/fe/be 耗时, 老 env FUNASR_QWEN3_ENCODER_TIMING 提升为参数
+    encoder_timing_enabled: bool = False
 
     def __post_init__(self):
         # 如果没有显式设置 Encoder 填充时长，则默认与 LLM 分段识别时长对齐

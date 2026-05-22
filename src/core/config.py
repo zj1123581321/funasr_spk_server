@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Literal
 from pydantic import BaseModel, Field, validator, model_validator
 from loguru import logger
 from dotenv import load_dotenv
@@ -156,6 +156,16 @@ class Qwen3Config(BaseModel):
     silence_align_min_segment_dur_sec: float = 0.1
     silence_vad_noise_db: str = "-25dB"
     silence_vad_min_silence_sec: float = 0.20
+
+    # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
+    # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
+    #   - CPU_AND_NE: 默认, frontend ANE + backend mlpackage ANE
+    #     ⚠️ N=2 并发可能跟 frontend ANE 4 路冲突触发 llama.cpp ggml_abort, 用 CPU_AND_GPU 错开
+    #   - CPU_AND_GPU: frontend 独占 ANE, backend 走 Metal GPU
+    #   - ALL: 三路全开 (mac 26 Beta 有 issue, 仅 dev 实验)
+    # encoder_timing_enabled: True 时 encoder 每段打印 mel/frontend/backend 耗时 (排查性能用)
+    backend_mlpackage_units: Literal["CPU_AND_NE", "CPU_AND_GPU", "ALL"] = "CPU_AND_NE"
+    encoder_timing_enabled: bool = False
 
     model_config = {"protected_namespaces": ()}
 
@@ -455,6 +465,9 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "silence_align_min_segment_dur_sec", "FUNASR_QWEN3_SILENCE_ALIGN_MIN_SEGMENT_DUR_SEC", float)
         cls._override_if_set(config_data["qwen3"], "silence_vad_noise_db", "FUNASR_QWEN3_SILENCE_VAD_NOISE_DB")
         cls._override_if_set(config_data["qwen3"], "silence_vad_min_silence_sec", "FUNASR_QWEN3_SILENCE_VAD_MIN_SILENCE_SEC", float)
+        # A2 治理: vendor 字段 (D4)
+        cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
+        cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)
         # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
         _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
         if _num_spk_env is not None:

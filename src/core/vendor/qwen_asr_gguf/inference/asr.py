@@ -36,13 +36,16 @@ class QwenASREngine:
         frontend_path = os.path.join(config.model_dir, config.encoder_frontend_fn)
         backend_path = os.path.join(config.model_dir, config.encoder_backend_fn)
 
-        # 1. 初始化 Encoder
+        # 1. 初始化 Encoder (治理 D4: 新增 backend_mlpackage_units + encoder_timing_enabled
+        # 从 config 透传, 取代 vendor 直接读 os.environ.get)
         self.encoder = QwenAudioEncoder(
             frontend_path=frontend_path,
             backend_path=backend_path,
             onnx_provider=config.onnx_provider,
             dml_pad_to=config.dml_pad_to,
-            verbose=self.verbose
+            verbose=self.verbose,
+            backend_mlpackage_units=getattr(config, "backend_mlpackage_units", "CPU_AND_NE"),
+            encoder_timing_enabled=getattr(config, "encoder_timing_enabled", False),
         )
 
         # 2. 初始化 Aligner (可选)
