@@ -55,7 +55,9 @@ def build_embedding_extractor_fn(cfg_like):
 
     cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
         model=cfg_like.embedding_model,
-        num_threads=4,
+        # D5: 从 cfg 读 num_threads (Qwen3Config Pydantic validator 已解析 "auto" → int)
+        # 兜底 4 是 mac default (老 hardcode 值), 万一传入对象没 num_threads 属性时
+        num_threads=getattr(cfg_like, "num_threads", 4),
         provider=getattr(cfg_like, "provider", "cpu"),
         debug=False,
     )
@@ -234,7 +236,8 @@ class Qwen3DiarizeTranscriber:
         embedding_model: str,
         num_speakers: Optional[int] = None,
         cluster_threshold: float = 0.9,
-        num_threads: int = 8,
+        # 默认 4 跟 Qwen3Config 默认 "auto" 在 Mac 解析后一致 (pre-existing 8 是 inconsistency, A2 修)
+        num_threads: int = 4,
         provider: str = "cpu",
         language: str = "Chinese",
         temperature: float = 0.4,

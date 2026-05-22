@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, model_validator
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -93,10 +93,20 @@ class Qwen3Config(BaseModel):
     # Diarize preset (PoC 报告 preset=auto 普适最优)
     num_speakers: Optional[int] = None    # None = 自适应聚类
     cluster_threshold: float = 0.9
-    # PoC 验证 (M1 Max + pool=2): t=4 比 t=8 wall -11.5%, 总 threads 8 ≤ 10 cores 留 2 给系统
-    # 详见 spikes/qwen3_mac_hw_accel/num_threads_tuning.md
-    num_threads: int = 4
-    provider: str = "cpu"
+    # A2 治理 (D1): num_threads / provider 默认 "auto" → Pydantic model_validator 在 load 时
+    # 一次性解析为具体 int / "cpu", 下游 (transcriber:58/237/399/575, inproc_pool:117) 永远拿到 int.
+    # auto 解析规则:
+    #   num_threads="auto" → detect_runtime().recommend_num_threads()
+    #     · MacRuntime  → 4 (PoC: t=4 比 t=8 wall -11.5%, 10 cores M1 Max + pool=2 最优)
+    #     · CudaRuntime → 2/4 按 vCPU 数 (≤4 vCPU=2, ≥5=4, 详见 runtime.py)
+    #     · CpuRuntime  → 同 cuda 按 vCPU
+    #   provider="auto" → "cpu" (sherpa SpeakerEmbeddingExtractor 在所有 runtime 都 cpu;
+    #                            cuda 上 sherpa diarize 已被 ort_cuda 替代, embedding 只在
+    #                            cluster_centroid_merge 用一次)
+    # 显式 int / 显式 provider 字符串不被覆盖.
+    # 详见 spikes/qwen3_mac_hw_accel/num_threads_tuning.md + docs/开发/config-治理-新session-prompt.md
+    num_threads: int | str = "auto"
+    provider: str = "auto"
 
     # Phase 2/3 escape hatch: 生产环境如果 ANE 出问题, 改 env 一键回退 CPU
     # auto: build_engine_config 按平台感知 (macOS → COREML_ANE_FE, 其他 → CPU)
@@ -148,6 +158,26 @@ class Qwen3Config(BaseModel):
     silence_vad_min_silence_sec: float = 0.20
 
     model_config = {"protected_namespaces": ()}
+
+    @model_validator(mode="after")
+    def _resolve_auto_sentinels(self):
+        """A2 治理 (D1): num_threads/provider "auto" 在 model load 时一次性解析.
+
+        解析后字段类型保证是 int / 具体字符串, 下游消费点 (5 处) 零改动.
+        数字字符串 (env override "4" 走 _override_if_set int converter 已是 int, 这里兜底).
+        """
+        if isinstance(self.num_threads, str):
+            v = self.num_threads.strip().lower()
+            if v == "auto":
+                from src.core.runtime import detect_runtime
+                self.num_threads = detect_runtime().recommend_num_threads()
+            else:
+                self.num_threads = int(v)
+        if isinstance(self.provider, str) and self.provider.strip().lower() == "auto":
+            # sherpa SpeakerEmbeddingExtractor 在 cuda runtime 也走 cpu
+            # (sherpa diarize 已被 ort_cuda 接管, embedding 只在 cluster_merge 用一次)
+            self.provider = "cpu"
+        return self
 
 
 class TranscriptionConfig(BaseModel):
