@@ -35,6 +35,34 @@ class Segment:
     text: str
 
 
+def relabel_segments_by_duration_desc(segments: List[Segment]) -> List[Segment]:
+    """按 speaker 总时长降序重新映射 int label, 让 Speaker ID 跨 backend/平台稳定.
+
+    raw cluster id 由底层算法决定 (sherpa/ort_cuda 互不兼容, 同 audio 跨 backend
+    出来的 int 不同), 输出层直接 +1 转字符串会让客户端看到 "Speaker55" / "Speaker41"
+    这种不稳定的编号. 这个 helper 在输出前把内部 int 按"主→次→第三"的总时长
+    顺序重新映射成 0/1/2/..., 配合下游 `f"Speaker{i+1}"` 渲染出稳定的
+    Speaker1 (说最多) / Speaker2 / ... .
+
+    平局 (两个 speaker 总时长相同) 时按原 int 升序作为 tie breaker, 保证
+    deterministic — 同一份 input 跑多次输出一致.
+
+    Args:
+        segments: List[Segment], speaker 字段是 raw int (cluster id).
+    Returns:
+        新 List[Segment], speaker 重映射为 0..N-1, 内容 (start/end/text) 不变.
+    """
+    if not segments:
+        return segments
+    durations: dict[int, float] = {}
+    for s in segments:
+        durations[s.speaker] = durations.get(s.speaker, 0.0) + (s.end - s.start)
+    # 按 (-时长, 原int) 排序: 时长降序 + 平局时原 int 升序
+    sorted_ids = sorted(durations.keys(), key=lambda k: (-durations[k], k))
+    remap = {old: new for new, old in enumerate(sorted_ids)}
+    return [replace(s, speaker=remap[s.speaker]) for s in segments]
+
+
 def filter_spurious_speakers(
     turns: List[dict],
     min_speaker_total: float = 2.0,
