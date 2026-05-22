@@ -162,6 +162,86 @@ env override 仍可用 (`FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS` / `FUNASR_QWEN3_E
 
 per-request `engine ≠ default_engine` 已被 `transcriber_dispatch.py:57` 拒, 所以 startup 仅查 default_engine 充分.
 
+## 切换设备 / 切引擎操作手册
+
+不同部署目标 × 不同引擎的常见组合, 推荐姿势:
+
+### A. Mac + Qwen3 (主路径)
+
+```bash
+# prod (PM2 守护)
+FUNASR_PROFILE=mac_prod pm2 start ecosystem.config.cjs
+
+# dev (前台直跑, 看日志)
+FUNASR_PROFILE=mac_dev venv/bin/python run_server.py
+```
+
+### B. Linux CUDA + Qwen3 (远端 dev box / 未来 prod)
+
+```bash
+export FUNASR_PROFILE=cuda_dev   # 或 cuda_prod
+# LD_LIBRARY_PATH 配 CUDA libs (远端启动脚本里设, 详见 scripts/_remote_*.sh)
+venv/bin/python run_server.py
+```
+
+### C. Mac/Linux + FunASR (历史路径 / 回归对比)
+
+所有 profile 默认都是 qwen3 引擎, 想用 FunASR 走 env 覆盖:
+
+```bash
+# 干净法 (走 config.json 默认 port/log, 推荐)
+FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+
+# 套餐 + 覆盖法 (沿用 profile 的 port/log, 只改引擎)
+FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+```
+
+注: FunASR 不支持 CUDA, Linux 上自动走 CPU (MPS 仅 Mac).
+
+### "改哪里" 决策树
+
+```
+要长期保留这个配置吗?
+├── 是 → 改文件
+│       ├── 单机日常用法         → 本机 .env 写 FUNASR_PROFILE=xxx
+│       ├── 多机同环境共用       → config.json (但 profile 通常已够用)
+│       └── 加一个新部署目标     → src/core/config.py 的 PROFILES dict
+└── 否 (一次性 / 调试) → 命令行 export FUNASR_xxx=yyy
+```
+
+### 最常见 3 种用法
+
+1. **dev 机切环境** (最常用) — 本机 .env 一行:
+   ```
+   FUNASR_PROFILE=mac_dev   # 或 cuda_dev
+   ```
+2. **临时换引擎调试** — 命令行 cover:
+   ```bash
+   FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+   ```
+3. **加新部署目标** (新机器 / 新硬件配置) — 改 `src/core/config.py:PROFILES`:
+   ```python
+   PROFILES = {
+       ...
+       "cuda_l40_prod": {  # 例: L40 GPU, pool 4
+           "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 4},
+           "qwen3": {"asr_encoder_provider": "cuda"},
+       },
+   }
+   ```
+
+### 启动后怎么验证配置生效
+
+启动日志会打印 (`_apply_profile_defaults` 输出):
+```
+FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
+  server.port('(默认)'→8867),
+  transcription.default_engine('(默认)'→'qwen3'),
+  ...
+```
+
+如果发现某字段没被 profile 覆盖, 100% 是 `.env` 或 shell env 里设了更高优先级的 `FUNASR_*`. grep `.env` 找污染源 (清完再起服务).
+
 ## 加 config 字段的步骤
 
 1. `Qwen3Config` (或对应 BaseModel) 加字段 + 默认值 + docstring
