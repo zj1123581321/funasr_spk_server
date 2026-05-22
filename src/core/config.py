@@ -5,10 +5,39 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from pydantic import BaseModel, Field, validator
 from loguru import logger
 from dotenv import load_dotenv
+
+
+# ==================== FUNASR_PROFILE 套餐 (A1 治理) ====================
+# 切平台 / 切环境一句 env 搞定: FUNASR_PROFILE=mac_prod / mac_dev / cuda_prod / cuda_dev
+# 优先级: defaults < config.json < profile < env (env 仍可覆盖 profile)
+# profile 覆盖 config.json 已有字段, 启动日志会列出被覆盖的字段防止"惊讶感"
+PROFILES: Dict[str, Dict[str, Any]] = {
+    "mac_prod": {
+        "server": {"port": 8767},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 3},
+        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
+    },
+    "mac_dev": {
+        "server": {"port": 8867},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
+        "logging": {"level": "DEBUG"},
+    },
+    "cuda_prod": {
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "qwen3": {"asr_encoder_provider": "cuda"},
+    },
+    "cuda_dev": {
+        "server": {"port": 8867},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "qwen3": {"asr_encoder_provider": "cuda"},
+        "logging": {"level": "DEBUG"},
+    },
+}
 
 
 class ServerConfig(BaseModel):
@@ -214,6 +243,9 @@ class Config(BaseModel):
         # 从 config.json 加载基础配置
         config_data = cls._load_json_config(config_path)
 
+        # 应用 FUNASR_PROFILE 套餐 (覆盖 config.json, env 仍可覆盖 profile)
+        config_data = cls._apply_profile_defaults(config_data)
+
         # 应用环境变量覆盖
         config_data = cls._apply_env_overrides(config_data)
 
@@ -257,6 +289,63 @@ class Config(BaseModel):
                 else:
                     filtered[key] = value
         return filtered
+
+    @classmethod
+    def _apply_profile_defaults(cls, config_data: Dict[str, Any]) -> Dict[str, Any]:
+        """应用 FUNASR_PROFILE 套餐 — 在 env override 之前 apply, profile 覆盖 config.json.
+
+        优先级链: defaults < config.json < profile < env
+        - 未设 FUNASR_PROFILE: no-op, 直接返回 config_data
+        - 未知 profile name: warn + ignore, 不挂
+        - 已知 profile: deep-merge 进 config_data, profile 字段覆盖 config.json 已有字段
+
+        启动日志列出被覆盖的字段, 防止"我明明 config.json 写了 X profile 怎么变 Y"的惊讶感.
+        """
+        profile_name = os.getenv("FUNASR_PROFILE", "").strip().lower()
+        if not profile_name:
+            return config_data
+
+        if profile_name not in PROFILES:
+            logger.warning(
+                f"⚠️  FUNASR_PROFILE={profile_name!r} 未知, "
+                f"可选: {list(PROFILES.keys())}. 忽略 profile, 走 config.json + env."
+            )
+            return config_data
+
+        profile_data = PROFILES[profile_name]
+        overridden = cls._deep_merge_profile(config_data, profile_data)
+        logger.info(
+            f"FUNASR_PROFILE={profile_name} applied. "
+            f"覆盖字段 ({len(overridden)}): "
+            + ", ".join(f"{path}({old!r}→{new!r})" for path, old, new in overridden)
+        )
+        return config_data
+
+    @classmethod
+    def _deep_merge_profile(
+        cls,
+        base: Dict[str, Any],
+        override: Dict[str, Any],
+        path: str = "",
+    ) -> List[Tuple[str, Any, Any]]:
+        """递归 deep-merge: override 覆盖 base. 返回 [(path, old_value, new_value), ...] 用于日志."""
+        records: List[Tuple[str, Any, Any]] = []
+        for k, v in override.items():
+            full_path = f"{path}.{k}" if path else k
+            if isinstance(v, dict):
+                base.setdefault(k, {})
+                if not isinstance(base[k], dict):
+                    # base 该 key 不是 dict, 直接覆盖整段
+                    records.append((full_path, base[k], v))
+                    base[k] = v
+                else:
+                    records.extend(cls._deep_merge_profile(base[k], v, full_path))
+            else:
+                old = base.get(k, "(默认)")
+                if old != v:
+                    records.append((full_path, old, v))
+                base[k] = v
+        return records
 
     @classmethod
     def _apply_env_overrides(cls, config_data: Dict[str, Any]) -> Dict[str, Any]:
