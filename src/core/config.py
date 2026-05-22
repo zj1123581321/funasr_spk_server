@@ -331,6 +331,33 @@ class Config(BaseModel):
         return filtered
 
     @classmethod
+    def _validate_engine_runtime(cls, config: "Config", errors: List[str]) -> None:
+        """A3 治理 (D3): 启动时校验 engine ↔ runtime 兼容性.
+
+        触发条件: default_engine=qwen3 且 runtime.validate() 抛 (典型: cuda runtime + ORT EP 缺).
+        Mac/Cpu runtime 的 validate() 是 no-op, 自然不挂.
+
+        per-request engine ≠ default_engine 已被 transcriber_dispatch.py:57 拒,
+        所以这里只查 default_engine, 不需要扫所有可能 engine.
+        """
+        engine = config.transcription.default_engine
+        if engine != "qwen3":
+            return
+        try:
+            from src.core.runtime import detect_runtime
+        except Exception as exc:
+            errors.append(f"无法导入 runtime 模块校验 engine={engine}: {exc}")
+            return
+        runtime = detect_runtime()
+        try:
+            runtime.validate()
+        except RuntimeError as exc:
+            errors.append(
+                f"default_engine={engine} + runtime={runtime.name} 启动校验失败: {exc}. "
+                f"用 FUNASR_RUNTIME=cpu 降级或修依赖 (onnxruntime-gpu / LD_LIBRARY_PATH)."
+            )
+
+    @classmethod
     def _apply_profile_defaults(cls, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """应用 FUNASR_PROFILE 套餐 — 在 env override 之前 apply, profile 覆盖 config.json.
 
@@ -557,6 +584,11 @@ class Config(BaseModel):
         # 验证并发任务数
         if config.transcription.max_concurrent_tasks < 1:
             errors.append(f"最大并发任务数必须 >= 1，当前值: {config.transcription.max_concurrent_tasks}")
+
+        # A3 治理 (D3): startup engine ↔ runtime 兼容性 fail-fast
+        # default_engine=qwen3 + cuda runtime + ORT CUDA EP 缺 → 直接挂, 不留到第一个 task 才挂.
+        # per-request engine ≠ default 已被 transcriber_dispatch.py:57 拒, startup 仅查 default 充分.
+        cls._validate_engine_runtime(config, errors)
 
         # 打印警告
         for warning in warnings:
