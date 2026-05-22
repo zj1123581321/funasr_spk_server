@@ -33,6 +33,7 @@ from src.core.qwen3.merge import (
     filter_spurious_speakers,
     merge_asr_chunks_and_diarize,
     merge_asr_and_diarize,
+    relabel_segments_by_duration_desc,
     segments_to_srt,
     snap_segments_to_silence,
 )
@@ -480,6 +481,12 @@ class Qwen3DiarizeTranscriber:
                     f"tol={silence_stats.get('tolerance_sec')}s "
                     f"speech_regions={silence_stats.get('speech_regions_count', 0)}"
                 )
+
+        # Speaker ID 稳定化: 把内部 raw cluster int 按总时长降序重映射成 0/1/2/...,
+        # 让下游 f"Speaker{i+1}" 输出的 Speaker1 始终是说话最多的人, 跨 backend
+        # (ort_cuda / sherpa) / 跨平台 (cuda / Mac) 一致. 见 docs/开发/gpu加速/
+        # 2026-05-22-cuda-diarize-accuracy.md 改进建议 §1.
+        merged_segments = relabel_segments_by_duration_desc(merged_segments)
 
         await self._report_progress(progress_callback, 90, task_id)
 
