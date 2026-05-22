@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from src.core.file_based_process_pool import FileBasedProcessPool
+from src.core.runtime import detect_runtime
 
 
 class Qwen3PoolTranscriber:
@@ -127,13 +128,22 @@ class Qwen3PoolTranscriber:
             logger.warning(f"[{task_id}] progress_callback 异常(忽略): {e}")
 
 
-# ==================== 全局单例 ====================
+# ==================== 全局单例 + runtime-aware dispatch ====================
 
-_qwen3_pool_singleton: Optional[Qwen3PoolTranscriber] = None
+_qwen3_pool_singleton: Optional[Any] = None  # Qwen3PoolTranscriber 或 Qwen3InProcPool
 
 
-def get_qwen3_pool_transcriber() -> Qwen3PoolTranscriber:
-    """获取 Qwen3 池化转录器单例 — 从 config.transcription.qwen3_pool_size 读池大小"""
+def get_qwen3_pool_transcriber() -> Any:
+    """获取 Qwen3 池化转录器单例 — runtime-aware dispatch.
+
+    cuda runtime → Qwen3InProcPool (单进程 N 实例, 避开 CUDNN cross-process race)
+    其他 runtime  → Qwen3PoolTranscriber (file-based multi-process pool)
+
+    pool_size 共用 config.transcription.qwen3_pool_size.
+
+    Mac (MacRuntime) 行为 100% 不变: 仍走原 multi-process pool, 跟历史一致.
+    详细决策见 docs/开发/gpu加速/2026-05-23-CUDA并发突破.md.
+    """
     global _qwen3_pool_singleton
     if _qwen3_pool_singleton is not None:
         return _qwen3_pool_singleton
@@ -141,7 +151,20 @@ def get_qwen3_pool_transcriber() -> Qwen3PoolTranscriber:
     from src.core.config import config
 
     pool_size = config.transcription.qwen3_pool_size
-    _qwen3_pool_singleton = Qwen3PoolTranscriber(pool_size=pool_size)
+    runtime = detect_runtime()
+    if runtime.name == "cuda":
+        from src.core.qwen3_inproc_pool import Qwen3InProcPool
+        logger.info(
+            f"[qwen3-pool] runtime=cuda → Qwen3InProcPool(pool_size={pool_size}) "
+            f"(避开 CUDNN cross-process race, 见 docs/开发/gpu加速/2026-05-23)"
+        )
+        _qwen3_pool_singleton = Qwen3InProcPool(pool_size=pool_size)
+    else:
+        logger.info(
+            f"[qwen3-pool] runtime={runtime.name} → Qwen3PoolTranscriber multi-process pool "
+            f"(pool_size={pool_size})"
+        )
+        _qwen3_pool_singleton = Qwen3PoolTranscriber(pool_size=pool_size)
     return _qwen3_pool_singleton
 
 
