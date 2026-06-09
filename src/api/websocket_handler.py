@@ -192,11 +192,18 @@ class WebSocketHandler:
             self.task_connections[task.task_id].add(connection_id)
             
             # 检查缓存（如果不强制刷新）
-            # PR1: cache key 含 engine（用 task.engine，已经由 task_manager 解析过）
+            # PR1: cache key 含 engine；词级时间戳: word_align 状态折进 engine tag
             if not request.force_refresh:
-                from src.core.database import db_manager
+                from src.core.database import db_manager, cache_lookup_params
+                from src.core.config import config as _cfg
+                _ce, _allow = cache_lookup_params(
+                    task.engine,
+                    word_align_enabled=_cfg.qwen3.word_align_enabled,
+                    language=task.language,
+                    word_align_language=_cfg.qwen3.word_align_language,
+                )
                 cached_result = await db_manager.get_cached_result(
-                    request.file_hash, output_format, engine=task.engine
+                    request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
@@ -566,11 +573,17 @@ class WebSocketHandler:
             # 检查缓存（如果不强制刷新）
             # PR1: cache key 含 engine（session 中已记录，无则回退 default_engine）
             if not session["force_refresh"]:
-                from src.core.database import db_manager
+                from src.core.database import db_manager, cache_lookup_params
                 from src.core.config import config as _config
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
+                _ce, _allow = cache_lookup_params(
+                    _engine_for_cache,
+                    word_align_enabled=_config.qwen3.word_align_enabled,
+                    language=session.get("language"),
+                    word_align_language=_config.qwen3.word_align_language,
+                )
                 cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"], engine=_engine_for_cache
+                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")

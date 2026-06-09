@@ -22,6 +22,50 @@ from src.models.schemas import TranscriptionResult
 DEFAULT_ENGINE = "funasr"
 
 
+def compute_cache_engine(
+    engine: str,
+    *,
+    word_align_enabled: bool,
+    language: Optional[str],
+    word_align_language: str,
+) -> str:
+    """把 word_align 状态折进缓存用的 engine tag.
+
+    word_align 给 segment 加 words 是契约变化: 开启的结果跟未开启的不能互相命中,
+    不同语言的词时间戳也不同. 所以缓存 key (file_hash, engine) 的 engine 维加 word_align 状态.
+
+    - qwen3 + word_align 开 → "qwen3+wa:<lang>" (lang = per-request language or config 兜底)
+    - qwen3 + word_align 关 → "qwen3" (老 key 不变, 向后兼容)
+    - 非 qwen3 → 原样 (FunASR 无 word_align)
+    """
+    if engine == "qwen3" and word_align_enabled:
+        lang = language or word_align_language
+        return f"{engine}+wa:{lang}"
+    return engine
+
+
+def cache_lookup_params(
+    engine: str,
+    *,
+    word_align_enabled: bool,
+    language: Optional[str],
+    word_align_language: str,
+):
+    """返回 (cache_engine, allow_cross_engine) 给 get_cached_result.
+
+    带 wa tag 时强制 strict (allow_cross_engine=False): 否则跨引擎按 file_hash 回退
+    可能命中无词的 plain "qwen3" 行, 把 word_align 请求降级成无词结果.
+    """
+    cache_engine = compute_cache_engine(
+        engine,
+        word_align_enabled=word_align_enabled,
+        language=language,
+        word_align_language=word_align_language,
+    )
+    allow_cross = False if cache_engine != engine else None
+    return cache_engine, allow_cross
+
+
 class DatabaseManager:
     """数据库管理器"""
 

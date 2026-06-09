@@ -97,6 +97,30 @@ class TaskManager:
 
         return task
     
+    @staticmethod
+    def _cache_lookup_params(task: TranscriptionTask):
+        """缓存查询用的 (engine_tag, allow_cross_engine), 折进 word_align 状态."""
+        from src.core.database import cache_lookup_params
+
+        return cache_lookup_params(
+            task.engine,
+            word_align_enabled=config.qwen3.word_align_enabled,
+            language=task.language,
+            word_align_language=config.qwen3.word_align_language,
+        )
+
+    @staticmethod
+    def _cache_save_engine(task: TranscriptionTask) -> str:
+        """缓存写入用的 engine tag, 折进 word_align 状态 (跟查询同 key)."""
+        from src.core.database import compute_cache_engine
+
+        return compute_cache_engine(
+            task.engine,
+            word_align_enabled=config.qwen3.word_align_enabled,
+            language=task.language,
+            word_align_language=config.qwen3.word_align_language,
+        )
+
     def get_task(self, task_id: str) -> Optional[TranscriptionTask]:
         """获取任务"""
         return self.tasks.get(task_id)
@@ -110,10 +134,12 @@ class TaskManager:
         # 更新文件路径
         task.file_path = file_path
         
-        # 检查缓存（PR1: cache key 含 engine，避免不同引擎结果互相覆盖）
+        # 检查缓存（PR1: cache key 含 engine；词级时间戳: word_align 状态折进 engine tag）
         if not task.force_refresh:
+            cache_engine, allow_cross = self._cache_lookup_params(task)
             cached_result = await db_manager.get_cached_result(
-                task.file_hash, task.output_format, engine=task.engine
+                task.file_hash, task.output_format,
+                engine=cache_engine, allow_cross_engine=allow_cross,
             )
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
@@ -285,14 +311,14 @@ class TaskManager:
                 task.result = transcription_result
 
                 # 保存到缓存（PR1: 缓存 key 含 engine，避免与其他引擎结果冲突）
-                await db_manager.save_result(transcription_result, result["raw_result"], engine=task.engine)
+                await db_manager.save_result(transcription_result, result["raw_result"], engine=self._cache_save_engine(task))
             else:
                 # JSON格式结果
                 transcription_result, raw_result = result
                 task.result = transcription_result
 
                 # 保存到缓存（PR1: 缓存 key 含 engine）
-                await db_manager.save_result(transcription_result, raw_result, engine=task.engine)
+                await db_manager.save_result(transcription_result, raw_result, engine=self._cache_save_engine(task))
             
             task.completed_at = datetime.now()
             task.progress = 100
