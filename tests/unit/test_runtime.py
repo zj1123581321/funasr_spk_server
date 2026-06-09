@@ -193,6 +193,29 @@ def test_recommend_diarize_backend_env_override_forces_ort_cuda_on_mac(monkeypat
     assert MacRuntime().recommend_diarize_backend() == "ort_cuda"
 
 
+# ==================== recommend_word_align_provider() — MMS ONNX EP ====================
+
+
+def test_mac_recommend_word_align_provider_cpu():
+    """Mac: MMS CTC-FA ONNX 走 CPUExecutionProvider (ANE 对 wav2vec2 无收益)."""
+    from src.core.runtime import MacRuntime
+
+    assert MacRuntime().recommend_word_align_provider() == "CPUExecutionProvider"
+
+
+def test_cuda_recommend_word_align_provider_cuda():
+    """CUDA: MMS ONNX 走 CUDAExecutionProvider, 跟 ASR/diarize 同卡."""
+    from src.core.runtime import CudaRuntime
+
+    assert CudaRuntime().recommend_word_align_provider() == "CUDAExecutionProvider"
+
+
+def test_cpu_recommend_word_align_provider_cpu():
+    from src.core.runtime import CpuRuntime
+
+    assert CpuRuntime().recommend_word_align_provider() == "CPUExecutionProvider"
+
+
 # ==================== describe_runtime() — 启动可观测性 ====================
 
 

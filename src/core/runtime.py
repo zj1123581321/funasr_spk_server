@@ -41,6 +41,14 @@ class RuntimeEnvironment(Protocol):
         """根据物理核数算 sherpa num_threads 推荐."""
         ...
 
+    def recommend_word_align_provider(self) -> str:
+        """返回 MMS CTC-FA ONNX 的 onnxruntime ExecutionProvider 名.
+
+        Mac/Cpu → 'CPUExecutionProvider', Cuda → 'CUDAExecutionProvider'.
+        给 word_align wrapper 解析 provider="auto" 用.
+        """
+        ...
+
 
 def _available_ort_providers() -> list[str]:
     """返回 onnxruntime 当前可用 provider 列表; 加载失败时返回空 list.
@@ -104,6 +112,9 @@ class MacRuntime:
         # Mac 上 PoC 验证 4 最优 (10 cores M1/M2), 不依赖 cpu_count, 防 production 回归.
         return 4
 
+    def recommend_word_align_provider(self) -> str:
+        return "CPUExecutionProvider"
+
 
 @dataclass
 class CudaRuntime:
@@ -126,6 +137,9 @@ class CudaRuntime:
     def recommend_num_threads(self) -> int:
         return _recommend_num_threads_for_vcpu(_cpu_count())
 
+    def recommend_word_align_provider(self) -> str:
+        return "CUDAExecutionProvider"
+
 
 @dataclass
 class CpuRuntime:
@@ -139,6 +153,9 @@ class CpuRuntime:
 
     def recommend_num_threads(self) -> int:
         return _recommend_num_threads_for_vcpu(_cpu_count())
+
+    def recommend_word_align_provider(self) -> str:
+        return "CPUExecutionProvider"
 
 
 def describe_runtime(runtime: RuntimeEnvironment) -> str:

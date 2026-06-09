@@ -157,6 +157,24 @@ class Qwen3Config(BaseModel):
     silence_vad_noise_db: str = "-25dB"
     silence_vad_min_silence_sec: float = 0.20
 
+    # 词级时间戳 (word_align, MMS-300M CTC-FA): 增量挂 segment.words, 不替换段边界.
+    # 见 docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
+    #   - word_align_enabled: 默认关 (opt-in). 开启会加载 ~1.2GB MMS ONNX +
+    #     每 task 加 RTF≈0.166 (Mac CPU) + 改 cache key, 验证后再切生产默认.
+    #   - word_align_language: ISO 码 (chi/eng/jpn/kor...) 兜底语言, per-request
+    #     language 字段优先. 中英混排用 chi (preprocess_text 对 chi 逐字切, 能吃英文).
+    #   - word_align_model_path: 本地预下的 MMS ONNX 路径 (download_qwen3_models.sh
+    #     从 ~/ctc_forced_aligner/model.onnx 拷过来, 不走 deskpai 运行时下载).
+    #   - word_align_provider: "auto" → runtime.recommend_word_align_provider()
+    #     (Mac/Cpu → CPUExecutionProvider, Cuda → CUDAExecutionProvider). 显式 EP
+    #     字符串不被覆盖. 解析在 word_align wrapper 做 (不在 Pydantic, 区别于 sherpa provider).
+    #   - word_align_batch_size: generate_emissions ONNX 推理 batch.
+    word_align_enabled: bool = False
+    word_align_language: str = "chi"
+    word_align_model_path: str = "./models/qwen3_diarize/ctc_forced_aligner/model.onnx"
+    word_align_provider: str = "auto"
+    word_align_batch_size: int = 16
+
     # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
     # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
     #   - CPU_AND_NE: 默认, frontend ANE + backend mlpackage ANE
@@ -492,6 +510,12 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "silence_align_min_segment_dur_sec", "FUNASR_QWEN3_SILENCE_ALIGN_MIN_SEGMENT_DUR_SEC", float)
         cls._override_if_set(config_data["qwen3"], "silence_vad_noise_db", "FUNASR_QWEN3_SILENCE_VAD_NOISE_DB")
         cls._override_if_set(config_data["qwen3"], "silence_vad_min_silence_sec", "FUNASR_QWEN3_SILENCE_VAD_MIN_SILENCE_SEC", float)
+        # 词级时间戳 word_align (MMS-300M CTC-FA)
+        cls._override_if_set(config_data["qwen3"], "word_align_enabled", "FUNASR_QWEN3_WORD_ALIGN_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "word_align_language", "FUNASR_QWEN3_WORD_ALIGN_LANGUAGE")
+        cls._override_if_set(config_data["qwen3"], "word_align_model_path", "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH")
+        cls._override_if_set(config_data["qwen3"], "word_align_provider", "FUNASR_QWEN3_WORD_ALIGN_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "word_align_batch_size", "FUNASR_QWEN3_WORD_ALIGN_BATCH_SIZE", int)
         # A2 治理: vendor 字段 (D4)
         cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
         cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)
