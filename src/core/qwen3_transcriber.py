@@ -194,13 +194,16 @@ def apply_short_segment_guard_to_segments(
     """
     if not qwen3_config.short_segment_guard_enabled:
         return merged_segments, {"enabled": False}
-    # 转 dict (speaker int -> str, postprocess 用字符串比较)
+    # 转 dict (speaker int -> str, postprocess 用字符串比较).
+    # words 一并透传 (codex #6): postprocess 的 drop/aba/merge 都用 dict(s)/append 保留 dict,
+    # pass-through 段的 words 不丢. 若 word_align 在 guard 之后跑则此处 words 恒 None, 无副作用.
     seg_dicts = [
         {
             "start": float(s.start),
             "end": float(s.end),
             "speaker": str(s.speaker),
             "text": s.text,
+            "words": s.words,
         }
         for s in merged_segments
     ]
@@ -211,13 +214,14 @@ def apply_short_segment_guard_to_segments(
         aba_max_mid_sec=qwen3_config.short_segment_aba_max_mid_sec,
         merge_same=qwen3_config.short_segment_merge_same,
     )
-    # 转回 Segment (speaker str -> int)
+    # 转回 Segment (speaker str -> int, words 透传)
     out_segments = [
         Segment(
             start=float(d["start"]),
             end=float(d["end"]),
             speaker=int(d["speaker"]),
             text=d["text"],
+            words=d.get("words"),
         )
         for d in out_dicts
     ]
