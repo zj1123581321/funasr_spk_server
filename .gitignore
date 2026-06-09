@@ -28,6 +28,8 @@ ref_codes/
 !/tmp_long_audio/eval_set/
 /tmp_long_audio/eval_set/*
 !/tmp_long_audio/eval_set/README.md
+# spike 产物(可由 scripts 复现, SUMMARY 已记结论), 不入库
+/spikes/qwen3_word_timestamp/outputs/
 # Claude Code local 配置不入库
 .claude/
 src/cpp
