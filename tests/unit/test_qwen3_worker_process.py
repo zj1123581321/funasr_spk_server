@@ -34,7 +34,7 @@ def _make_fake_transcriber(text: str = "测试文本", file_hash: str = "h"):
     """构造接口与 Qwen3DiarizeTranscriber 同形的 fake"""
     fake = MagicMock()
 
-    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
         from src.models.schemas import TranscriptionResult, TranscriptionSegment
 
         if output_format == "srt":
@@ -244,7 +244,7 @@ class TestAudioFormatConversion:
         fake = MagicMock()
         captured_path = {}
 
-        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
             captured_path["actual"] = audio_path
             from src.models.schemas import TranscriptionResult, TranscriptionSegment
             return (
@@ -287,7 +287,7 @@ class TestAudioFormatConversion:
 
         fake = MagicMock()
 
-        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
             from src.models.schemas import TranscriptionResult
             return (
                 TranscriptionResult(
@@ -330,7 +330,7 @@ class TestRewriteFileName:
         # fake transcriber: 内部用 audio_path basename 作为 file_name (跟 Qwen3DiarizeTranscriber 一致)
         fake = MagicMock()
 
-        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
             from src.models.schemas import TranscriptionResult, TranscriptionSegment
             return (
                 TranscriptionResult(
@@ -378,7 +378,7 @@ class TestRewriteFileName:
 
         fake = MagicMock()
 
-        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+        async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
             return {
                 "format": "srt",
                 "content": "1\n00:00:00,000 --> 00:00:01,000\nSpeaker1:x\n",

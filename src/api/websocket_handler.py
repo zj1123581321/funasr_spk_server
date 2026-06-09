@@ -451,6 +451,8 @@ class WebSocketHandler:
                 "connection_id": connection_id,
                 # PR1: 记录引擎选择，最终化时回填到 FileUploadRequest
                 "engine": data.get("engine"),
+                # 词级时间戳: 记录 per-request 语言，最终化时回填
+                "language": data.get("language"),
             }
             
             self.upload_sessions[task_id] = session
@@ -612,6 +614,7 @@ class WebSocketHandler:
                 force_refresh=session["force_refresh"],
                 output_format=session["output_format"],
                 engine=session.get("engine"),
+                language=session.get("language"),
             )
             
             # 创建任务

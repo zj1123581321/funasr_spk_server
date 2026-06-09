@@ -374,8 +374,13 @@ class Qwen3DiarizeTranscriber:
         task_id: str,
         progress_callback: Optional[Callable] = None,
         output_format: str = "json",
+        language: Optional[str] = None,
     ) -> Union[Tuple[TranscriptionResult, dict], dict]:
-        """跑一遍 ASR + Diarize + Merge, 返回 (TranscriptionResult, raw_result) 或 SRT dict"""
+        """跑一遍 ASR + Diarize + Merge, 返回 (TranscriptionResult, raw_result) 或 SRT dict
+
+        language: per-request 识别语言 ISO 码 (chi/eng/jpn/kor…), 驱动 word_align
+        词级时间戳语言; None 时走 self.word_align_language 兜底 (见 transcribe 内 word_align 层).
+        """
         start_time = time.time()
         loop = asyncio.get_event_loop()
 

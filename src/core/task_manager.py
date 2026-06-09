@@ -87,6 +87,7 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
+            language=request.language,
         )
 
         # 保存任务
@@ -259,7 +260,8 @@ class TaskManager:
                 audio_path=task.file_path,
                 task_id=task_id,
                 progress_callback=progress_callback,
-                output_format=task.output_format
+                output_format=task.output_format,
+                language=task.language,
             )
             
             # 更新任务结果

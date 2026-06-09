@@ -71,6 +71,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
     task_id = task["task_id"]
     audio_path = task["audio_path"]
     output_format = task.get("output_format", "json")
+    language = task.get("language")
 
     result_file = task_file.replace(".task", ".pkl")
     original_audio_path = task.get("source_audio_path", audio_path)
@@ -106,6 +107,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
                 task_id=task_id,
                 progress_callback=None,
                 output_format=output_format,
+                language=language,
             )
         )
 

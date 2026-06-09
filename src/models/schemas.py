@@ -76,6 +76,7 @@ class TranscriptionTask(BaseModel):
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     srt_content: Optional[str] = Field(None, description="SRT格式内容")
     engine: str = Field(default="funasr", description="ASR 引擎名（由 task_manager 根据 request.engine 或 default_engine 解析后填入）")
+    language: Optional[str] = Field(default=None, description="per-request 识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
 
     model_config = {"protected_namespaces": ()}
 
@@ -114,6 +115,7 @@ class FileUploadRequest(BaseModel):
     force_refresh: bool = Field(default=False, description="强制刷新缓存")
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     engine: Optional[str] = Field(default=None, description="ASR 引擎名（None 表示走 config.transcription.default_engine）")
+    language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
 
     model_config = {"protected_namespaces": ()}
 

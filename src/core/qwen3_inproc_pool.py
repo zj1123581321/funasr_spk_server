@@ -76,6 +76,7 @@ class Qwen3InProcPool:
         task_id: str,
         progress_callback: Optional[Callable] = None,
         output_format: str = "json",
+        language: Optional[str] = None,
     ) -> Any:
         """从 pool 取一个空闲 tx 跑 transcribe, 完成后 tx 回 pool.
 
@@ -94,6 +95,7 @@ class Qwen3InProcPool:
                 task_id=task_id,
                 progress_callback=progress_callback,
                 output_format=output_format,
+                language=language,
             )
         finally:
             self._available.put_nowait(tx)

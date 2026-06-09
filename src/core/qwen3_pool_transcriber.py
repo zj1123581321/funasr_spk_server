@@ -64,6 +64,7 @@ class Qwen3PoolTranscriber:
         task_id: str,
         progress_callback: Optional[Callable] = None,
         output_format: str = "json",
+        language: Optional[str] = None,
     ) -> Any:
         """通过 pool 派发任务给 worker subprocess.
 
@@ -85,7 +86,7 @@ class Qwen3PoolTranscriber:
         try:
             result = await self._pool.generate_with_pool(
                 audio_path=audio_path,
-                extra_task_fields={"output_format": output_format},
+                extra_task_fields={"output_format": output_format, "language": language},
             )
         except Exception:
             raise

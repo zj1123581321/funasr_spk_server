@@ -131,7 +131,7 @@ class TestTranscribeJsonMode:
 
         # 检查 pool 收到了 output_format=json
         call_kwargs = custom_pool.generate_with_pool.call_args.kwargs
-        assert call_kwargs.get("extra_task_fields") == {"output_format": "json"}
+        assert call_kwargs.get("extra_task_fields") == {"output_format": "json", "language": None}
 
 
 class TestTranscribeSrtMode:
@@ -164,7 +164,7 @@ class TestTranscribeSrtMode:
         await wrapper.transcribe(audio_path="/fake/a.wav", task_id="t", output_format="srt")
 
         call_kwargs = custom_pool.generate_with_pool.call_args.kwargs
-        assert call_kwargs.get("extra_task_fields") == {"output_format": "srt"}
+        assert call_kwargs.get("extra_task_fields") == {"output_format": "srt", "language": None}
 
 
 # ==================== progress_callback ====================
