@@ -96,6 +96,15 @@
 - 当前 workaround：用 `venv/bin/python -m pytest`
 - 修法：重建 venv 或 `pip install --force-reinstall pytest`（前提 venv 内有 pip）
 
+### 14. 词级时间戳 Phase 2 — 替换式 merge（词重算段边界）
+- 来源：`/plan-eng-review`（2026-06-09）+ codex 跨模型挑战
+- **What**：用词级时间戳重算 speaker 段边界，替换 `merge.py:216` 的字符比例近似（`_split_text_by_weights`）
+- **Why**：若下游需要段边界达到词级精度（现状 char-ratio + silence_align 已到 ~200-260ms）
+- **触发条件**：eval 证明现状 ~200ms 段边界不够用时才做
+- **当前状态**：Phase 1 走增量版（保留现有段，只把 MMS 词挂进 `segment.words`），段边界不变。Phase 2 才动 merge
+- **背景**：CEO review 判定段边界替换是"高风险边际改善"，词级真正价值在 `segment.words`（token 时间戳）。详见 `spikes/qwen3_word_timestamp/SUMMARY.md` + `docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md`
+- 优先级：P3（条件触发）
+
 ---
 
 ## 已完成（PR1）
