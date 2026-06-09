@@ -76,13 +76,14 @@ Qwen3 diarize 有 **两个 backend 实现**，通过 `src/core/qwen3/diarize.py:
 
 ## Qwen3 后处理 pipeline
 
-`Qwen3DiarizeTranscriber.transcribe` 在 ASR + diarize 后串联多层后处理（顺序固定，每层都有 config flag + env override 可关）：
+`Qwen3DiarizeTranscriber.transcribe` 在 ASR + diarize 后串联多层后处理（顺序固定，第 1–5 层各有 config flag + env override 可关，第 6 层是无条件的输出层规范化）：
 
 1. **`filter_spurious_speakers`** — 丢掉总时长太小的"假说话人"，把碎片归到时间最近的有效 speaker
 2. **`apply_cluster_centroid_merge`**（PR3，`cluster_merge_enabled`）— 多人场景把过聚的 cluster 合并；用 sherpa embedding extractor 算 centroid。dominant share ≥ 0.6 时还会用更宽松的 `cluster_merge_dominant_minor_threshold`（默认 0.5）把跟 dominant 接近的 minor cluster 也合到 dominant（兜底拦截解码器漂移引入的中长噪声 cluster，见 `docs/开发/archive/spk-over-detect-归因调研结果.md`）
 3. **`merge_asr_chunks_and_diarize`** — 按 Qwen3 内部 40s chunk 时间窗切文本到 diarize turn
 4. **`apply_short_segment_guard`**（PR4，`short_segment_guard_enabled`）— drop 微短段 / ABA 抖动平滑 / 合并连续同 speaker
 5. **`apply_silence_align_to_segments`**（spike 405abf6，`silence_align_enabled`）— ffmpeg silencedetect + snap-to-silence 把段切点吸附到最近静音中点，60s podcast +19pp / 60min long +33pp 对齐率，RTF 影响 <1%，见 `spikes/qwen3_silence_align/SUMMARY.md`
+6. **`relabel_segments_by_duration_desc`**（commit ceb9fa1，**无 config flag，无条件执行**）— 输出层 Speaker ID 稳定化：把内部 raw cluster int 按 speaker 总时长降序重映射成 0/1/2/…，让下游 `f"Speaker{i+1}"` 渲染出的 **Speaker1 始终是说话最多的主说话人**；底层 raw cluster int 由算法决定（ort_cuda / sherpa 互不兼容、跨平台不一致），不重映射会让客户端看到 "Speaker7" / "Speaker55" 这种漂移编号。平局按原 int 升序 tie-break 保证 deterministic。实现见 `src/core/qwen3/merge.py:relabel_segments_by_duration_desc`
 
 加新后处理层：照 `apply_silence_align_to_segments` 的 helper 形状（`(enabled / 空 / 异常)→fallback to input`），挂到 transcribe 流程内同时给 stats 日志，配 5 个 config 字段就行。
 

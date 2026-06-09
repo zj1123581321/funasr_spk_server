@@ -322,7 +322,8 @@ cuda ort_cuda default vs Mac sherpa `final_v12_d1.5` (README §31 数据):
 
 按 priority 排:
 
-1. **(可选) Speaker ID 跨平台稳定化** — 在 transcribe 最后一层加 `relabel_by_duration_desc()`, 把内部 cluster int label 重新映射成 Speaker1, Speaker2, ... (按总时长降序). 这样 cuda / Mac / ort / sherpa 输出的 Speaker1 始终是主说话人, 给客户端稳定的 ID. 工程量小 (10-20 行).
+1. **✅ 已实现 (commit ceb9fa1 + 273ed8a)** Speaker ID 跨平台稳定化 — 在 transcribe 最后一层加 `relabel_by_duration_desc()`, 把内部 cluster int label 重新映射成 Speaker1, Speaker2, ... (按总时长降序). 这样 cuda / Mac / ort / sherpa 输出的 Speaker1 始终是主说话人, 给客户端稳定的 ID. 工程量小 (10-20 行).
+   - 实际落地为 `src/core/qwen3/merge.py:relabel_segments_by_duration_desc`（无 config flag, 无条件执行的输出层规范化, 平局按原 int 升序 tie-break）, 挂在 silence_align 之后. 见 CLAUDE.md「Qwen3 后处理 pipeline」第 6 层.
 
 2. **(可选) 给 panel 场景加 split 阈值实验** — 把 `cluster_merge_dominant_share` 从 0.6 降到 0.45, 看 panel 能不能 split 出 4-5 个 speaker. 可能需要 audio-level config (访谈节目用低阈值, 单人独白用高阈值).
 
