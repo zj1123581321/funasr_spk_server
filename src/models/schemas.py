@@ -16,13 +16,29 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class WordTimestamp(BaseModel):
+    """词级时间戳(MMS-300M CTC-FA 对齐输出, 绝对秒)
+
+    增量挂进 TranscriptionSegment.words, 不替换段边界. 见
+    docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
+    """
+    text: str = Field(..., description="词文本")
+    start: float = Field(..., description="开始时间（秒，绝对）")
+    end: float = Field(..., description="结束时间（秒，绝对）")
+    confidence: Optional[float] = Field(None, description="对齐置信度（可空）")
+
+    model_config = {"protected_namespaces": ()}
+
+
 class TranscriptionSegment(BaseModel):
     """转录片段"""
     start_time: float = Field(..., description="开始时间（秒）")
     end_time: float = Field(..., description="结束时间（秒）")
     text: str = Field(..., description="转录文本")
     speaker: str = Field(..., description="说话人标识")
-    
+    # 词级时间戳(可选): word_align 开启且对齐成功时挂上, 否则 None(向后兼容).
+    words: Optional[List[WordTimestamp]] = Field(None, description="词级时间戳列表")
+
     model_config = {"protected_namespaces": ()}
 
 
