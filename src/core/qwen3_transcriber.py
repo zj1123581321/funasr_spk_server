@@ -30,6 +30,7 @@ from src.core.qwen3.diarize import (
 )
 from src.core.qwen3.merge import (
     Segment,
+    attach_words_to_segments,
     filter_spurious_speakers,
     merge_asr_chunks_and_diarize,
     merge_asr_and_diarize,
@@ -38,7 +39,7 @@ from src.core.qwen3.merge import (
     snap_segments_to_silence,
 )
 from src.core.qwen3.postprocess import apply_short_segment_guard
-from src.models.schemas import TranscriptionResult, TranscriptionSegment
+from src.models.schemas import TranscriptionResult, TranscriptionSegment, WordTimestamp
 from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
 
@@ -268,6 +269,12 @@ class Qwen3DiarizeTranscriber:
         silence_align_min_segment_dur_sec: float = 0.1,
         silence_vad_noise_db: str = "-25dB",
         silence_vad_min_silence_sec: float = 0.20,
+        # 词级时间戳 word_align (MMS CTC-FA, 默认关)
+        word_align_enabled: bool = False,
+        word_align_language: str = "chi",
+        word_align_model_path: str = "./models/qwen3_diarize/ctc_forced_aligner/model.onnx",
+        word_align_provider: str = "auto",
+        word_align_batch_size: int = 16,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -296,11 +303,18 @@ class Qwen3DiarizeTranscriber:
         self.silence_align_min_segment_dur_sec = silence_align_min_segment_dur_sec
         self.silence_vad_noise_db = silence_vad_noise_db
         self.silence_vad_min_silence_sec = silence_vad_min_silence_sec
+        self.word_align_enabled = word_align_enabled
+        self.word_align_language = word_align_language
+        self.word_align_model_path = word_align_model_path
+        self.word_align_provider = word_align_provider
+        self.word_align_batch_size = word_align_batch_size
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
         # PR3 sherpa embedding extractor 单例 — 同 worker 多 task 复用, 省 ~5-10s/task
         self._embedding_extractor_fn = None
+        # word_align MMS aligner 单例 — 同 worker 多 task 复用 MMS ONNX session
+        self._word_aligner = None
 
     # ==================== 引擎管理 ====================
 
@@ -316,6 +330,26 @@ class Qwen3DiarizeTranscriber:
             )
             self._embedding_extractor_fn = build_embedding_extractor_fn(self)
         return self._embedding_extractor_fn
+
+    def _ensure_word_aligner(self):
+        """惰性构造 MMS word_align aligner (per-worker singleton).
+
+        首次调用 build MMS ONNX session (~1-2s warm), 后续 task 复用. provider="auto"
+        在 WordAligner 内按 runtime 解析 (Mac/Cpu→CPU EP, Cuda→CUDA EP).
+        """
+        if self._word_aligner is None:
+            from src.core.qwen3.word_align import WordAligner
+
+            logger.info(
+                f"首次构造 word_align MMS aligner(model_path={self.word_align_model_path})"
+            )
+            self._word_aligner = WordAligner(
+                model_path=self.word_align_model_path,
+                provider=self.word_align_provider,
+                language=self.word_align_language,
+                batch_size=self.word_align_batch_size,
+            )
+        return self._word_aligner
 
     def _ensure_engine(self):
         """惰性构造 ASR 引擎(libllama + Metal context 加载耗时, 进程内复用)"""
@@ -491,10 +525,53 @@ class Qwen3DiarizeTranscriber:
                     f"speech_regions={silence_stats.get('speech_regions_count', 0)}"
                 )
 
+        # 词级时间戳 (word_align, MMS-300M CTC-FA): 在干净段上增量挂词, 不替换段边界.
+        # 挂在 silence_align 之后、relabel 之前 (段已干净). flag 关 → 段 words 恒 None
+        # (向后兼容). 任何失败 (aligner build / audio 读 / 对齐抛错) 不阻塞转录: 段照常出.
+        # JSON-only (SRT 不带词, 跳过省 RTF). 逐 window fallback 在 align_chunks 内.
+        word_align_stats: dict = {"enabled": False}
+        if self.word_align_enabled and output_format == "json":
+            await self._report_progress(progress_callback, 85, task_id)
+            effective_lang = language or self.word_align_language
+            try:
+                aligner = await loop.run_in_executor(None, self._ensure_word_aligner)
+                audio_16k, _sr = await loop.run_in_executor(
+                    None, _load_audio_mono_16k, audio_path
+                )
+                words, word_align_stats = await loop.run_in_executor(
+                    None,
+                    lambda: aligner.align_chunks(
+                        audio_16k, asr_result.chunks, language=effective_lang
+                    ),
+                )
+                merged_segments = attach_words_to_segments(merged_segments, words)
+                word_align_stats = {
+                    **word_align_stats,
+                    "enabled": True,
+                    "language": effective_lang,
+                }
+                logger.info(
+                    f"[{task_id}] word_align: "
+                    f"windows={word_align_stats.get('total_windows', 0)} "
+                    f"failed={word_align_stats.get('failed_windows', 0)} "
+                    f"words={word_align_stats.get('total_words', 0)} "
+                    f"lang={effective_lang}"
+                )
+                if word_align_stats.get("failed_windows"):
+                    logger.warning(
+                        f"[{task_id}] word_align 部分 window 对齐失败 "
+                        f"({word_align_stats['failed_windows']}/{word_align_stats.get('total_windows', 0)}), "
+                        f"该段不带词: {word_align_stats.get('failures')}"
+                    )
+            except Exception as exc:
+                word_align_stats = {"enabled": True, "error": str(exc), "language": effective_lang}
+                logger.warning(f"[{task_id}] word_align 失败, 段不带词: {exc}")
+
         # Speaker ID 稳定化: 把内部 raw cluster int 按总时长降序重映射成 0/1/2/...,
         # 让下游 f"Speaker{i+1}" 输出的 Speaker1 始终是说话最多的人, 跨 backend
         # (ort_cuda / sherpa) / 跨平台 (cuda / Mac) 一致. 见 docs/开发/gpu加速/
         # 2026-05-22-cuda-diarize-accuracy.md 改进建议 §1.
+        # relabel 用 dataclasses.replace, 自动透传 word_align 挂的 words.
         merged_segments = relabel_segments_by_duration_desc(merged_segments)
 
         await self._report_progress(progress_callback, 90, task_id)
@@ -518,6 +595,7 @@ class Qwen3DiarizeTranscriber:
             ],
             "turns": turns,
             "filtered_turns": filtered_turns,
+            "word_align": word_align_stats,
             "engine": "qwen3",
         }
 
@@ -541,12 +619,27 @@ class Qwen3DiarizeTranscriber:
             }
 
         # JSON: 转 TranscriptionSegment, speaker int -> "Speaker{i+1}"
+        # word_align 挂的 s.words (内部 dict) 转成 WordTimestamp; confidence 暂留 None
+        # (MMS score 是逐帧 log-prob 求和, 非 0-1 校准置信度, 不直接当 confidence 暴露).
         segments = [
             TranscriptionSegment(
                 start_time=round(s.start, 2),
                 end_time=round(s.end, 2),
                 text=s.text,
                 speaker=f"Speaker{s.speaker + 1}",
+                words=(
+                    [
+                        WordTimestamp(
+                            text=w["text"],
+                            start=round(float(w["start"]), 3),
+                            end=round(float(w["end"]), 3),
+                            confidence=None,
+                        )
+                        for w in s.words
+                    ]
+                    if s.words
+                    else None
+                ),
             )
             for s in merged_segments
         ]
@@ -611,6 +704,11 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         silence_align_min_segment_dur_sec=q.silence_align_min_segment_dur_sec,
         silence_vad_noise_db=q.silence_vad_noise_db,
         silence_vad_min_silence_sec=q.silence_vad_min_silence_sec,
+        word_align_enabled=q.word_align_enabled,
+        word_align_language=q.word_align_language,
+        word_align_model_path=q.word_align_model_path,
+        word_align_provider=q.word_align_provider,
+        word_align_batch_size=q.word_align_batch_size,
     )
     # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
     _qwen3_singleton.embedding_model = q.embedding_model

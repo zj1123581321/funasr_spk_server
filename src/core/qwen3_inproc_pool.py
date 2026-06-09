@@ -136,6 +136,11 @@ def _default_transcriber_factory():
         silence_align_min_segment_dur_sec=q.silence_align_min_segment_dur_sec,
         silence_vad_noise_db=q.silence_vad_noise_db,
         silence_vad_min_silence_sec=q.silence_vad_min_silence_sec,
+        word_align_enabled=q.word_align_enabled,
+        word_align_language=q.word_align_language,
+        word_align_model_path=q.word_align_model_path,
+        word_align_provider=q.word_align_provider,
+        word_align_batch_size=q.word_align_batch_size,
     )
     tx.embedding_model = q.embedding_model
     return tx
