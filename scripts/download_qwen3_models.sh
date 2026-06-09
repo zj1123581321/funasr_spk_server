@@ -10,6 +10,8 @@
 #     - pyannote-segmentation-3.0/model.onnx       ~6 MB     (fp32 主用)
 #     - pyannote-segmentation-3.0/model.int8.onnx  ~1.5 MB   (int8 备选)
 #     - nemo-titanet-small/embedding.onnx          ~38 MB
+#   词级时间戳 (MMS-300M CTC-FA, deskpai ONNX)
+#     - ctc_forced_aligner/model.onnx              ~1.2 GB   (word_align, 可选)
 #
 # 模式:
 #   1. --from-prod  : 从 ~/Production/qwen_asr_server/models 本地拷贝(本机 dev 首选)
@@ -268,6 +270,39 @@ verify_all() {
     return $fail
 }
 
+# ==================== word_align MMS CTC-FA 模型 ====================
+# 词级时间戳用 MMS-300M CTC-FA (deskpai ctc_forced_aligner ONNX, ~1.2GB).
+# 优先从 deskpai 运行时下载位置 ~/ctc_forced_aligner/model.onnx 拷贝 (PoC 已下),
+# 缺失则从 HuggingFace 直下 MODEL_URL. 落到 config 默认路径
+# ${MODELS_ROOT}/ctc_forced_aligner/model.onnx (不走运行时下载, 避免首请求卡 1.2GB).
+WORD_ALIGN_DST="${MODELS_ROOT}/ctc_forced_aligner/model.onnx"
+WORD_ALIGN_HOME_CACHE="${HOME}/ctc_forced_aligner/model.onnx"
+WORD_ALIGN_URL="${WORD_ALIGN_URL:-https://huggingface.co/deskpai/ctc_forced_aligner/resolve/main/04ac86b67129634da93aea76e0147ef3.onnx}"
+
+fetch_word_align_model() {
+    log "准备 word_align MMS CTC-FA 模型: ${WORD_ALIGN_DST}"
+    if [[ -f "${WORD_ALIGN_DST}" ]] && (( $(file_size "${WORD_ALIGN_DST}") > 100000000 )); then
+        skip "word_align MMS 模型已存在"
+        return 0
+    fi
+    mkdir -p "$(dirname "${WORD_ALIGN_DST}")"
+    if [[ -f "${WORD_ALIGN_HOME_CACHE}" ]]; then
+        log "从 deskpai 缓存复制: ${WORD_ALIGN_HOME_CACHE}"
+        cp "${WORD_ALIGN_HOME_CACHE}" "${WORD_ALIGN_DST}"
+        ok "word_align MMS 模型复制完成 ($(file_size "${WORD_ALIGN_DST}") bytes)"
+        return 0
+    fi
+    log "deskpai 缓存缺失, 从 HuggingFace 下载: ${WORD_ALIGN_URL}"
+    if curl -L --fail --retry 3 --retry-delay 5 -o "${WORD_ALIGN_DST}.partial" "${WORD_ALIGN_URL}"; then
+        mv "${WORD_ALIGN_DST}.partial" "${WORD_ALIGN_DST}"
+        ok "word_align MMS 模型下载完成"
+        return 0
+    fi
+    rm -f "${WORD_ALIGN_DST}.partial"
+    err "word_align MMS 模型获取失败 (词级时间戳功能不可用, 不影响 ASR/diarize)"
+    return 1
+}
+
 # ==================== 主流程 ====================
 mkdir -p "${MODELS_ROOT}"
 
@@ -282,6 +317,11 @@ case "$MODE" in
         ;;
     --verify)
         verify_all
+        exit $?
+        ;;
+    --word-align)
+        # 仅补 word_align MMS 模型 (词级时间戳)
+        fetch_word_align_model
         exit $?
         ;;
     auto|"")
@@ -303,6 +343,9 @@ case "$MODE" in
         exit 2
         ;;
 esac
+
+# word_align MMS 模型 (词级时间戳): 失败不阻塞主流程 (ASR/diarize 仍可用)
+fetch_word_align_model || true
 
 echo
 log "最终校验"

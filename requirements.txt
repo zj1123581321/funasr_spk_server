@@ -34,6 +34,13 @@ sherpa-onnx==1.13.2
 gguf==0.19.0
 srt==3.5.3
 
+# 词级时间戳 (word_align, MMS-300M CTC-FA)
+# - ctc-forced-aligner: deskpai ONNX fork, 多语种 CTC 强制对齐 (走 onnxruntime)
+# - unidecode: ctc-forced-aligner 罗马化 (get_uroman_tokens) 依赖
+# 模型 ONNX (~1.2GB) 由 scripts/download_qwen3_models.sh 预下, 不进 pip
+ctc-forced-aligner==1.0.2
+unidecode==1.4.0
+
 # HTTP client (WeChat Work notification)
 httpx==0.26.0
 
