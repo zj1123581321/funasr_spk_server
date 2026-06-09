@@ -22,8 +22,8 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Iterable, List
+from dataclasses import dataclass, field, replace
+from typing import Iterable, List, Optional
 
 
 @dataclass
@@ -33,6 +33,55 @@ class Segment:
     end: float
     speaker: int
     text: str
+    # 词级时间戳(可选): word_align 挂词后填充 [{text,start,end,score}, ...] 绝对秒;
+    # 未挂词时 None (向后兼容). silence_align / relabel 的 dataclasses.replace 自动透传.
+    words: Optional[List[dict]] = None
+
+
+def attach_words_to_segments(
+    segments: List[Segment], words: List[dict]
+) -> List[Segment]:
+    """把 MMS 词级时间戳按时间窗增量挂进现有段 (纯函数, 不动入参).
+
+    词按时间落在哪个段的 [start, end] 窗就挂哪个段; 跨段边界用最大重叠时长优先;
+    词不落任何段 (与所有段重叠均 ≤ 0) → 丢弃. 段未收到词 → words 保持 None.
+
+    不替换 merge_asr_chunks_and_diarize 的段边界, 只增量挂 words.
+
+    Args:
+        segments: 已 merge + silence_align 的 Segment 列表 (干净段).
+        words: [{text, start, end, score?}, ...] 绝对秒 (word_align.align_chunks 输出).
+
+    Returns:
+        新 List[Segment], 收到词的段 words=[...] (保持词输入顺序), 其余 words=None.
+    """
+    if not segments:
+        return []
+    # 每段一个收集桶, 按段索引
+    buckets: List[Optional[List[dict]]] = [None] * len(segments)
+    for w in words or []:
+        w_start = float(w["start"])
+        w_end = float(w["end"])
+        best_idx = -1
+        best_overlap = 0.0
+        for i, seg in enumerate(segments):
+            overlap = min(seg.end, w_end) - max(seg.start, w_start)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_idx = i
+        if best_idx < 0:
+            continue  # 词不落任何段, 丢弃
+        if buckets[best_idx] is None:
+            buckets[best_idx] = []
+        buckets[best_idx].append(
+            {
+                "text": w["text"],
+                "start": w_start,
+                "end": w_end,
+                "score": w.get("score"),
+            }
+        )
+    return [replace(seg, words=buckets[i]) for i, seg in enumerate(segments)]
 
 
 def relabel_segments_by_duration_desc(segments: List[Segment]) -> List[Segment]:
