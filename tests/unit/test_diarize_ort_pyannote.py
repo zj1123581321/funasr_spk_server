@@ -1,19 +1,18 @@
 """ORT 直 wrap diarize backend — pyannote-segmentation-3.0 sliding window 单测.
 
-覆盖 sliding window pipeline 的 3 个内核组件:
+覆盖 sliding window 的 3 个内核组件:
 1. `_iter_audio_chunks` — 任意长度 audio 切成 10s 重叠 chunks (pad 短 audio / 空 audio)
 2. `_powerset_to_multilabel` — pyannote powerset class (7 class) → multi-label (3 spk)
-3. `_aggregate_chunk_outputs` — Whisper-style 加权融合, 重叠帧除以 count
+3. `run_segmentation_chunks` — 逐 chunk 独立 argmax (sherpa parity: 不跨 chunk 平均
+   logits, speaker slot 是 chunk 局部的)
 
-末尾用 mock ORT session 串完整 pipeline, 验证 shape + 全 silence 一致性.
-不真实跑 onnxruntime, 不需要模型文件.
+用 mock ORT session, 不真实跑 onnxruntime, 不需要模型文件.
 """
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 
 # ==================== _iter_audio_chunks ====================
@@ -112,51 +111,7 @@ def test_powerset_to_multilabel_batched_input_preserves_leading_dim():
     np.testing.assert_array_equal(out, 0)
 
 
-# ==================== _aggregate_chunk_outputs ====================
-
-
-def test_aggregate_chunk_outputs_single_chunk_copies_through():
-    from src.core.qwen3.diarize_ort import _aggregate_chunk_outputs
-
-    out = np.ones((589, 7), dtype=np.float32) * 1.5
-    agg = _aggregate_chunk_outputs(
-        chunk_starts=[0],
-        chunk_outputs=[out],
-        audio_samples=10 * 16000,
-    )
-    assert agg.shape[1] == 7
-    np.testing.assert_allclose(agg[:589], 1.5)
-
-
-def test_aggregate_chunk_outputs_overlapping_chunks_averages_overlap_region():
-    """两 chunks 半重叠 → 重叠帧应是 (a+b)/2."""
-    from src.core.qwen3.diarize_ort import _aggregate_chunk_outputs
-
-    K = 7
-    out1 = np.ones((589, K), dtype=np.float32) * 1.0
-    out2 = np.ones((589, K), dtype=np.float32) * 3.0
-    agg = _aggregate_chunk_outputs(
-        chunk_starts=[0, 16000],  # chunk2 start at 1s; overlap 1-10s
-        chunk_outputs=[out1, out2],
-        audio_samples=11 * 16000,
-    )
-    # 第 0 帧 (0s 附近) 只 chunk1 → 1.0
-    np.testing.assert_allclose(agg[0], 1.0, atol=1e-6)
-    # 第 ~300 帧 (~5s) 两 chunk 都覆盖 → (1+3)/2 = 2.0
-    mid_frame = 300
-    np.testing.assert_allclose(agg[mid_frame], 2.0, atol=1e-6)
-
-
-def test_aggregate_chunk_outputs_empty_raises():
-    from src.core.qwen3.diarize_ort import _aggregate_chunk_outputs
-
-    with pytest.raises(ValueError):
-        _aggregate_chunk_outputs(
-            chunk_starts=[], chunk_outputs=[], audio_samples=16000
-        )
-
-
-# ==================== pyannote_segmentation_pipeline (mock ORT) ====================
+# ==================== run_segmentation_chunks (mock ORT) ====================
 
 
 def _make_mock_session(class_idx: int = 0):
@@ -181,25 +136,60 @@ def _make_mock_session(class_idx: int = 0):
     return sess
 
 
-def test_pyannote_pipeline_all_silence_returns_zero_activity():
-    from src.core.qwen3.diarize_ort import pyannote_segmentation_pipeline
+def test_run_segmentation_chunks_all_silence_returns_zero_labels():
+    from src.core.qwen3.diarize_ort import run_segmentation_chunks
 
     sess = _make_mock_session(class_idx=0)
     audio = np.zeros(30 * 16000, dtype=np.float32)
-    activity = pyannote_segmentation_pipeline(audio, sess)
-    assert activity.shape[1] == 3
-    np.testing.assert_array_equal(activity, 0)
+    starts, labels = run_segmentation_chunks(audio, sess)
+    # 30s → (30-10)/1 + 1 = 21 chunks
+    assert len(starts) == len(labels) == 21
+    for label in labels:
+        assert label.shape == (589, 3)
+        np.testing.assert_array_equal(label, 0)
 
 
-def test_pyannote_pipeline_single_speaker_returns_correct_mask():
-    """每个 chunk 都 class=1 (spk0) → 整段输出 (T, [1,0,0])."""
-    from src.core.qwen3.diarize_ort import pyannote_segmentation_pipeline
+def test_run_segmentation_chunks_single_speaker_per_chunk_mask():
+    """每个 chunk 都 class=1 (slot0) → 每 chunk 输出 (589, [1,0,0])."""
+    from src.core.qwen3.diarize_ort import run_segmentation_chunks
 
     sess = _make_mock_session(class_idx=1)
     audio = np.zeros(15 * 16000, dtype=np.float32)
-    activity = pyannote_segmentation_pipeline(audio, sess)
-    assert activity.shape[1] == 3
-    # 全 spk0 → 第 0 列全 1, 其余列全 0
-    assert (activity[:, 0] == 1).all()
-    assert (activity[:, 1] == 0).all()
-    assert (activity[:, 2] == 0).all()
+    starts, labels = run_segmentation_chunks(audio, sess)
+    assert starts[0] == 0 and starts[1] == 16000
+    for label in labels:
+        assert (label[:, 0] == 1).all()
+        assert (label[:, 1] == 0).all()
+        assert (label[:, 2] == 0).all()
+
+
+def test_run_segmentation_chunks_keeps_chunks_independent():
+    """关键不变量: 各 chunk argmax 互不影响 (绝不跨 chunk 平均 logits).
+
+    chunk0 标 slot0, 其余 chunk 标 slot1 — 两个 chunk 的 label 必须各自干净,
+    不出现平均/融合后的混叠.
+    """
+    from src.core.qwen3.diarize_ort import run_segmentation_chunks
+
+    sess = MagicMock()
+    fake_input = MagicMock()
+    fake_input.name = "x"
+    sess.get_inputs.return_value = [fake_input]
+    call = {"i": 0}
+
+    def fake_run(_outputs, feed):
+        i = call["i"]
+        call["i"] += 1
+        out = np.zeros((1, 589, 7), dtype=np.float32)
+        out[..., 1 if i == 0 else 2] = 1.0  # chunk0 → slot0, 其余 → slot1
+        return [out]
+
+    sess.run.side_effect = fake_run
+
+    audio = np.zeros(12 * 16000, dtype=np.float32)
+    _starts, labels = run_segmentation_chunks(audio, sess)
+    assert len(labels) >= 2
+    np.testing.assert_array_equal(labels[0][:, 0], 1)
+    np.testing.assert_array_equal(labels[0][:, 1], 0)
+    np.testing.assert_array_equal(labels[1][:, 0], 0)
+    np.testing.assert_array_equal(labels[1][:, 1], 1)

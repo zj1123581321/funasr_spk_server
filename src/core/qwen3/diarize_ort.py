@@ -1,10 +1,15 @@
 """ORT 直 wrap diarize backend — pyannote-seg + TitaNet + Python clustering.
 
-替代 sherpa-onnx 的 OfflineSpeakerDiarization, 拆 4 个组件用 Python onnxruntime 直跑:
+替代 sherpa-onnx 的 OfflineSpeakerDiarization, 拆组件用 Python onnxruntime 直跑,
+pipeline 结构 1:1 移植 sherpa-onnx C++ 实现
+(sherpa-onnx/csrc/offline-speaker-diarization-pyannote-impl.h):
 
-1. pyannote-segmentation-3.0 sliding window (本文件: pyannote_segmentation_pipeline)
-2. TitaNet 80-band log-mel preprocessing (TODO commit 6)
-3. TitaNet ORT CUDA inference + Python FastClustering (TODO commit 7)
+1. pyannote-segmentation-3.0 sliding window, **每 chunk 独立 argmax** 出 multi-label
+   (不跨 chunk 平均 logits — pyannote 的 speaker slot 是 chunk 局部的, 跨 chunk
+   平均会把不同说话人混进同一 slot, 短音频下导致 under-detect, 见 2026-06-10 根因调查)
+2. per-(chunk, local_speaker) 提取 TitaNet embedding (剔重叠帧, <10 活跃帧跳过)
+3. FastClustering (cosine distance + complete linkage, scipy 复刻 sherpa C++)
+4. cluster 重标 chunk 帧 → 全局 frame 网格 per-frame top-k → 段重建
 
 为什么不走 sherpa-onnx GPU build:
 sherpa-onnx CUDA build 的 C++ wrapper 跟 llama.cpp CUDA 撞 segfault (见 docs/开发/gpu加速/
@@ -32,13 +37,14 @@ def _librosa_mel_filterbank(
         sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax
     ).astype(np.float32)
 
-# pyannote-segmentation-3.0 模型常量 (固定)
-PYANNOTE_CHUNK_SAMPLES = 160000  # 10s @ 16k
+# pyannote-segmentation-3.0 模型常量 (固定, 与模型 ONNX metadata 一致)
+PYANNOTE_CHUNK_SAMPLES = 160000  # 10s @ 16k (window_size)
 PYANNOTE_CHUNK_FRAMES = 589  # 每 chunk 输出 frame 数
 PYANNOTE_NUM_SPEAKERS = 3  # max speakers per chunk
 PYANNOTE_NUM_POWERSET_CLASSES = 7  # C(3,0)+C(3,1)+C(3,2) = 1+3+3
-PYANNOTE_FRAME_RATE_HZ = PYANNOTE_CHUNK_FRAMES / 10.0  # 58.9 Hz
-PYANNOTE_STEP_SAMPLES = 16000  # 1s sliding window step (pyannote-audio default)
+PYANNOTE_STEP_SAMPLES = 16000  # window_shift (sherpa 默认 = 0.1 * window_size)
+PYANNOTE_RECEPTIVE_FIELD_SHIFT = 270  # 每 frame 对应的样点步长 (model metadata)
+PYANNOTE_RECEPTIVE_FIELD_SIZE = 991  # 单 frame 感受野样点数 (model metadata)
 
 # powerset class id → multi-label binary (3-speaker)
 # class 0 = silence; 1/2/3 = 单 speaker; 4/5/6 = 两 speaker 同时活动
@@ -65,6 +71,9 @@ def _iter_audio_chunks(
 
     保证 chunk shape == (chunk_samples,) (末尾不足时 zero pad). audio 为空时
     不 yield. audio 短于 chunk_samples 时 yield 一次 padded chunk.
+
+    切法与 sherpa RunSpeakerSegmentationModel 等价: 整 chunk 步进 step_samples,
+    余数不足一个 step 时补一个 zero-pad 的尾 chunk.
     """
     n = int(audio.shape[0])
     if n == 0:
@@ -93,47 +102,264 @@ def _powerset_to_multilabel(
     return _POWERSET_MAP[cls]  # (..., S)
 
 
-def _aggregate_chunk_outputs(
-    chunk_starts: list[int],
-    chunk_outputs: list[np.ndarray],
-    audio_samples: int,
-    sample_rate: int = 16000,
-    frame_rate: float = PYANNOTE_FRAME_RATE_HZ,
-) -> np.ndarray:
-    """Whisper-style 加权融合 chunk outputs → (T_total_frames, K) 平均.
+def run_segmentation_chunks(
+    audio: np.ndarray,
+    ort_session,
+    input_name: Optional[str] = None,
+    chunk_samples: int = PYANNOTE_CHUNK_SAMPLES,
+    step_samples: int = PYANNOTE_STEP_SAMPLES,
+) -> Tuple[list[int], list[np.ndarray]]:
+    """逐 chunk 跑 pyannote 分段模型, 每 chunk **独立** argmax 出 multi-label.
 
-    每个 chunk 在它的 start_sample 处贡献 (chunk_frames, K), 多 chunk 重叠帧除 count.
-    没有任何 chunk 覆盖的帧 (理论不会出现) 用 0 (silence) 兜底.
+    sherpa parity 关键: 绝不跨 chunk 平均 logits — speaker slot 是 chunk 局部的,
+    跨 chunk 融合属于错误用法 (会混叠不同说话人的活动).
+
+    Returns:
+        (starts, labels): starts[i] 是 chunk i 的起始样点;
+        labels[i] 是 (chunk_frames, 3) int8 multi-label.
     """
-    if not chunk_outputs:
-        raise ValueError("chunk_outputs is empty")
-    # audio 真实 frame 数 (floor) — pyannote 输出每 chunk 589 frame 对齐到 10s, audio 末
-    # 半 frame 算 pad. 用 floor 保证 audio_frames <= chunks 累计覆盖的 frame.
-    audio_frames = int(audio_samples / sample_rate * frame_rate)
-    # 最末 chunk 在 frame index 上的 end; 短 audio (< chunk_samples) 时 chunk 输出 frames
-    # 也是 589, 可能超过 audio_frames — 此时 total_frames 取 chunk 维度防截断.
-    last_start_frame = int(round(chunk_starts[-1] / sample_rate * frame_rate))
-    last_end_frame = last_start_frame + chunk_outputs[-1].shape[0]
-    total_frames = max(audio_frames, last_end_frame)
+    if input_name is None:
+        input_name = ort_session.get_inputs()[0].name
 
-    K = chunk_outputs[0].shape[-1]
-    accum = np.zeros((total_frames, K), dtype=np.float32)
-    count = np.zeros(total_frames, dtype=np.float32)
+    starts: list[int] = []
+    labels: list[np.ndarray] = []
+    for start, chunk in _iter_audio_chunks(audio, chunk_samples, step_samples):
+        x = chunk.reshape(1, 1, -1).astype(np.float32)
+        raw = ort_session.run(None, {input_name: x})[0]
+        # raw shape (1, frames, K); 去 batch dim, per-chunk argmax
+        labels.append(_powerset_to_multilabel(raw[0]).astype(np.int8))
+        starts.append(start)
+    return starts, labels
 
-    for start_sample, out in zip(chunk_starts, chunk_outputs):
-        start_frame = int(round(start_sample / sample_rate * frame_rate))
-        end_frame = min(start_frame + out.shape[0], total_frames)
-        valid = end_frame - start_frame
-        if valid <= 0:
+
+def compute_speakers_per_frame(
+    chunk_labels: list[np.ndarray],
+    window_size: int = PYANNOTE_CHUNK_SAMPLES,
+    window_shift: int = PYANNOTE_STEP_SAMPLES,
+    receptive_field_shift: int = PYANNOTE_RECEPTIVE_FIELD_SHIFT,
+) -> np.ndarray:
+    """全局 frame 网格上的 per-frame 说话人数 (sherpa ComputeSpeakersPerFrame).
+
+    每 chunk 在自己覆盖的 frame 区间贡献 rowwise speaker 数, 重叠区按覆盖
+    chunk 数取平均后 +0.5 四舍五入. 用 **原始** multi-label (不剔重叠帧).
+
+    Returns:
+        (num_frames,) int32, num_frames = (window + (n_chunks-1)*shift) // rf_shift + 1.
+    """
+    num_chunks = len(chunk_labels)
+    num_frames = (
+        window_size + (num_chunks - 1) * window_shift
+    ) // receptive_field_shift + 1
+
+    count = np.zeros(num_frames, dtype=np.float64)
+    weight = np.zeros(num_frames, dtype=np.float64)
+    for i, label in enumerate(chunk_labels):
+        start = int(i * window_shift / receptive_field_shift + 0.5)
+        end = min(start + label.shape[0], num_frames)
+        if end <= start:
             continue
-        accum[start_frame:end_frame] += out[:valid]
-        count[start_frame:end_frame] += 1.0
+        count[start:end] += label[: end - start].sum(axis=1)
+        weight[start:end] += 1.0
 
-    count_safe = np.maximum(count, 1.0)
-    out_frames = accum / count_safe[:, None]
-    # 短 audio (< 1 frame, 极端 case) 返回 chunk 维度避免空数组; 正常 audio 截到 floor frame 数.
-    slice_to = audio_frames if audio_frames > 0 else total_frames
-    return out_frames[:slice_to]
+    return (count / (weight + 1e-12) + 0.5).astype(np.int32)
+
+
+def exclude_overlap(label: np.ndarray) -> np.ndarray:
+    """同帧 ≥2 speaker 活跃的 frame 整帧清零 (sherpa ExcludeOverlap).
+
+    重叠帧语音是混合信号, 不能用来提 speaker embedding. 返回副本, 不改原数组.
+    """
+    out = label.copy()
+    out[label.sum(axis=1) >= 2] = 0
+    return out
+
+
+def get_chunk_speaker_sample_indexes(
+    chunk_labels: list[np.ndarray],
+    window_size: int = PYANNOTE_CHUNK_SAMPLES,
+    window_shift: int = PYANNOTE_STEP_SAMPLES,
+    min_active_frames: int = 10,
+) -> Tuple[list[Tuple[int, int]], list[list[Tuple[int, int]]]]:
+    """每个 (chunk, local_speaker) 的活跃采样区间 (sherpa GetChunkSpeakerSampleIndexes).
+
+    先剔重叠帧, 再按 speaker slot 扫连续活跃 frame 段, 帧 index 按
+    frame/num_frames*window_size + chunk_offset 映射回样点. 总活跃帧
+    < min_active_frames 的 (chunk, speaker) 整对跳过 (sherpa 固定 10 帧).
+
+    Returns:
+        (pairs, sample_ranges): pairs[i] = (chunk_idx, local_speaker);
+        sample_ranges[i] = [(start_sample, end_sample), ...] 该对的全部活跃区间.
+    """
+    pairs: list[Tuple[int, int]] = []
+    sample_ranges: list[list[Tuple[int, int]]] = []
+
+    for ci, label in enumerate(chunk_labels):
+        lab = exclude_overlap(label)
+        num_frames = lab.shape[0]
+        sample_offset = ci * window_shift
+        for spk in range(lab.shape[1]):
+            idx = np.flatnonzero(lab[:, spk])
+            if idx.size < min_active_frames:
+                continue
+            # 连续活跃 run 边界 (end 为 exclusive 帧 index)
+            breaks = np.flatnonzero(np.diff(idx) > 1)
+            run_starts = np.concatenate([[idx[0]], idx[breaks + 1]])
+            run_ends = np.concatenate([idx[breaks] + 1, [idx[-1] + 1]])
+
+            segs: list[Tuple[int, int]] = []
+            for a, b in zip(run_starts, run_ends):
+                # sherpa: 活跃到 chunk 末尾时 end 用 num_frames-1 映射
+                b_eff = int(b) if b < num_frames else num_frames - 1
+                segs.append(
+                    (
+                        int(int(a) / num_frames * window_size) + sample_offset,
+                        int(b_eff / num_frames * window_size) + sample_offset,
+                    )
+                )
+            pairs.append((ci, spk))
+            sample_ranges.append(segs)
+
+    return pairs, sample_ranges
+
+
+def relabel_chunks(
+    chunk_labels: list[np.ndarray],
+    pair_to_cluster: dict[Tuple[int, int], int],
+    num_clusters: int,
+) -> list[np.ndarray]:
+    """按聚类结果把 chunk 局部 slot 重标成全局 cluster 列 (sherpa ReLabel).
+
+    用 **原始** multi-label (含重叠帧). 不在映射里的 (chunk, slot)
+    (embedding 阶段被跳过/过滤) 直接丢弃.
+
+    Returns:
+        list of (chunk_frames, num_clusters) int8.
+    """
+    out: list[np.ndarray] = []
+    for ci, label in enumerate(chunk_labels):
+        new = np.zeros((label.shape[0], num_clusters), dtype=np.int8)
+        for spk in range(label.shape[1]):
+            cluster = pair_to_cluster.get((ci, spk))
+            if cluster is None or not (0 <= cluster < num_clusters):
+                continue
+            new[label[:, spk] == 1, cluster] = 1
+        out.append(new)
+    return out
+
+
+def compute_speaker_count_grid(
+    relabeled: list[np.ndarray],
+    num_samples: int,
+    window_size: int = PYANNOTE_CHUNK_SAMPLES,
+    window_shift: int = PYANNOTE_STEP_SAMPLES,
+    receptive_field_shift: int = PYANNOTE_RECEPTIVE_FIELD_SHIFT,
+) -> np.ndarray:
+    """重标后的 chunk 帧投到全局 frame 网格累加 (sherpa ComputeSpeakerCount).
+
+    末尾存在 zero-pad 尾 chunk 时截断到音频真实 frame 数.
+
+    Returns:
+        (num_frames, num_clusters) int32 — 每帧每 cluster 被多少个 chunk 标活跃.
+    """
+    num_chunks = len(relabeled)
+    num_frames = (
+        window_size + (num_chunks - 1) * window_shift
+    ) // receptive_field_shift + 1
+    num_clusters = relabeled[0].shape[1]
+
+    count = np.zeros((num_frames, num_clusters), dtype=np.int32)
+    for i, lab in enumerate(relabeled):
+        start = int(i * window_shift / receptive_field_shift + 0.5)
+        end = min(start + lab.shape[0], num_frames)
+        if end <= start:
+            continue
+        count[start:end] += lab[: end - start]
+
+    # C++ 负数取模语义: num_samples <= window_size 时恒为 False
+    has_last_chunk = (
+        num_samples > window_size
+        and ((num_samples - window_size) % window_shift) > 0
+    )
+    if has_last_chunk:
+        last_frame = min(num_samples // receptive_field_shift, num_frames - 1)
+        count = count[: last_frame + 1]
+    return count
+
+
+def finalize_labels(
+    count: np.ndarray, speakers_per_frame: np.ndarray
+) -> np.ndarray:
+    """每帧按 count 取 top-k cluster (k = speakers_per_frame) (sherpa FinalizeLabels).
+
+    Returns:
+        (num_frames, num_clusters) int8 binary.
+    """
+    num_frames, num_clusters = count.shape
+    k_per_frame = np.clip(
+        speakers_per_frame[:num_frames].astype(np.int32), 0, num_clusters
+    )
+
+    # 每行按 count 降序的排名 (稳定排序, 平局按列 index 升序 — deterministic)
+    order = np.argsort(-count, axis=1, kind="stable")  # (T, K) 列 index 按值降序
+    ranks = np.empty_like(order)
+    np.put_along_axis(
+        ranks, order, np.broadcast_to(np.arange(num_clusters), order.shape).copy(), axis=1
+    )
+    return (ranks < k_per_frame[:, None]).astype(np.int8)
+
+
+def labels_to_turns(
+    final_labels: np.ndarray,
+    receptive_field_shift: int = PYANNOTE_RECEPTIVE_FIELD_SHIFT,
+    receptive_field_size: int = PYANNOTE_RECEPTIVE_FIELD_SIZE,
+    sample_rate: int = 16000,
+    min_duration_on: float = 0.3,
+    min_duration_off: float = 0.5,
+) -> list[dict]:
+    """(num_frames, num_clusters) binary → turn list (sherpa ComputeResult + MergeSegments).
+
+    帧→秒映射: t = frame * rf_shift/sr + 0.5*rf_size/sr. 每 speaker 独立扫
+    连续活跃段; 同 speaker 相邻段 gap ≤ min_duration_off 合并; 时长
+    ≤ min_duration_on 的段丢弃 (sherpa 是严格 >).
+
+    Returns:
+        按 start 排序的 [{"start", "end", "speaker"}, ...].
+    """
+    scale = receptive_field_shift / sample_rate
+    scale_offset = 0.5 * receptive_field_size / sample_rate
+
+    num_frames, num_clusters = final_labels.shape
+    turns: list[dict] = []
+    for spk in range(num_clusters):
+        idx = np.flatnonzero(final_labels[:, spk])
+        if idx.size == 0:
+            continue
+        breaks = np.flatnonzero(np.diff(idx) > 1)
+        run_starts = np.concatenate([[idx[0]], idx[breaks + 1]])
+        run_ends = np.concatenate([idx[breaks] + 1, [idx[-1] + 1]])
+
+        segs: list[list[float]] = []
+        for a, b in zip(run_starts, run_ends):
+            # sherpa: 活跃到最后一帧时 end 用 num_frames-1 映射
+            b_eff = int(b) if b < num_frames else num_frames - 1
+            segs.append(
+                [float(a) * scale + scale_offset, float(b_eff) * scale + scale_offset]
+            )
+
+        # 同 speaker 相邻段 gap ∈ (0, min_duration_off] 合并 (sherpa Segment::Merge)
+        merged: list[list[float]] = []
+        for s in segs:
+            if merged and 0 < s[0] - merged[-1][1] <= min_duration_off:
+                merged[-1][1] = s[1]
+            else:
+                merged.append(s)
+
+        for s in merged:
+            if s[1] - s[0] > min_duration_on:
+                turns.append({"start": s[0], "end": s[1], "speaker": spk})
+
+    turns.sort(key=lambda x: (x["start"], x["end"]))
+    return turns
 
 
 def compute_titanet_log_mel(
@@ -269,12 +495,9 @@ def fast_clustering(
         embeddings: (N, D) float32, 建议 L2-normalized.
         num_clusters: 固定簇数; None 时按 threshold 截断.
         threshold: distance > threshold 时停止合并. cosine distance ∈ [0, 2].
-            实测 sherpa 默认 0.9 在我们的 scipy complete linkage 下 60s 双人
-            podcast 能稳定出 2 speakers; average linkage 太激进合并出 1 speaker.
         method: scipy.cluster.hierarchy.linkage method.
-            - "complete" (默认): 最远距离合并, 跟 sherpa parity 更近
-            - "average": 平均距离合并, 容易 over-merge
-            - "single": 最近距离合并, 容易链式分裂
+            - "complete" (默认): 最远距离合并, 与 sherpa HCLUST_METHOD_COMPLETE 一致
+            - "average" / "single": 仅实验用
 
     Returns:
         (N,) int32 labels in [0, K) — 0-based 连续.
@@ -297,45 +520,6 @@ def fast_clustering(
     uniq = np.unique(labels)
     remap = {old: new for new, old in enumerate(uniq)}
     return np.array([remap[v] for v in labels], dtype=np.int32)
-
-
-def _extract_turns_from_activity(
-    activity: np.ndarray,
-    frame_rate_hz: float = PYANNOTE_FRAME_RATE_HZ,
-    min_duration_on: float = 0.3,
-    min_duration_off: float = 0.5,
-) -> list[dict]:
-    """从 (T_frame, S) multi-label binary 提取 turn list (per-local-speaker).
-
-    每个 speaker 维度独立扫: 连续 active frame 段为一个 turn. min_duration_on
-    过滤短段. min_duration_off 用于 future gap-closing (暂未实现, 占位).
-
-    Returns:
-        sorted by (start, end), 每项 {"start": float, "end": float, "local_speaker": int}.
-        local_speaker 来自 pyannote chunk 内的 spk slot, 跨 chunk 不一定同一人 —
-        cluster 阶段会用 TitaNet embedding 合并 / 拆分.
-    """
-    turns: list[dict] = []
-    if activity.size == 0:
-        return turns
-    T, S = activity.shape
-    for spk in range(S):
-        active = activity[:, spk] > 0
-        i = 0
-        while i < T:
-            if not active[i]:
-                i += 1
-                continue
-            j = i
-            while j < T and active[j]:
-                j += 1
-            start = i / frame_rate_hz
-            end = j / frame_rate_hz
-            if (end - start) >= min_duration_on:
-                turns.append({"start": start, "end": end, "local_speaker": spk})
-            i = j
-    turns.sort(key=lambda t: (t["start"], t["end"]))
-    return turns
 
 
 # ==================== ORT session cache ====================
@@ -387,7 +571,7 @@ def run_diarization_ort_cuda(
     providers: Optional[list] = None,
     min_embedding_audio_sec: float = 0.3,
 ) -> list[dict]:
-    """ORT 直 wrap diarize 端到端: pyannote sliding window + TitaNet embedding + cluster.
+    """ORT 直 wrap diarize 端到端 (sherpa pipeline 忠实移植).
 
     跟 src.core.qwen3.diarize.run_diarization (sherpa-onnx) 行为 parity, 输出 schema
     一致: [{"start": float, "end": float, "speaker": int}, ...]
@@ -399,90 +583,72 @@ def run_diarization_ort_cuda(
     from src.core.qwen3.diarize import _load_audio_mono_16k
 
     audio, _ = _load_audio_mono_16k(audio_path)
+    n = int(audio.shape[0])
 
     seg_sess = _get_pyannote_session(segmentation_model, providers=providers)
     emb_sess = _get_titanet_session(embedding_model, providers=providers)
 
-    # 1. pyannote sliding window → (T_frame, 3) binary
-    activity = pyannote_segmentation_pipeline(audio, seg_sess)
-
-    # 2. 提取 turn (per local spk slot)
-    turns_local = _extract_turns_from_activity(
-        activity,
-        frame_rate_hz=PYANNOTE_FRAME_RATE_HZ,
-        min_duration_on=min_duration_on,
-        min_duration_off=min_duration_off,
-    )
-    if not turns_local:
+    # 1. 逐 chunk 分段 (每 chunk 独立 argmax — 不跨 chunk 平均)
+    _starts, chunk_labels = run_segmentation_chunks(audio, seg_sess)
+    if not chunk_labels:
         return []
 
-    # 3. 每个 turn 跑 TitaNet embedding (要求 audio segment ≥ min_embedding_audio_sec)
+    # 单 chunk 特例 (音频 ≤ 10s 窗): 不聚类, chunk 局部 slot 直接当输出 speaker
+    # (sherpa HandleOneChunkSpecialCase; n <= window 时 C++ 端恒不截断)
+    if len(chunk_labels) == 1:
+        return labels_to_turns(
+            chunk_labels[0],
+            min_duration_on=min_duration_on,
+            min_duration_off=min_duration_off,
+        )
+
+    # 2. 全局 per-frame 说话人数 (用原始 multi-label)
+    speakers_per_frame = compute_speakers_per_frame(chunk_labels)
+    if int(speakers_per_frame.max()) == 0:
+        return []
+
+    # 3. per-(chunk, local_speaker) 提取 TitaNet embedding
     sample_rate = 16000
     min_samples = int(min_embedding_audio_sec * sample_rate)
+    pairs, sample_ranges = get_chunk_speaker_sample_indexes(chunk_labels)
+
     embeddings: list[np.ndarray] = []
-    valid_turns: list[dict] = []
-    for t in turns_local:
-        a = int(t["start"] * sample_rate)
-        b = int(t["end"] * sample_rate)
-        if b - a < min_samples:
+    valid_pairs: list[Tuple[int, int]] = []
+    for pair, segs in zip(pairs, sample_ranges):
+        pieces = [audio[a : min(b, n)] for a, b in segs if min(b, n) > a]
+        if not pieces:
             continue
-        emb = compute_titanet_embedding(audio[a:b], emb_sess)
+        seg_audio = np.concatenate(pieces)
+        if seg_audio.shape[0] < min_samples:
+            continue
+        emb = compute_titanet_embedding(seg_audio, emb_sess)
+        if np.isnan(emb).any():
+            # sherpa: NaN embedding 的 (chunk, speaker) 对直接剔除
+            continue
         embeddings.append(emb)
-        valid_turns.append(t)
+        valid_pairs.append(pair)
 
     if not embeddings:
         return []
 
-    # 4. cluster 跨 chunk 重组 global speaker
+    # 4. FastClustering 跨 chunk 重组 global speaker
     emb_matrix = np.stack(embeddings).astype(np.float32)
-    labels = fast_clustering(
+    cluster_labels = fast_clustering(
         emb_matrix,
         num_clusters=num_speakers,
         threshold=cluster_threshold,
     )
+    num_clusters = int(cluster_labels.max()) + 1
+    pair_to_cluster = {
+        pair: int(c) for pair, c in zip(valid_pairs, cluster_labels)
+    }
 
-    # 5. 输出 turn list (跟 sherpa schema 对齐)
-    out = [
-        {"start": float(t["start"]), "end": float(t["end"]), "speaker": int(lbl)}
-        for t, lbl in zip(valid_turns, labels)
-    ]
-    out.sort(key=lambda x: x["start"])
-    return out
-
-
-def pyannote_segmentation_pipeline(
-    audio: np.ndarray,
-    ort_session,
-    input_name: Optional[str] = None,
-    sample_rate: int = 16000,
-    chunk_samples: int = PYANNOTE_CHUNK_SAMPLES,
-    step_samples: int = PYANNOTE_STEP_SAMPLES,
-) -> np.ndarray:
-    """完整 pyannote-segmentation-3.0 sliding window pipeline.
-
-    Args:
-        audio: 1D float32 16kHz mono
-        ort_session: 已加载的 onnxruntime.InferenceSession 或 mock (鸭子类型, 需 run() 和 get_inputs())
-        input_name: 若 None 则用 session.get_inputs()[0].name
-        sample_rate / chunk_samples / step_samples: 通常用默认
-
-    Returns:
-        (T_total_frames, 3) int8 multi-label speaker activity. T_total_frames ≈
-        audio_seconds * 58.9.
-    """
-    if input_name is None:
-        input_name = ort_session.get_inputs()[0].name
-
-    starts: list[int] = []
-    outputs: list[np.ndarray] = []
-    for start, chunk in _iter_audio_chunks(audio, chunk_samples, step_samples):
-        x = chunk.reshape(1, 1, -1).astype(np.float32)
-        raw = ort_session.run(None, {input_name: x})[0]
-        # raw shape (1, frames, K); 去 batch dim
-        outputs.append(raw[0])
-        starts.append(start)
-
-    agg = _aggregate_chunk_outputs(
-        starts, outputs, audio_samples=int(audio.shape[0]), sample_rate=sample_rate
+    # 5. cluster 重标 chunk 帧 → 全局网格 top-k → 段重建
+    relabeled = relabel_chunks(chunk_labels, pair_to_cluster, num_clusters)
+    count = compute_speaker_count_grid(relabeled, num_samples=n)
+    final = finalize_labels(count, speakers_per_frame)
+    return labels_to_turns(
+        final,
+        min_duration_on=min_duration_on,
+        min_duration_off=min_duration_off,
     )
-    return _powerset_to_multilabel(agg)
