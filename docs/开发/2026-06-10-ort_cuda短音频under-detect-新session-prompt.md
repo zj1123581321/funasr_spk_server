@@ -1,5 +1,9 @@
 # ort_cuda 短音频 under-detect 调查与修复 — 新 session 交接
 
+> **已结案（2026-06-10）**：根因为 ort 复刻跨 chunk 平均 pyannote logits（slot
+> 混叠）+ TitaNet 拿错 ONNX 输出（logits 当 embedding）两层叠加。修复与验收
+> 见 `2026-06-10-ort_cuda短音频under-detect-修复结案.md`。本文档仅留档。
+>
 > 背景 session：2026-06-10 diarize 开关 3060 验收时发现。
 > 本文档自含，可直接作为新 session 的开题输入。
 
