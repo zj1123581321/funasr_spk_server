@@ -57,7 +57,7 @@ class TestProfileDefaults:
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.server.port == 8767
         assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 3
+        assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
         # Mac CPU word_align +17% RTF, profile 保持关 (字段默认 False)
         assert cfg.qwen3.word_align_enabled is False
@@ -67,7 +67,7 @@ class TestProfileDefaults:
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.server.port == 8867
         assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 2
+        assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
         assert cfg.logging.level == "DEBUG"
         assert cfg.qwen3.word_align_enabled is False
@@ -76,7 +76,7 @@ class TestProfileDefaults:
         monkeypatch.setenv("FUNASR_PROFILE", "cuda_prod")
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 2
+        assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "cuda"
         # CUDA word_align 仅 +1% RTF, profile 默认开词级时间戳
         assert cfg.qwen3.word_align_enabled is True
@@ -86,7 +86,7 @@ class TestProfileDefaults:
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.server.port == 8867
         assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 2
+        assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "cuda"
         assert cfg.logging.level == "DEBUG"
         assert cfg.qwen3.word_align_enabled is True

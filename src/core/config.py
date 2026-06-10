@@ -15,15 +15,19 @@ from dotenv import load_dotenv
 # 切平台 / 切环境一句 env 搞定: FUNASR_PROFILE=mac_prod / mac_dev / cuda_prod / cuda_dev
 # 优先级: defaults < config.json < profile < env (env 仍可覆盖 profile)
 # profile 覆盖 config.json 已有字段, 启动日志会列出被覆盖的字段防止"惊讶感"
+# pool_size 全 profile 默认 1 (2026-06-10 用户拍板):
+# - 3060 12GB 实测 pool=2 + word_align 双 MMS CUDA session 撞 BFCArena OOM
+#   (fallback 虽不挂但词级时间戳静默丢失), 单实例稳定可预期
+# - 并发需求再用 FUNASR_QWEN3_POOL_SIZE env 按机器显存/内存显式开
 PROFILES: Dict[str, Dict[str, Any]] = {
     "mac_prod": {
         "server": {"port": 8767},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 3},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
     },
     "mac_dev": {
         "server": {"port": 8867},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
         "logging": {"level": "DEBUG"},
     },
@@ -33,12 +37,12 @@ PROFILES: Dict[str, Dict[str, Any]] = {
     # 前提: CUDA 机器须预下 MMS 模型 (scripts/download_qwen3_models.sh --word-align) +
     #       修 onnxruntime-gpu 被覆盖 (见 docs/部署.md 五节).
     "cuda_prod": {
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
     },
     "cuda_dev": {
         "server": {"port": 8867},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
         "logging": {"level": "DEBUG"},
     },

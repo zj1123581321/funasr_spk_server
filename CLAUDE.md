@@ -143,10 +143,12 @@ defaults < config.json < FUNASR_PROFILE < FUNASR_* env
 
 | profile | port | engine | qwen3_pool | encoder | log |
 |---|---|---|---|---|---|
-| `mac_prod` | 8767 | qwen3 | 3 | coreml_ane_full | INFO |
-| `mac_dev` | 8867 | qwen3 | 2 | coreml_ane_full | DEBUG |
-| `cuda_prod` | (默认 8767) | qwen3 | 2 | cuda | INFO |
-| `cuda_dev` | 8867 | qwen3 | 2 | cuda | DEBUG |
+| `mac_prod` | 8767 | qwen3 | 1 | coreml_ane_full | INFO |
+| `mac_dev` | 8867 | qwen3 | 1 | coreml_ane_full | DEBUG |
+| `cuda_prod` | (默认 8767) | qwen3 | 1 | cuda | INFO |
+| `cuda_dev` | 8867 | qwen3 | 1 | cuda | DEBUG |
+
+pool 全 profile 默认 1（2026-06-10 拍板）：3060 12GB 实测 pool=2 + word_align 双 MMS CUDA session 撞显存 OOM（fallback 不挂但词级时间戳静默丢失）。并发需求用 `FUNASR_QWEN3_POOL_SIZE` env 按机器显存/内存显式开。
 
 用法: `FUNASR_PROFILE=cuda_dev venv/bin/python run_server.py`. 未知 profile name → warn + ignore, 不挂. 加新 profile 改 `src/core/config.py` 的 `PROFILES` dict.
 
