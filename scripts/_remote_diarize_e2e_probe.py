@@ -114,8 +114,13 @@ async def main():
     ap.add_argument("--language", default="chi")
     args = ap.parse_args()
 
-    audio = Path(args.audio)
-    assert audio.exists(), f"音频不存在: {audio}"
+    src_audio = Path(args.audio)
+    assert src_audio.exists(), f"音频不存在: {src_audio}"
+    # 可重入: 每轮拷贝 + 尾部随机字节改 file_hash, 否则上一轮存的 +nospk 行
+    # 会让 B 场景 exact 命中 (projected=false), 测不到投影回退
+    import uuid
+    audio = src_audio.parent / f".probe_{uuid.uuid4().hex[:8]}{src_audio.suffix}"
+    audio.write_bytes(src_audio.read_bytes() + uuid.uuid4().bytes[:8])
     ck = Check()
 
     # ---------- A. diarize=true JSON fresh ----------
@@ -192,6 +197,8 @@ async def main():
     srt_f = f["result"]["content"]
     print(f"    cached={f['cached']} blocks={srt_f.count('-->')}")
     ck.ok("Speaker1:" in srt_f, "SRT 带 SpeakerN: 前缀")
+
+    audio.unlink(missing_ok=True)
 
     # ---------- 汇总 ----------
     print("\n========== diarize e2e probe 汇总 ==========")
