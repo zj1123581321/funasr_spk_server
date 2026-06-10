@@ -197,7 +197,8 @@ class WebSocketHandler:
                 from src.core.database import db_manager, cache_params_for
                 _ce, _allow = cache_params_for(task)
                 cached_result = await db_manager.get_cached_result(
-                    request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow
+                    request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow,
+                    options=task.options,
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
@@ -574,15 +575,14 @@ class WebSocketHandler:
                 from src.core.config import config as _config
                 from src.models.schemas import TranscribeOptions
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
-                _ce, _allow = cache_params(
-                    _engine_for_cache,
-                    TranscribeOptions(
-                        language=session.get("language"),
-                        diarize=session.get("diarize", True),
-                    ),
+                _session_options = TranscribeOptions(
+                    language=session.get("language"),
+                    diarize=session.get("diarize", True),
                 )
+                _ce, _allow = cache_params(_engine_for_cache, _session_options)
                 cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow
+                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
+                    options=_session_options,
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")

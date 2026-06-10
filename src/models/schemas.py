@@ -55,7 +55,11 @@ class TranscriptionResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     processing_time: float = Field(..., description="处理时长（秒）")
     error: Optional[str] = Field(None, description="错误信息")
-    
+    # E2 effective options 回显: serve 层组装 (engine/diarize/word_align/language/
+    # projected), **不随缓存内容存取** — projected 是请求级属性, save_result 写库时
+    # exclude 本字段, 防止缓存污染 (T-D #9).
+    metadata: Optional[Dict[str, Any]] = Field(None, description="effective options 回显（serve 层组装，不入库）")
+
     model_config = {"protected_namespaces": ()}
 
 

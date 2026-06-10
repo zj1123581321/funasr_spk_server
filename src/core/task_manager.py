@@ -124,6 +124,7 @@ class TaskManager:
             cached_result = await db_manager.get_cached_result(
                 task.file_hash, task.output_format,
                 engine=cache_engine, allow_cross_engine=allow_cross,
+                options=task.options,
             )
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
@@ -281,8 +282,6 @@ class TaskManager:
             cache_engine_tag = cache_params_for(task)[0]
             if task.output_format == "srt":
                 # SRT格式结果
-                task.srt_content = result["content"]
-
                 # 创建转录结果对象用于缓存
                 # T-B: SRT 模式也存真 segments — qwen3 raw_result 无 sentence_info,
                 # 缓存命中重建 SRT 必须走 segments 路径; 空 segments 会让命中返回空 content.
@@ -294,21 +293,39 @@ class TaskManager:
                     file_hash=result["file_hash"],
                     duration=result["duration"],
                     segments=srt_segments,
-                    speakers=sorted(set(s.speaker for s in srt_segments)),
+                    speakers=sorted(set(s.speaker for s in srt_segments if s.speaker)),
                     processing_time=result["processing_time"],
                     error=None
                 )
-                task.result = transcription_result
 
-                # 保存到缓存（PR1: 缓存 key 含 engine，避免与其他引擎结果冲突）
+                # 保存到缓存（先于投影: 缓存永远存引擎真算结果, 投影是请求级出口行为）
                 await db_manager.save_result(transcription_result, result["raw_result"], engine=cache_engine_tag)
+
+                # fresh 结果出口投影 (D3 双出口之二): funasr 照算带 speaker,
+                # diarize=false 请求需投影抹 speaker + SRT 重渲染无前缀.
+                # qwen3 原生 nospk 输出 (speakers 已空) 不重渲染, 保留引擎 content.
+                if not task.options.diarize and transcription_result.speakers:
+                    from src.core.result_projection import (
+                        project_result_nospk,
+                        segments_to_srt_text,
+                    )
+                    transcription_result = project_result_nospk(transcription_result)
+                    task.srt_content = segments_to_srt_text(transcription_result.segments)
+                else:
+                    task.srt_content = result["content"]
+                task.result = transcription_result
             else:
                 # JSON格式结果
                 transcription_result, raw_result = result
-                task.result = transcription_result
 
-                # 保存到缓存（PR1: 缓存 key 含 engine）
+                # 保存到缓存（先于投影, 同上）
                 await db_manager.save_result(transcription_result, raw_result, engine=cache_engine_tag)
+
+                # fresh 结果出口投影 (funasr 照算路径; qwen3 原生 nospk 幂等跳过)
+                if not task.options.diarize and transcription_result.speakers:
+                    from src.core.result_projection import project_result_nospk
+                    transcription_result = project_result_nospk(transcription_result)
+                task.result = transcription_result
             
             task.completed_at = datetime.now()
             task.progress = 100

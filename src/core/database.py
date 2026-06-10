@@ -16,6 +16,7 @@ from pathlib import Path
 from loguru import logger
 from pydantic import ValidationError
 from src.core.config import config
+from src.core.result_projection import project_result_nospk, segments_to_srt_text
 from src.models.schemas import TranscriptionResult
 
 
@@ -246,6 +247,7 @@ class DatabaseManager:
         output_format: str = "json",
         engine: str = DEFAULT_ENGINE,
         allow_cross_engine: Optional[bool] = None,
+        options=None,
     ) -> Optional[TranscriptionResult]:
         """
         获取缓存的转录结果
@@ -253,16 +255,21 @@ class DatabaseManager:
         Args:
             file_hash: 文件 MD5
             output_format: 返回格式(json / srt), 影响返回结构
-            engine: ASR 引擎名, 当前 server 配置的引擎
+            engine: 折维后的缓存 tag (cache_params_for 输出, 可能带 +wa/+nospk 后缀)
             allow_cross_engine: 跨引擎共享开关. None → 走 config.transcription.cache_cross_engine
                 True: 精确 engine miss 后回退按 file_hash 查任意 engine 最新行
                 False: strict, 仅按 (file_hash, engine) 查
+            options: per-request TranscribeOptions. diarize=False 时本出口做 nospk
+                投影 (D3 双出口之一): exact +nospk tag miss → 回退同引擎同 wa-tag
+                diarized 行现场投影 (标 projected, **不回写**, E1+T2); funasr 免折维
+                行 (本身 diarized) 直接出口投影.
 
         跨引擎 SRT 命中时从 TranscriptionResult.segments 重建(不依赖 raw_result 引擎特定结构).
         """
         if not config.transcription.cache_enabled:
             return None
 
+        nospk = options is not None and options.diarize is False
         effective_cross = (
             config.transcription.cache_cross_engine
             if allow_cross_engine is None
@@ -278,6 +285,23 @@ class DatabaseManager:
                     (file_hash, engine),
                 )
                 row = await cursor.fetchone()
+
+                # 1.5) nospk 投影回退 (E1): exact +nospk miss → 显式只查同引擎同
+                #      wa-tag 的 diarized 行 (strip "+nospk" 后缀), 禁 cross-engine.
+                #      命中后在出口投影返回, 不回写 (T2: 缓存里永远只有真算结果).
+                if row is None and nospk and engine.endswith("+nospk"):
+                    diarized_tag = engine[: -len("+nospk")]
+                    cursor = await db.execute(
+                        "SELECT result, raw_result, file_name, duration, engine "
+                        "FROM transcription_cache WHERE file_hash = ? AND engine = ?",
+                        (file_hash, diarized_tag),
+                    )
+                    row = await cursor.fetchone()
+                    if row is not None:
+                        logger.info(
+                            f"nospk 投影回退命中: file_hash={file_hash} "
+                            f"diarized_tag={diarized_tag} (现场投影, 不回写)"
+                        )
 
                 # 2) miss 时按 file_hash 回退到任意 engine 最新一行(若开启跨引擎共享)
                 if row is None and effective_cross:
@@ -310,8 +334,31 @@ class DatabaseManager:
 
                 if output_format == "json":
                     result_data = json.loads(result_json)
-                    return TranscriptionResult(**result_data)
+                    result = TranscriptionResult(**result_data)
+                    if nospk:
+                        # 出口投影 (D8): 投影回退行 / funasr diarized 行 → 抹 speaker.
+                        # projected=True 表示"由 diarized 行投影而来"; exact nospk 行
+                        # (真算的) 为 False. metadata 是请求级属性, 不入库.
+                        was_projected = bool(result.speakers)
+                        result = project_result_nospk(result)
+                        result.metadata = {"projected": was_projected}
+                    return result
                 if output_format == "srt":
+                    if nospk:
+                        # nospk SRT: 旁路 raw 路径 (funasr raw 会渲染出 SpeakerN: 前缀),
+                        # 从投影 segments 重渲染无前缀 (D8 + T-D #4 渲染点).
+                        result_data = json.loads(result_json)
+                        tr = TranscriptionResult(**result_data)
+                        was_projected = bool(tr.speakers)
+                        tr = project_result_nospk(tr)
+                        return {
+                            "format": "srt",
+                            "content": self._segments_to_srt(tr.segments),
+                            "file_name": file_name,
+                            "file_hash": file_hash,
+                            "duration": duration,
+                            "projected": was_projected,
+                        }
                     # SRT 重建分流按 raw 结构而非引擎名 (T-B):
                     # - 同引擎 + raw 是 funasr 私有 sentence_info 结构 → 原 raw 重建路径
                     # - 其余 (跨引擎 / 无 raw / qwen3 raw 无 sentence_info) → schema 中立
@@ -367,7 +414,9 @@ class DatabaseManager:
 
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                result_json = result.json()
+                # metadata 是请求级属性 (projected 等), 禁止入库 (T-D #9):
+                # 否则缓存读出会继承上次请求的 projected, 污染后续请求.
+                result_json = result.model_dump_json(exclude={"metadata"})
                 raw_result_json = json.dumps(raw_result) if raw_result else None
 
                 await db.execute(
@@ -447,21 +496,10 @@ class DatabaseManager:
 
         speaker=None (diarize=false 的 nospk 行, D8): 该段无说话人区分,
         渲染纯文本行 (无 "SpeakerN:" 前缀).
+
+        实现委托给 result_projection.segments_to_srt_text (渲染点收拢).
         """
-        srt_lines = []
-        idx = 0
-        for seg in segments:
-            text = (seg.text or "").strip()
-            if not text:
-                continue
-            idx += 1
-            start_ms = int(round(seg.start_time * 1000))
-            end_ms = int(round(seg.end_time * 1000))
-            srt_lines.append(str(idx))
-            srt_lines.append(f"{self._ms_to_srt_time(start_ms)} --> {self._ms_to_srt_time(end_ms)}")
-            srt_lines.append(f"{seg.speaker}:{text}" if seg.speaker else text)
-            srt_lines.append("")
-        return "\n".join(srt_lines)
+        return segments_to_srt_text(segments)
 
     def _generate_srt_from_raw_result(self, raw_result: dict) -> str:
         """从原始 FunASR 结果生成 SRT 格式字符串"""
