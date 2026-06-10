@@ -475,7 +475,13 @@ def compute_titanet_embedding(
         ln_name = length_input_name or inputs[1].name
         feed[ln_name] = np.array([mel_in.shape[-1]], dtype=np.int64)
 
-    out = ort_session.run(None, feed)[0]
+    # NeMo TitaNet ONNX 输出 [logits (B,16681), embs (B,192)] — 必须显式取 embs.
+    # 取 outputs[0] 会拿到训练集分类 logits, 聚类离散度大 (主说话人被劈卫星簇).
+    output_names = [o.name for o in ort_session.get_outputs()]
+    if "embs" in output_names:
+        out = ort_session.run(["embs"], feed)[0]
+    else:
+        out = ort_session.run(None, feed)[0]
     emb = np.asarray(out).flatten().astype(np.float32)
     norm = float(np.linalg.norm(emb))
     if norm > 1e-12:

@@ -218,12 +218,50 @@ def _make_fake_titanet_session(embedding_vec: np.ndarray):
     in_len = MagicMock()
     in_len.name = "length"
     sess.get_inputs.return_value = [in_audio, in_len]
+    out_embs = MagicMock()
+    out_embs.name = "embs"
+    sess.get_outputs.return_value = [out_embs]
 
     def fake_run(_, feed):
         return [embedding_vec.reshape(1, -1).astype(np.float32)]
 
     sess.run.side_effect = fake_run
     return sess
+
+
+def test_compute_titanet_embedding_selects_embs_output_not_logits():
+    """NeMo TitaNet ONNX 输出 [logits (B,16681), embs (B,192)] — 必须取 embs.
+
+    回归: 旧实现取 outputs[0] (训练集分类 logits) 当 embedding 聚类, logits
+    离散度大, 60min 长音频上主说话人被劈出 ~4% 卫星簇 (2026-06-10 评测).
+    """
+    from src.core.qwen3.diarize_ort import compute_titanet_embedding
+
+    sess = MagicMock()
+    in_audio = MagicMock()
+    in_audio.name = "audio_signal"
+    in_len = MagicMock()
+    in_len.name = "length"
+    sess.get_inputs.return_value = [in_audio, in_len]
+    out_logits = MagicMock()
+    out_logits.name = "logits"
+    out_embs = MagicMock()
+    out_embs.name = "embs"
+    sess.get_outputs.return_value = [out_logits, out_embs]
+
+    embs = np.zeros((1, 192), dtype=np.float32)
+    embs[0, 0] = 1.0
+
+    def fake_run(output_names, feed):
+        if output_names == ["embs"]:
+            return [embs]
+        # 旧行为: run(None, feed) 返回全部输出, [0] 是 logits
+        return [np.ones((1, 16681), dtype=np.float32), embs]
+
+    sess.run.side_effect = fake_run
+
+    emb = compute_titanet_embedding(np.random.RandomState(0).randn(8000).astype(np.float32), sess)
+    assert emb.shape == (192,), f"应取 192 维 embs 输出, got {emb.shape}"
 
 
 # ==================== run_diarization_ort_cuda 端到端 ====================
