@@ -40,7 +40,7 @@ def _make_fake_transcriber(text: str = "冒烟测试文本", file_hash: str = "h
     """构造 fake transcriber, 接口与 FunASR / Qwen3 同形"""
     fake = MagicMock()
 
-    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json"):
+    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
         if progress_callback:
             if asyncio.iscoroutinefunction(progress_callback):
                 await progress_callback(50)
