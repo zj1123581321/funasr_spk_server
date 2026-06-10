@@ -105,6 +105,23 @@
 - **背景**：CEO review 判定段边界替换是"高风险边际改善"，词级真正价值在 `segment.words`（token 时间戳）。详见 `spikes/qwen3_word_timestamp/SUMMARY.md` + `docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md`
 - 优先级：P3（条件触发）
 
+### 15. num_speakers per-request 化
+- 来源：`/plan-ceo-review`（2026-06-10，diarize 开关设计评审 D7 决策）
+- **What**：把 `num_speakers` 加进 TranscribeOptions，per-request 可传
+- **Why**：会议等已知人数场景可提聚类精度；TranscribeOptions 口袋落地后穿透成本极低
+- **Cons / 为何延期**：缓存 key 要再折一维 + E1 投影兼容规则要重定（不同 spk 数的 diarized 行不能互投）+ 测试矩阵翻倍，当前无客户端需求方
+- **触发条件**：有真实客户端提出指定人数需求
+- 优先级：P3（条件触发）
+- 依赖：diarize 开关 PR（TranscribeOptions 结构）落地
+
+### 16. FunASR server 级「不加载 cam++」部署形态
+- 来源：`/plan-ceo-review`（2026-06-10，D4 决策附带）
+- **What**：config 开关控制 AutoModel 初始化时不传 `spk_model`，纯文字稿部署形态
+- **Why**：funasr 的 cam++ embedding 提取只 gate 在模型加载（`auto_model.py:488`），per-request 关不掉；纯转录场景这是白烧的算力
+- **Cons**：要定义「不加载时收到 diarize=true 请求」的冲突规则（拒绝或降级）
+- **触发条件**：出现纯文字稿的 funasr 部署需求
+- 优先级：P3（条件触发）
+
 ---
 
 ## 已完成（PR1）
