@@ -286,7 +286,8 @@ class TaskManager:
             )
             
             # 更新任务结果
-            task.status = TaskStatus.COMPLETED
+            # 注: status=COMPLETED 在 task.result 组装完成后才翻转 (见下), 否则
+            # save_result 的 await 窗口里轮询方会看到 COMPLETED 但 result=None.
             # 缓存写入 tag 与查询同 key (折维收拢在 database.cache_params_for, D4)
             from src.core.database import cache_params_for
             cache_engine_tag = cache_params_for(task)[0]
@@ -346,6 +347,7 @@ class TaskManager:
                 engine=task.engine, options=task.options, projected=fresh_projected,
             )
 
+            task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
             task.progress = 100
             

@@ -102,10 +102,13 @@ async def test_word_align_real_mms_produces_words(podcast_audio: Path):
     if model_path is None:
         pytest.skip("MMS 模型缺失, 跑 scripts/download_qwen3_models.sh --word-align 后再测")
 
+    from src.models.schemas import TranscribeOptions
+
     tx = _build_transcriber(word_align_enabled=True, model_path=model_path)
     await tx.initialize()
     result, raw = await tx.transcribe(
-        audio_path=str(podcast_audio), task_id="wa-real", output_format="json", language="chi"
+        audio_path=str(podcast_audio), task_id="wa-real", output_format="json",
+        options=TranscribeOptions(language="chi"),
     )
 
     assert raw["word_align"]["enabled"] is True
