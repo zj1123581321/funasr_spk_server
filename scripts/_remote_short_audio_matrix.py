@@ -1,9 +1,13 @@
 """短音频 × 多人数 diarize parity 矩阵 — sherpa vs ort_cuda spk_count 对比.
 
-背景: 2026-06-10 ort_cuda 短音频 under-detect 修复 (sherpa pipeline 忠实移植)
-的验收项之一. 从标定评测集长音频切 1/5/10min 片段, 双 backend 只跑 diarize
-(不跑 ASR, 快), 验证 spk_count parity. 切片的真实人数没有逐段人工标定,
+背景: 2026-06-10 ort_cuda 短音频 under-detect 修复 (sherpa pipeline 忠实移植
++ TitaNet embs 输出修复) 的验收项之一. 从标定评测集长音频切 1/5/10min 片段,
+双 backend 只跑 diarize (不跑 ASR, 快). 切片的真实人数没有逐段人工标定,
 以 sherpa (Mac 生产路径同款) 为参照基准.
+
+parity 判定用 **后处理之后** 的人数 (filter_spurious + cluster_merge, 即生产
+serve 的语义): raw 簇数在嘈杂多人内容上本来就靠后处理收敛, 两套数值实现的
+raw 簇数逐一相等不是现实的 bar (raw 数值仅打印参考).
 
 用法 (远端 cuda dev box, LD_LIBRARY_PATH 见 scripts/_remote_run_provider.sh):
   venv/bin/python scripts/_remote_short_audio_matrix.py
@@ -50,7 +54,22 @@ def _spk_count(turns: list[dict]) -> int:
     return len({t["speaker"] for t in turns})
 
 
+def _post_process(turns: list[dict], wav: str, duration: float, extractor_fn) -> list[dict]:
+    """生产 serve 语义的人数收敛: filter_spurious + cluster_merge (turn 级)."""
+    from src.core.qwen3.merge import filter_spurious_speakers
+    from src.core.qwen3_transcriber import apply_cluster_centroid_merge_to_turns
+
+    out = filter_spurious_speakers(turns, audio_duration=duration)
+    out, _ = apply_cluster_centroid_merge_to_turns(
+        out, wav, config.qwen3, extractor_fn=extractor_fn
+    )
+    return out
+
+
 def main() -> None:
+    from src.core.qwen3_transcriber import build_embedding_extractor_fn
+
+    extractor_fn = build_embedding_extractor_fn(config.qwen3)
     kw = dict(
         segmentation_model=config.qwen3.segmentation_model,
         embedding_model=config.qwen3.embedding_model,
@@ -76,18 +95,20 @@ def main() -> None:
                 ort = run_diarization_ort_cuda(str(wav), **kw)
                 t2 = time.time()
 
-                ns, no = _spk_count(sherpa), _spk_count(ort)
+                raw_s, raw_o = _spk_count(sherpa), _spk_count(ort)
+                ns = _spk_count(_post_process(sherpa, str(wav), dur, extractor_fn))
+                no = _spk_count(_post_process(ort, str(wav), dur, extractor_fn))
                 ok = "OK " if ns == no else "MISMATCH"
                 rows.append((label, dur, ns, no, ok))
                 print(
                     f"[{ok}] {label} {dur:>4}s (全片 {full_n} 人): "
-                    f"sherpa={ns} ort_cuda={no} "
-                    f"(sherpa {t1-t0:.0f}s / ort {t2-t1:.0f}s)",
+                    f"post sherpa={ns} ort_cuda={no} "
+                    f"(raw {raw_s}/{raw_o}, sherpa {t1-t0:.0f}s / ort {t2-t1:.0f}s)",
                     flush=True,
                 )
 
     mismatches = [r for r in rows if r[4] != "OK "]
-    print(f"\n===== {len(rows)} 组, mismatch {len(mismatches)} =====")
+    print(f"\n===== {len(rows)} 组, post-process mismatch {len(mismatches)} =====")
     for r in mismatches:
         print(f"  {r[0]} {r[1]}s: sherpa={r[2]} ort={r[3]}")
     sys.exit(1 if mismatches else 0)
