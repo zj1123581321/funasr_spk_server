@@ -1,8 +1,18 @@
 # diarize 开关 API 设计定案（双引擎）
 
-> ✅ **已落地（2026-06-10，本分支）**：落地顺序 0–6 全部按 TDD 完成（每步红→绿→commit）。
+> ✅ **已落地（2026-06-10，本分支）**：落地顺序 0–7 全部完成（0–6 按 TDD 每步红→绿→commit）。
 > 代码入口见 CLAUDE.md「diarize 开关」节；客户端字段文档见 `docs/使用/客户端交互指南.md`。
-> 第 7 步（3060 RTF 重测 probe）为远端 CUDA box 验收项，待 merge 后在 3060 上执行。
+>
+> **第 7 步 3060 真机端到端验收（2026-06-10，cuda_dev + word_align 开，60s podcast）**：
+> `scripts/_remote_diarize_e2e_probe.py` 6 场景全过——diarized fresh / 投影回退命中
+> （projected=true，words 保留）/ nospk fresh（切段最长 12s）/ exact nospk 命中
+> （projected=false）/ SRT 无前缀 / SRT 回归。**RTF：diarize=true 0.0568 → false
+> 0.0420，省 26%**（word_align 落地后数据；旧 ~40% 是无词级时间戳时的占比）。
+> 两个机器侧已知课题（非本功能缺陷）：① ort_cuda 在该 podcast 上 under-detect 成
+> 1 speaker（旧代码同样）；② 12GB 显存 pool=2 双实例 + word_align 时第二实例 MMS
+> CUDA session 偶发 BFCArena OOM → 设计内 fallback 生效（段照常出 words=None，
+> 切段退静音），可观测于 word_align stats。本地 Mac（mac_dev，word_align 关）同
+> probe 全绿，RTF 省 38%。
 
 > 来源：`/plan-ceo-review` + `/plan-eng-review`（2026-06-10 同 session）+ 两轮 Codex 外部声音挑战。
 > 前序讨论：`2026-06-10-qwen3-diarize开关API-设计讨论-新session-prompt.md`（交接文档，其 5 个开放问题本文全部定案）。
