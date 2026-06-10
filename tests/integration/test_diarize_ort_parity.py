@@ -152,8 +152,8 @@ def test_speaker_count_parity(ort_turns, sherpa_turns):
     """两 backend 检出的 speaker 总数应该一致 (60s 双人播客都该出 2)."""
     n_sherpa = len({t["speaker"] for t in sherpa_turns})
     n_ort = len({t["speaker"] for t in ort_turns})
-    # 严格相等 — acceptance criterion. 允许 ±1 的退让在 commit 9 调优后收紧.
-    assert abs(n_sherpa - n_ort) <= 1, f"speaker 数差异过大 sherpa={n_sherpa} ort={n_ort}"
+    # 严格相等 — sherpa pipeline 忠实移植后 (2026-06-10) 收紧到 acceptance criterion.
+    assert n_sherpa == n_ort, f"speaker 数不一致 sherpa={n_sherpa} ort={n_ort}"
 
 
 def test_total_speech_time_within_5pct(ort_turns, sherpa_turns):
@@ -169,7 +169,7 @@ def test_total_speech_time_within_5pct(ort_turns, sherpa_turns):
 
 
 def test_per_speaker_iou_above_threshold(ort_turns, sherpa_turns):
-    """每个 sherpa speaker 在 ort 里找最优配对, IoU 平均值 ≥ 0.5 (commit 9 PoC bar)."""
+    """每个 sherpa speaker 在 ort 里找最优配对, IoU 平均值 ≥ 0.95 (acceptance bar)."""
     total_dur = 60.0
     sherpa_masks = _build_speaker_masks(sherpa_turns, total_dur)
     ort_masks = _build_speaker_masks(ort_turns, total_dur)
@@ -184,9 +184,8 @@ def test_per_speaker_iou_above_threshold(ort_turns, sherpa_turns):
             ious.append(inter / union)
     assert ious, "没有任何 speaker 能配对"
     mean_iou = float(np.mean(ious))
-    # PoC bar 0.5 — sherpa baseline 跟 ORT 实现差异调到 0.5 以上算可接受.
-    # commit 10 调到 0.95 (prompt acceptance criterion) 等算法调优收敛后再说.
-    assert mean_iou >= 0.5, (
+    # acceptance bar 0.95 — sherpa pipeline 忠实移植后实测 0.985 (60s podcast, Mac CPU).
+    assert mean_iou >= 0.95, (
         f"per-speaker IoU 太低 mean={mean_iou:.2f} pairs={pairs} ious={ious}"
     )
 
