@@ -61,10 +61,55 @@ from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
 
 
+# TitaNet ONNX 导出图的 Where mask 维硬编码 12288 帧 (x10ms hop = 122.88s),
+# >=123s 的单段输入直接 RuntimeError (sherpa wrapper 与 ORT 直跑同边界, 见
+# docs/开发/2026-06-10-cluster_merge-extractor-122s崩溃-新session-prompt.md).
+# 120s 留安全余量; centroid 语义上分块平均无损 (192 维声纹 120s 已绰绰有余).
+MAX_EXTRACTOR_SEGMENT_SEC = 120.0
+
+
+def _cap_extractor_fn(raw_fn, max_segment_sec: float = MAX_EXTRACTOR_SEGMENT_SEC):
+    """把 raw extractor 包成段长受限版, 底层永远收到 <= max_segment_sec 的段.
+
+    超限段切成 n = ceil(dur / max) 个等宽连续窗 (每窗 >= max/2, 不会出现碎窗),
+    逐窗 embedding 后平均再 L2 归一化; 窗级 None (太短/越界) 跳过, 全 None 返回 None.
+
+    Args:
+        raw_fn: callable (audio_16k, start, end) -> np.ndarray or None.
+        max_segment_sec: 单次底层调用允许的最大段长 (秒).
+    """
+    import math
+
+    import numpy as np
+
+    def capped_fn(audio_16k, start, end):
+        sr = 16000
+        start = max(0.0, float(start))
+        end = min(len(audio_16k) / sr, float(end))
+        dur = end - start
+        if dur <= max_segment_sec:
+            return raw_fn(audio_16k, start, end)
+        n = math.ceil(dur / max_segment_sec)
+        win = dur / n
+        embs = []
+        for i in range(n):
+            emb = raw_fn(audio_16k, start + i * win, start + (i + 1) * win)
+            if emb is not None:
+                embs.append(emb)
+        if not embs:
+            return None
+        c = np.mean(np.stack(embs), axis=0)
+        norm = float(np.linalg.norm(c))
+        return c / norm if norm > 0 else c
+
+    return capped_fn
+
+
 def build_embedding_extractor_fn(cfg_like):
     """构造 sherpa SpeakerEmbeddingExtractor 包装成 callable.
 
-    返回 callable (audio, start, end) -> np.ndarray or None.
+    返回 callable (audio, start, end) -> np.ndarray or None, 已带段长上限
+    (_cap_extractor_fn): >120s 的段自动切窗平均, 避开 TitaNet 122.88s 崩溃.
     extractor 真正 build 是惰性的, 调一次创建后 closure 复用.
 
     cfg_like: 鸭子类型, 需要 embedding_model / provider 属性 (Qwen3Config 或 self).
@@ -99,7 +144,7 @@ def build_embedding_extractor_fn(cfg_like):
         norm = float(np.linalg.norm(emb))
         return emb / norm if norm > 0 else emb
 
-    return extractor_fn
+    return _cap_extractor_fn(extractor_fn)
 
 
 def apply_cluster_centroid_merge_to_turns(

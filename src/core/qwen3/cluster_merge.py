@@ -7,6 +7,7 @@ apply_cluster_centroid_merge 才需要, 内部函数都是纯 numpy/字典操作
 from __future__ import annotations
 
 import numpy as np
+from loguru import logger
 
 
 def cosine(a, b) -> float:
@@ -44,13 +45,24 @@ def build_centroids(
 
     Returns:
         dict[str -> np.ndarray (L2 normalized)]. 跳过没法算 embedding 的 speaker.
+
+    单段 embedding 失败 (如底层模型对超长输入抛 RuntimeError) 只跳过该段,
+    centroid 用剩余段算 — 兜底不让整层 cluster_merge 因一段阵亡.
     """
     centroids: dict = {}
     for sp, segs in segments_by_spk.items():
         chosen = sorted(segs, key=lambda s: float(s["end"]) - float(s["start"]), reverse=True)[:max_per_speaker]
         embs = []
         for s in chosen:
-            emb = extractor_fn(audio_16k, float(s["start"]), float(s["end"]))
+            try:
+                emb = extractor_fn(audio_16k, float(s["start"]), float(s["end"]))
+            except Exception as exc:
+                logger.warning(
+                    f"build_centroids: speaker {sp} 段 "
+                    f"[{float(s['start']):.1f},{float(s['end']):.1f}] embedding 失败, "
+                    f"跳过该段: {exc}"
+                )
+                continue
             if emb is not None:
                 embs.append(emb)
         if not embs:
