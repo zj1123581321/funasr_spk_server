@@ -3,7 +3,7 @@
 > 配套计划:`docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md`
 > 指标口径:AAS(平均绝对偏移 ms)、RTF(Mac 实测)、长音频是否崩。
 
-> **✅ 已落地生产实现(2026-06-09)**:选型 MMS-300M CTC-FA,增量挂 `segment.words`(`word_align_enabled` 默认关 opt-in)。实现见 `src/core/qwen3/word_align.py` + `CLAUDE.md`「Qwen3 后处理 pipeline」5.5 层;落地清单见 PoC 计划文档顶部「已落地实现」。集成测试 `tests/integration/test_qwen3_word_align_e2e.py` 真 MMS 跑通(podcast 60s 出词、词时间落段窗内、覆盖率≥0.5)。
+> **✅ 已落地生产实现(2026-06-09)**:选型 MMS-300M CTC-FA,增量挂 `segment.words`(`word_align_enabled` 字段默认关;`cuda_prod`/`cuda_dev` profile 默认开,Mac profile 保持关——见下方 3060 实测)。实现见 `src/core/qwen3/word_align.py` + `CLAUDE.md`「Qwen3 后处理 pipeline」5.5 层;落地清单见 PoC 计划文档顶部「已落地实现」。集成测试 `tests/integration/test_qwen3_word_align_e2e.py` 真 MMS 跑通(podcast 60s 出词、词时间落段窗内、覆盖率≥0.5)。
 
 ## 3060 CUDA 实测(2026-06-10,probe `scripts/_remote_word_align_rtf_probe.py`)
 

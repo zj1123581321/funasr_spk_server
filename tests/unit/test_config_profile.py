@@ -59,6 +59,8 @@ class TestProfileDefaults:
         assert cfg.transcription.default_engine == "qwen3"
         assert cfg.transcription.qwen3_pool_size == 3
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
+        # Mac CPU word_align +17% RTF, profile 保持关 (字段默认 False)
+        assert cfg.qwen3.word_align_enabled is False
 
     def test_mac_dev_profile(self, monkeypatch, tmp_path):
         monkeypatch.setenv("FUNASR_PROFILE", "mac_dev")
@@ -68,6 +70,7 @@ class TestProfileDefaults:
         assert cfg.transcription.qwen3_pool_size == 2
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
         assert cfg.logging.level == "DEBUG"
+        assert cfg.qwen3.word_align_enabled is False
 
     def test_cuda_prod_profile(self, monkeypatch, tmp_path):
         monkeypatch.setenv("FUNASR_PROFILE", "cuda_prod")
@@ -75,6 +78,8 @@ class TestProfileDefaults:
         assert cfg.transcription.default_engine == "qwen3"
         assert cfg.transcription.qwen3_pool_size == 2
         assert cfg.qwen3.asr_encoder_provider == "cuda"
+        # CUDA word_align 仅 +1% RTF, profile 默认开词级时间戳
+        assert cfg.qwen3.word_align_enabled is True
 
     def test_cuda_dev_profile(self, monkeypatch, tmp_path):
         monkeypatch.setenv("FUNASR_PROFILE", "cuda_dev")
@@ -84,6 +89,7 @@ class TestProfileDefaults:
         assert cfg.transcription.qwen3_pool_size == 2
         assert cfg.qwen3.asr_encoder_provider == "cuda"
         assert cfg.logging.level == "DEBUG"
+        assert cfg.qwen3.word_align_enabled is True
 
 
 class TestProfilePriorityOverConfigJson:

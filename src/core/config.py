@@ -27,14 +27,19 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
         "logging": {"level": "DEBUG"},
     },
+    # CUDA word_align 仅 +1% RTF (3060 实测, spikes/qwen3_word_timestamp/SUMMARY.md),
+    # 几乎免费, profile 默认开词级时间戳 (provider="auto" 在 cuda runtime 自动走 CUDA EP).
+    # Mac profile 不开 (CPU 上 +17% RTF). env FUNASR_QWEN3_WORD_ALIGN_ENABLED 仍可覆盖.
+    # 前提: CUDA 机器须预下 MMS 模型 (scripts/download_qwen3_models.sh --word-align) +
+    #       修 onnxruntime-gpu 被覆盖 (见 docs/部署.md 五节).
     "cuda_prod": {
         "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
-        "qwen3": {"asr_encoder_provider": "cuda"},
+        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
     },
     "cuda_dev": {
         "server": {"port": 8867},
         "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 2},
-        "qwen3": {"asr_encoder_provider": "cuda"},
+        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
         "logging": {"level": "DEBUG"},
     },
 }
@@ -159,8 +164,8 @@ class Qwen3Config(BaseModel):
 
     # 词级时间戳 (word_align, MMS-300M CTC-FA): 增量挂 segment.words, 不替换段边界.
     # 见 docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
-    #   - word_align_enabled: 默认关 (opt-in). 开启会加载 ~1.2GB MMS ONNX +
-    #     每 task 加 RTF≈0.166 (Mac CPU) + 改 cache key, 验证后再切生产默认.
+    #   - word_align_enabled: 字段默认关; cuda_prod/cuda_dev profile 默认开 (CUDA 仅 +1% RTF),
+    #     Mac profile 保持关 (CPU +17% RTF). 开启会加载 ~1.2GB MMS ONNX + 改 cache key.
     #   - word_align_language: ISO 码 (chi/eng/jpn/kor...) 兜底语言, per-request
     #     language 字段优先. 中英混排用 chi (preprocess_text 对 chi 逐字切, 能吃英文).
     #   - word_align_model_path: 本地预下的 MMS ONNX 路径 (download_qwen3_models.sh
