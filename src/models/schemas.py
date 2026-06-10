@@ -35,7 +35,9 @@ class TranscriptionSegment(BaseModel):
     start_time: float = Field(..., description="开始时间（秒）")
     end_time: float = Field(..., description="结束时间（秒）")
     text: str = Field(..., description="转录文本")
-    speaker: str = Field(..., description="说话人标识")
+    # Optional (D8): null = 本次请求未做说话人区分 (diarize=false), 与"真只有一人
+    # (Speaker1)"语义可区分. 内部 Segment(speaker:int) 永不为 None, null 只在出口转换层出现.
+    speaker: Optional[str] = Field(None, description="说话人标识；diarize=false 时为 null（未区分）")
     # 词级时间戳(可选): word_align 开启且对齐成功时挂上, 否则 None(向后兼容).
     words: Optional[List[WordTimestamp]] = Field(None, description="词级时间戳列表")
 

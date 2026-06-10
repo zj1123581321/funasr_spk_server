@@ -480,8 +480,12 @@ def snap_segments_to_silence(
     }
 
 
-def segments_to_srt(segments: List[Segment]) -> str:
-    """把 segments 转 SRT 字幕格式 (跳过空文本片段, 索引按非空 segment 重新编号)."""
+def segments_to_srt(segments: List[Segment], include_speaker: bool = True) -> str:
+    """把 segments 转 SRT 字幕格式 (跳过空文本片段, 索引按非空 segment 重新编号).
+
+    include_speaker=False (diarize=false, D8): 不带 "SpeakerN:" 前缀 —
+    字幕场景正是要纯文本行.
+    """
     def fmt(sec: float) -> str:
         h = int(sec // 3600)
         m = int((sec % 3600) // 60)
@@ -497,7 +501,10 @@ def segments_to_srt(segments: List[Segment]) -> str:
         idx += 1
         lines.append(str(idx))
         lines.append(f"{fmt(seg.start)} --> {fmt(seg.end)}")
-        # 与 FunASR SRT 字节级对齐: 冒号后无空格(funasr_transcriber.py:516)
-        lines.append(f"Speaker{seg.speaker + 1}:{seg.text.strip()}")
+        if include_speaker:
+            # 与 FunASR SRT 字节级对齐: 冒号后无空格(funasr_transcriber.py:516)
+            lines.append(f"Speaker{seg.speaker + 1}:{seg.text.strip()}")
+        else:
+            lines.append(seg.text.strip())
         lines.append("")
     return "\n".join(lines)

@@ -5,10 +5,22 @@
         JSON 模式 -> (TranscriptionResult, raw_result_dict)
         SRT  模式 -> {format, content, file_name, file_hash, duration, processing_time, raw_result}
 
-内部组装:
-    1. ASR  (src.core.qwen3.asr.run_asr) — 拿全文 text + duration
-    2. Diarize (src.core.qwen3.diarize.run_diarization) — 拿 turns
-    3. filter_spurious + merge — 把 ASR 文本切到各 speaker turn
+内部组装 (diarize=True, 默认):
+    1. ASR  (src.core.qwen3.asr.run_asr) — 拿全文 text + duration (与 2 并行)
+    2. Diarize (src.core.qwen3.diarize.run_diarization_dispatched) — 拿 turns
+    3. filter_spurious_speakers — 假说话人碎片归并
+    4. apply_cluster_centroid_merge — 过聚 cluster 合并
+    5. merge_asr_chunks_and_diarize — ASR chunk 文本切到 turn
+    6. apply_short_segment_guard — 微短段 drop / ABA 平滑 / 同 spk 合并
+    7. apply_silence_align — 切点吸附最近静音中点
+    8. word_align (可选, JSON-only) — MMS CTC-FA 词级时间戳增量挂 segment.words
+    9. relabel_segments_by_duration_desc — Speaker ID 按时长降序稳定化
+
+diarize=False (per-request options.diarize, 设计定案 D2/D5/D8):
+    1. 仅 ASR (跳 Diarize + 上面 3/4/6/9 speaker 后处理层, 省算力)
+    2. 段直接来自 ASR ~40s chunk 时间窗 (无 chunks 时单段全文兜底)
+    7/8 照常 (silence_align / word_align 与 speaker 正交)
+    出口: TranscriptionSegment.speaker=None, speakers=[], SRT 无 SpeakerN: 前缀
 
 ASR 引擎(libllama.dylib + Metal context) 实例级 lazy 单例, 进程内复用.
 """
@@ -434,78 +446,122 @@ class Qwen3DiarizeTranscriber:
 
         await self._report_progress(progress_callback, 10, task_id)
 
-        # ASR + Diarize 并行(PoC 实测真并行节省 ~50% wall time)
-        asr_future = loop.run_in_executor(
-            None,
-            lambda: run_asr(
-                audio_path,
-                engine,
-                language=self.language,
-                temperature=self.temperature,
-            ),
-        )
-        diarize_future = loop.run_in_executor(
-            None,
-            lambda: run_diarization_dispatched(
-                audio_path,
-                segmentation_model=self.segmentation_model,
-                embedding_model=self.embedding_model,
-                num_speakers=self.num_speakers,
-                cluster_threshold=self.cluster_threshold,
-                num_threads=self.num_threads,
-                provider=self.provider,
-            ),
-        )
+        do_diarize = options.diarize
 
-        # progress 在等待时定期报(简化: gather 完成时直接跳到 80)
-        asr_result, turns = await asyncio.gather(asr_future, diarize_future)
+        if do_diarize:
+            # ASR + Diarize 并行(PoC 实测真并行节省 ~50% wall time)
+            asr_future = loop.run_in_executor(
+                None,
+                lambda: run_asr(
+                    audio_path,
+                    engine,
+                    language=self.language,
+                    temperature=self.temperature,
+                ),
+            )
+            diarize_future = loop.run_in_executor(
+                None,
+                lambda: run_diarization_dispatched(
+                    audio_path,
+                    segmentation_model=self.segmentation_model,
+                    embedding_model=self.embedding_model,
+                    num_speakers=self.num_speakers,
+                    cluster_threshold=self.cluster_threshold,
+                    num_threads=self.num_threads,
+                    provider=self.provider,
+                ),
+            )
+
+            # progress 在等待时定期报(简化: gather 完成时直接跳到 80)
+            asr_result, turns = await asyncio.gather(asr_future, diarize_future)
+        else:
+            # diarize=False (D2/D5): 真跳过 diarize + speaker 后处理层, 省算力.
+            # config num_speakers 此时闲置 (D7: num_speakers 本次不 per-request 化).
+            if self.num_speakers is not None:
+                logger.info(
+                    f"[{task_id}] diarize=false: config num_speakers={self.num_speakers} 闲置不生效"
+                )
+            asr_result = await loop.run_in_executor(
+                None,
+                lambda: run_asr(
+                    audio_path,
+                    engine,
+                    language=self.language,
+                    temperature=self.temperature,
+                ),
+            )
+            turns = []
         await self._report_progress(progress_callback, 80, task_id)
 
-        # 过滤假说话人(短时长 spurious cluster)
-        filtered_turns = filter_spurious_speakers(
-            turns,
-            min_speaker_total=self.spurious_min_total,
-            min_speaker_share=self.spurious_min_share,
-            audio_duration=asr_result.duration,
-        )
-
-        # PR3: cluster centroid merge — 多人场景把过聚的 cluster 合并 (在切文本前做, 减少误派文本)
-        if self.cluster_merge_enabled:
-            try:
-                # extractor lazy singleton: 同 worker 多 task 复用, 省 ~5-10s/task
-                extractor_fn = await loop.run_in_executor(
-                    None, self._ensure_embedding_extractor_fn
-                )
-                filtered_turns, cluster_log = apply_cluster_centroid_merge_to_turns(
-                    filtered_turns, audio_path, self, extractor_fn=extractor_fn
-                )
-                merge_events = [e for e in cluster_log if e.get("action", "").startswith("main_merged") or e.get("action") == "minor_to_main"]
-                if merge_events:
-                    logger.info(
-                        f"[{task_id}] cluster_merge: {len(merge_events)} merge events, "
-                        f"final clusters={len(set(t['speaker'] for t in filtered_turns))}"
-                    )
-            except Exception as exc:
-                logger.warning(f"[{task_id}] cluster_merge 失败, 跳过: {exc}")
-
-        # 文本切分到 turns。优先使用 Qwen3-ASR 内部 chunk 时间窗，避免整段线性切字漂移。
-        if asr_result.chunks:
-            merged_segments = merge_asr_chunks_and_diarize(asr_result.chunks, filtered_turns)
-        else:
-            merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
-
-        # PR2: short-segment guard 后处理 (drop tiny / ABA 平滑 / 合并同 spk)
-        # 由 config 控制开关与阈值, 默认全开. SRT/JSON 都走 guard 后的 segments.
-        merged_segments, guard_stats = apply_short_segment_guard_to_segments(
-            merged_segments, self
-        )
-        if guard_stats.get("enabled"):
-            logger.info(
-                f"[{task_id}] short-guard: drop={guard_stats.get('drop', {}).get('dropped_total', 0)} "
-                f"aba={guard_stats.get('aba', {}).get('changed', 0)} "
-                f"merge_same={guard_stats.get('merge', {}).get('merged', 0)} "
-                f"final_segments={len(merged_segments)}"
+        if do_diarize:
+            # 过滤假说话人(短时长 spurious cluster)
+            filtered_turns = filter_spurious_speakers(
+                turns,
+                min_speaker_total=self.spurious_min_total,
+                min_speaker_share=self.spurious_min_share,
+                audio_duration=asr_result.duration,
             )
+
+            # PR3: cluster centroid merge — 多人场景把过聚的 cluster 合并 (在切文本前做, 减少误派文本)
+            if self.cluster_merge_enabled:
+                try:
+                    # extractor lazy singleton: 同 worker 多 task 复用, 省 ~5-10s/task
+                    extractor_fn = await loop.run_in_executor(
+                        None, self._ensure_embedding_extractor_fn
+                    )
+                    filtered_turns, cluster_log = apply_cluster_centroid_merge_to_turns(
+                        filtered_turns, audio_path, self, extractor_fn=extractor_fn
+                    )
+                    merge_events = [e for e in cluster_log if e.get("action", "").startswith("main_merged") or e.get("action") == "minor_to_main"]
+                    if merge_events:
+                        logger.info(
+                            f"[{task_id}] cluster_merge: {len(merge_events)} merge events, "
+                            f"final clusters={len(set(t['speaker'] for t in filtered_turns))}"
+                        )
+                except Exception as exc:
+                    logger.warning(f"[{task_id}] cluster_merge 失败, 跳过: {exc}")
+
+            # 文本切分到 turns。优先使用 Qwen3-ASR 内部 chunk 时间窗，避免整段线性切字漂移。
+            if asr_result.chunks:
+                merged_segments = merge_asr_chunks_and_diarize(asr_result.chunks, filtered_turns)
+            else:
+                merged_segments = merge_asr_and_diarize(asr_result.text, filtered_turns)
+
+            # PR2: short-segment guard 后处理 (drop tiny / ABA 平滑 / 合并同 spk)
+            # 由 config 控制开关与阈值, 默认全开. SRT/JSON 都走 guard 后的 segments.
+            merged_segments, guard_stats = apply_short_segment_guard_to_segments(
+                merged_segments, self
+            )
+            if guard_stats.get("enabled"):
+                logger.info(
+                    f"[{task_id}] short-guard: drop={guard_stats.get('drop', {}).get('dropped_total', 0)} "
+                    f"aba={guard_stats.get('aba', {}).get('changed', 0)} "
+                    f"merge_same={guard_stats.get('merge', {}).get('merged', 0)} "
+                    f"final_segments={len(merged_segments)}"
+                )
+        else:
+            # diarize=False: 无 turn 边界, 段直接来自 ASR ~40s chunk 时间窗
+            # (无 chunks 时单段全文兜底). 内部 speaker 恒 0 (Segment.speaker:int
+            # 永不为 None, T-D #3), null 只在出口转换层出现. 超长段的分层切分
+            # (词级→静音) 由 split_long_segments 在 silence_align 后接管.
+            filtered_turns = []
+            chunk_items = [c for c in asr_result.chunks if getattr(c, "text", "")]
+            if chunk_items:
+                merged_segments = [
+                    Segment(
+                        start=float(c.start),
+                        end=float(c.end),
+                        speaker=0,
+                        text=str(c.text),
+                    )
+                    for c in sorted(chunk_items, key=lambda c: (float(c.start), float(c.end)))
+                ]
+            elif asr_result.text:
+                merged_segments = [
+                    Segment(start=0.0, end=float(asr_result.duration), speaker=0, text=asr_result.text)
+                ]
+            else:
+                merged_segments = []
 
         # silence-aware 切点对齐 (spike 405abf6): ffmpeg silencedetect 把段切点
         # 吸附到最近静音中点. 60s podcast align_ratio +19pp, 60min long +33pp.
@@ -581,7 +637,9 @@ class Qwen3DiarizeTranscriber:
         # (ort_cuda / sherpa) / 跨平台 (cuda / Mac) 一致. 见 docs/开发/gpu加速/
         # 2026-05-22-cuda-diarize-accuracy.md 改进建议 §1.
         # relabel 用 dataclasses.replace, 自动透传 word_align 挂的 words.
-        merged_segments = relabel_segments_by_duration_desc(merged_segments)
+        # diarize=False 跳过 (speaker 层之一, 内部恒 0 无需重映射).
+        if do_diarize:
+            merged_segments = relabel_segments_by_duration_desc(merged_segments)
 
         await self._report_progress(progress_callback, 90, task_id)
 
@@ -605,6 +663,7 @@ class Qwen3DiarizeTranscriber:
             "turns": turns,
             "filtered_turns": filtered_turns,
             "word_align": word_align_stats,
+            "diarize": do_diarize,
             "engine": "qwen3",
         }
 
@@ -619,7 +678,8 @@ class Qwen3DiarizeTranscriber:
                 start_time=round(s.start, 2),
                 end_time=round(s.end, 2),
                 text=s.text,
-                speaker=f"Speaker{s.speaker + 1}",
+                # diarize=False 出口转 null (D8): 未做说话人区分, 与"真只有一人"可区分
+                speaker=f"Speaker{s.speaker + 1}" if do_diarize else None,
                 words=(
                     [
                         WordTimestamp(
@@ -636,10 +696,11 @@ class Qwen3DiarizeTranscriber:
             )
             for s in merged_segments
         ]
-        speakers = sorted(set(seg.speaker for seg in segments))
+        # diarize=False: speakers 恒 [] (投影/fresh 两路保证一致, T-D #3)
+        speakers = sorted(set(seg.speaker for seg in segments)) if do_diarize else []
 
         if output_format == "srt":
-            srt_content = segments_to_srt(merged_segments)
+            srt_content = segments_to_srt(merged_segments, include_speaker=do_diarize)
             await self._report_progress(progress_callback, 100, task_id)
             logger.info(
                 f"[{task_id}] Qwen3 转录完成 (SRT): "

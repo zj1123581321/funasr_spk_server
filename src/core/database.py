@@ -444,6 +444,9 @@ class DatabaseManager:
         私有结构(funasr 是 sentence_info, qwen3 是 asr_text/turns), 无法直接转 SRT.
         本函数走 schema 中立的 TranscriptionResult.segments 重建, 字节级与 FunASR
         _generate_srt_from_raw_result 输出对齐(Speaker{N}:文本 无空格).
+
+        speaker=None (diarize=false 的 nospk 行, D8): 该段无说话人区分,
+        渲染纯文本行 (无 "SpeakerN:" 前缀).
         """
         srt_lines = []
         idx = 0
@@ -456,7 +459,7 @@ class DatabaseManager:
             end_ms = int(round(seg.end_time * 1000))
             srt_lines.append(str(idx))
             srt_lines.append(f"{self._ms_to_srt_time(start_ms)} --> {self._ms_to_srt_time(end_ms)}")
-            srt_lines.append(f"{seg.speaker}:{text}")
+            srt_lines.append(f"{seg.speaker}:{text}" if seg.speaker else text)
             srt_lines.append("")
         return "\n".join(srt_lines)
 
