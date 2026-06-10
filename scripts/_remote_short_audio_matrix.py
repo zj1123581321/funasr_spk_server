@@ -55,14 +55,20 @@ def _spk_count(turns: list[dict]) -> int:
 
 
 def _post_process(turns: list[dict], wav: str, duration: float, extractor_fn) -> list[dict]:
-    """生产 serve 语义的人数收敛: filter_spurious + cluster_merge (turn 级)."""
+    """生产 serve 语义的人数收敛: filter_spurious + cluster_merge (turn 级).
+
+    cluster_merge 失败时跳过该层 — 跟 production transcribe 的 try/except 容错一致.
+    """
     from src.core.qwen3.merge import filter_spurious_speakers
     from src.core.qwen3_transcriber import apply_cluster_centroid_merge_to_turns
 
     out = filter_spurious_speakers(turns, audio_duration=duration)
-    out, _ = apply_cluster_centroid_merge_to_turns(
-        out, wav, config.qwen3, extractor_fn=extractor_fn
-    )
+    try:
+        out, _ = apply_cluster_centroid_merge_to_turns(
+            out, wav, config.qwen3, extractor_fn=extractor_fn
+        )
+    except Exception as exc:
+        print(f"    [warn] cluster_merge 失败, 跳过: {type(exc).__name__}", flush=True)
     return out
 
 
