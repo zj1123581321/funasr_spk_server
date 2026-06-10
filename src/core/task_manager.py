@@ -295,16 +295,19 @@ class TaskManager:
             if task.output_format == "srt":
                 # SRT格式结果
                 task.srt_content = result["content"]
-                
+
                 # 创建转录结果对象用于缓存
+                # T-B: SRT 模式也存真 segments — qwen3 raw_result 无 sentence_info,
+                # 缓存命中重建 SRT 必须走 segments 路径; 空 segments 会让命中返回空 content.
                 from src.models.schemas import TranscriptionResult
+                srt_segments = result.get("segments") or []
                 transcription_result = TranscriptionResult(
                     task_id=task_id,
                     file_name=result["file_name"],
                     file_hash=result["file_hash"],
                     duration=result["duration"],
-                    segments=[],  # SRT格式不存储片段信息
-                    speakers=[],  # SRT格式不存储说话人列表
+                    segments=srt_segments,
+                    speakers=sorted(set(s.speaker for s in srt_segments)),
                     processing_time=result["processing_time"],
                     error=None
                 )

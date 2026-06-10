@@ -599,26 +599,10 @@ class Qwen3DiarizeTranscriber:
             "engine": "qwen3",
         }
 
-        if output_format == "srt":
-            srt_content = segments_to_srt(merged_segments)
-            await self._report_progress(progress_callback, 100, task_id)
-            logger.info(
-                f"[{task_id}] Qwen3 转录完成 (SRT): "
-                f"duration={asr_result.duration:.2f}s, "
-                f"耗时={processing_time:.2f}s, "
-                f"RTF={processing_time / asr_result.duration:.3f}"
-            )
-            return {
-                "format": "srt",
-                "content": srt_content,
-                "file_name": os.path.basename(audio_path),
-                "file_hash": file_hash,
-                "duration": asr_result.duration,
-                "processing_time": processing_time,
-                "raw_result": raw_result,
-            }
-
-        # JSON: 转 TranscriptionSegment, speaker int -> "Speaker{i+1}"
+        # 转 TranscriptionSegment, speaker int -> "Speaker{i+1}" (JSON / SRT 共用).
+        # SRT 模式也携真 segments: 缓存层存真 segments 才能支撑 SRT 缓存命中重建
+        # (qwen3 raw_result 无 sentence_info, funasr 私有重建路径会返回空, 见 T-B)
+        # 与后续 diarize=false 投影 (T-A) 的 segments 重渲染.
         # word_align 挂的 s.words (内部 dict) 转成 WordTimestamp; confidence 暂留 None
         # (MMS score 是逐帧 log-prob 求和, 非 0-1 校准置信度, 不直接当 confidence 暴露).
         segments = [
@@ -644,6 +628,26 @@ class Qwen3DiarizeTranscriber:
             for s in merged_segments
         ]
         speakers = sorted(set(seg.speaker for seg in segments))
+
+        if output_format == "srt":
+            srt_content = segments_to_srt(merged_segments)
+            await self._report_progress(progress_callback, 100, task_id)
+            logger.info(
+                f"[{task_id}] Qwen3 转录完成 (SRT): "
+                f"duration={asr_result.duration:.2f}s, "
+                f"耗时={processing_time:.2f}s, "
+                f"RTF={processing_time / asr_result.duration:.3f}"
+            )
+            return {
+                "format": "srt",
+                "content": srt_content,
+                "file_name": os.path.basename(audio_path),
+                "file_hash": file_hash,
+                "duration": asr_result.duration,
+                "processing_time": processing_time,
+                "raw_result": raw_result,
+                "segments": segments,
+            }
 
         transcription_result = TranscriptionResult(
             task_id=task_id,

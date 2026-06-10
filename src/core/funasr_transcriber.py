@@ -316,8 +316,10 @@ class FunASRTranscriber:
                     logger.debug(f"[{task_id}] 发送进度更新: 100% (SRT格式)")
                 
                 logger.info(f"转录完成(SRT格式): 耗时{processing_time:.2f}秒")
-                
+
                 # 返回包含原始结果的字典，以便调用者可以保存缓存
+                # segments: SRT 模式也携真 segments(与 JSON 同源解析), 缓存存真 segments
+                # 才能支撑后续投影/重渲染 (T-B). SRT content 本身仍由 raw sentence_info 生成.
                 return {
                     "format": "srt",
                     "content": srt_content,
@@ -325,7 +327,8 @@ class FunASRTranscriber:
                     "file_hash": file_hash,
                     "duration": duration,
                     "processing_time": processing_time,
-                    "raw_result": result  # 保存原始结果用于缓存
+                    "raw_result": result,  # 保存原始结果用于缓存
+                    "segments": self._parse_and_merge_segments(result),
                 }
             else:
                 # JSON格式：原有逻辑，合并相同说话人的连续句子

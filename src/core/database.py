@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from pathlib import Path
 from loguru import logger
+from pydantic import ValidationError
 from src.core.config import config
 from src.models.schemas import TranscriptionResult
 
@@ -271,17 +272,21 @@ class DatabaseManager:
                     result_data = json.loads(result_json)
                     return TranscriptionResult(**result_data)
                 if output_format == "srt":
-                    if cross_hit:
-                        # 跨引擎: 从 segments 重建, 避开 raw_result 引擎特定结构
-                        result_data = json.loads(result_json)
-                        tr = TranscriptionResult(**result_data)
-                        srt_content = self._segments_to_srt(tr.segments)
-                    elif raw_result_json:
-                        # 同引擎: 走原有 raw_result 重转(funasr 的 sentence_info 路径)
+                    # SRT 重建分流按 raw 结构而非引擎名 (T-B):
+                    # - 同引擎 + raw 是 funasr 私有 sentence_info 结构 → 原 raw 重建路径
+                    # - 其余 (跨引擎 / 无 raw / qwen3 raw 无 sentence_info) → schema 中立
+                    #   segments 路径. 旧逻辑对 qwen3 行误走 raw 路径, 命中返回空 content.
+                    srt_content = None
+                    if not cross_hit and raw_result_json:
                         raw_result = json.loads(raw_result_json)
-                        srt_content = self._generate_srt_from_raw_result(raw_result)
-                    else:
-                        # 同引擎但无 raw_result(qwen3 不依赖 raw 即可重建): 也走 segments 路径
+                        raw_data = (
+                            raw_result[0]
+                            if isinstance(raw_result, list) and raw_result
+                            else raw_result
+                        )
+                        if isinstance(raw_data, dict) and "sentence_info" in raw_data:
+                            srt_content = self._generate_srt_from_raw_result(raw_result)
+                    if srt_content is None:
                         result_data = json.loads(result_json)
                         tr = TranscriptionResult(**result_data)
                         srt_content = self._segments_to_srt(tr.segments)
@@ -294,8 +299,13 @@ class DatabaseManager:
                     }
 
                 return None
-        except Exception as e:
-            logger.error(f"获取缓存结果失败: {e}")
+        except (aiosqlite.Error, json.JSONDecodeError, ValidationError) as e:
+            # 具名异常 (T-B): DB 不可用 / 坏缓存行 (非法 JSON / schema 不符) → 当 miss
+            # 处理但必须留日志; 其余异常 (编程错误) 冒泡, 禁止 catch-all 静默吞.
+            logger.error(
+                f"获取缓存结果失败, 当 cache miss 处理: "
+                f"file_hash={file_hash} engine={engine}: {type(e).__name__}: {e}"
+            )
             return None
 
     async def save_result(
