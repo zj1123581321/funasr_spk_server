@@ -1,5 +1,9 @@
 # diarize 开关 API 设计定案（双引擎）
 
+> ✅ **已落地（2026-06-10，本分支）**：落地顺序 0–6 全部按 TDD 完成（每步红→绿→commit）。
+> 代码入口见 CLAUDE.md「diarize 开关」节；客户端字段文档见 `docs/使用/客户端交互指南.md`。
+> 第 7 步（3060 RTF 重测 probe）为远端 CUDA box 验收项，待 merge 后在 3060 上执行。
+
 > 来源：`/plan-ceo-review` + `/plan-eng-review`（2026-06-10 同 session）+ 两轮 Codex 外部声音挑战。
 > 前序讨论：`2026-06-10-qwen3-diarize开关API-设计讨论-新session-prompt.md`（交接文档，其 5 个开放问题本文全部定案）。
 > CEO 层 14 决策 + 工程层 10 决策，0 个未决。**评审全部完成，可直接按「落地顺序（终版）」实现。**

@@ -18,6 +18,35 @@ from typing import Iterable, List
 from src.models.schemas import TranscriptionResult, TranscriptionSegment
 
 
+def build_result_metadata(*, engine: str, options, projected: bool = False) -> dict:
+    """E2 effective options 回显块 (serve 层组装, 不入库).
+
+    字段: engine / diarize / word_align / language / projected.
+    合并优先级 (E2 定义): request > 分片 session 回填 > config > 引擎默认 —
+    request 与 session 回填已在 TranscribeOptions 收拢 (session 值在
+    FileUploadRequest 构造时回填), 本函数只做 options 与 config / 引擎默认的合并:
+
+    - word_align: 仅 qwen3 引擎且 server config 开启时为 True (funasr 无此能力)
+    - language: request 值 strip 规范化优先; word_align 开启时空值回退
+      config.qwen3.word_align_language (与缓存折维同一规范化规则)
+    - projected: 请求级属性 — 本响应是否由 diarized 结果投影而来
+      (缓存投影回退命中 / funasr 照算出口投影)
+    """
+    from src.core.config import config
+
+    word_align = engine == "qwen3" and config.qwen3.word_align_enabled
+    language = (options.language or "").strip() or None
+    if word_align and language is None:
+        language = config.qwen3.word_align_language
+    return {
+        "engine": engine,
+        "diarize": options.diarize,
+        "word_align": word_align,
+        "language": language,
+        "projected": projected,
+    }
+
+
 def project_result_nospk(result: TranscriptionResult) -> TranscriptionResult:
     """把 diarized 结果投影成 nospk 形态 (纯函数, 不动入参, 幂等).
 

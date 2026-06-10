@@ -202,10 +202,17 @@ class WebSocketHandler:
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
-                    
+
+                    # E2: 早返回出口同样组装 effective options 回显
+                    from src.core.result_projection import build_result_metadata
+
                     # 根据输出格式准备结果
                     if output_format == "srt":
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                            _proj = bool(cached_result.pop("projected", False))
+                            cached_result["metadata"] = build_result_metadata(
+                                engine=task.engine, options=task.options, projected=_proj,
+                            )
                             result_data = cached_result
                         else:
                             # 如果缓存中没有SRT格式，跳过缓存
@@ -213,6 +220,10 @@ class WebSocketHandler:
                             result_data = None
                     else:
                         # JSON格式
+                        _proj = bool((cached_result.metadata or {}).get("projected"))
+                        cached_result.metadata = build_result_metadata(
+                            engine=task.engine, options=task.options, projected=_proj,
+                        )
                         result_data = cached_result.dict() if cached_result else None
                     
                     if result_data:
@@ -586,14 +597,26 @@ class WebSocketHandler:
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")
-                    
+
+                    # E2: 早返回出口组装 effective options 回显 (session 回填值已在
+                    # _session_options 收拢, 优先级 request > session 回填 > config)
+                    from src.core.result_projection import build_result_metadata
+
                     # 根据输出格式准备结果
                     if session["output_format"] == "srt":
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                            _proj = bool(cached_result.pop("projected", False))
+                            cached_result["metadata"] = build_result_metadata(
+                                engine=_engine_for_cache, options=_session_options, projected=_proj,
+                            )
                             result_data = cached_result
                         else:
                             result_data = None
                     else:
+                        _proj = bool((cached_result.metadata or {}).get("projected"))
+                        cached_result.metadata = build_result_metadata(
+                            engine=_engine_for_cache, options=_session_options, projected=_proj,
+                        )
                         result_data = cached_result.dict() if cached_result else None
                     
                     if result_data:

@@ -129,11 +129,13 @@ class TaskManager:
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
                 task.status = TaskStatus.COMPLETED
-                
+
+                cache_projected = False
                 if task.output_format == "srt":
                     # SRT格式缓存结果
                     if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
                         task.srt_content = cached_result["content"]
+                        cache_projected = bool(cached_result.get("projected"))
                         # 创建简化的结果对象
                         from src.models.schemas import TranscriptionResult
                         task.result = TranscriptionResult(
@@ -149,7 +151,15 @@ class TaskManager:
                 else:
                     # JSON格式缓存结果
                     task.result = cached_result
-                
+                    cache_projected = bool((cached_result.metadata or {}).get("projected"))
+
+                # E2: effective options 回显 (serve 层组装, 不随缓存存取)
+                if task.result is not None:
+                    from src.core.result_projection import build_result_metadata
+                    task.result.metadata = build_result_metadata(
+                        engine=task.engine, options=task.options, projected=cache_projected,
+                    )
+
                 task.completed_at = datetime.now()
                 
                 # 通知完成
@@ -280,6 +290,7 @@ class TaskManager:
             # 缓存写入 tag 与查询同 key (折维收拢在 database.cache_params_for, D4)
             from src.core.database import cache_params_for
             cache_engine_tag = cache_params_for(task)[0]
+            fresh_projected = False  # fresh 出口是否做了投影 (funasr 照算路径)
             if task.output_format == "srt":
                 # SRT格式结果
                 # 创建转录结果对象用于缓存
@@ -311,6 +322,7 @@ class TaskManager:
                     )
                     transcription_result = project_result_nospk(transcription_result)
                     task.srt_content = segments_to_srt_text(transcription_result.segments)
+                    fresh_projected = True
                 else:
                     task.srt_content = result["content"]
                 task.result = transcription_result
@@ -325,8 +337,15 @@ class TaskManager:
                 if not task.options.diarize and transcription_result.speakers:
                     from src.core.result_projection import project_result_nospk
                     transcription_result = project_result_nospk(transcription_result)
+                    fresh_projected = True
                 task.result = transcription_result
-            
+
+            # E2: effective options 回显 (serve 层组装, 缓存写入已在前完成不被污染)
+            from src.core.result_projection import build_result_metadata
+            task.result.metadata = build_result_metadata(
+                engine=task.engine, options=task.options, projected=fresh_projected,
+            )
+
             task.completed_at = datetime.now()
             task.progress = 100
             
@@ -349,7 +368,11 @@ class TaskManager:
                 else:
                     logger.debug(f"保留文件，还有其他任务使用: {task.file_path}")
             
-            logger.info(f"任务完成: {task_id}")
+            # 可观测性: per-task diarize 生效值 + 投影标记 (stats 三维度之一)
+            logger.info(
+                f"任务完成: {task_id} (engine={task.engine}, "
+                f"diarize={task.options.diarize}, projected={fresh_projected})"
+            )
             
         except Exception as e:
             error_msg = str(e)
@@ -429,7 +452,9 @@ class TaskManager:
                     "format": "srt",
                     "content": task.srt_content,
                     "file_name": task.file_name,
-                    "file_hash": task.file_hash
+                    "file_hash": task.file_hash,
+                    # E2: SRT 响应没有 TranscriptionResult 载体, metadata 挂 payload 顶层
+                    "metadata": task.result.metadata if task.result else None,
                 }
             else:
                 result_data = task.result.dict() if task.result else None

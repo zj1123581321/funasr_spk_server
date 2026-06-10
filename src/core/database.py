@@ -118,6 +118,8 @@ class DatabaseManager:
                      传入路径用于测试隔离或多实例场景。
         """
         self.db_path = db_path if db_path is not None else config.database.path
+        # 可观测性 (stats 三维度之一): 投影 serve 命中计数 (进程内, 不持久化)
+        self.projected_serves = 0
         self._ensure_db_dir()
 
     def _ensure_db_dir(self):
@@ -342,6 +344,8 @@ class DatabaseManager:
                         was_projected = bool(result.speakers)
                         result = project_result_nospk(result)
                         result.metadata = {"projected": was_projected}
+                        if was_projected:
+                            self.projected_serves += 1
                     return result
                 if output_format == "srt":
                     if nospk:
@@ -351,6 +355,8 @@ class DatabaseManager:
                         tr = TranscriptionResult(**result_data)
                         was_projected = bool(tr.speakers)
                         tr = project_result_nospk(tr)
+                        if was_projected:
+                            self.projected_serves += 1
                         return {
                             "format": "srt",
                             "content": self._segments_to_srt(tr.segments),
@@ -481,10 +487,16 @@ class DatabaseManager:
                     "total_count": total_count,
                     "today_count": today_count,
                     "cache_size_mb": round(cache_size / 1024 / 1024, 2),
+                    "projected_serves": self.projected_serves,
                 }
         except Exception as e:
             logger.error(f"获取缓存统计信息失败: {e}")
-            return {"total_count": 0, "today_count": 0, "cache_size_mb": 0}
+            return {
+                "total_count": 0,
+                "today_count": 0,
+                "cache_size_mb": 0,
+                "projected_serves": self.projected_serves,
+            }
 
     def _segments_to_srt(self, segments) -> str:
         """从 TranscriptionResult.segments 重建 SRT 字符串(引擎中立).

@@ -41,7 +41,7 @@ Always respond in 中文
 - **Qwen3**: `src/core/qwen3_pool_transcriber.py`（**runtime-aware 池 dispatch**, 见下文）+ `src/core/qwen3_transcriber.py`（单例）+ `src/core/qwen3/asr.py`（引擎构造）。Mac 上 frontend ONNX 走 CoreML ANE（`onnx_provider="COREML_ANE_FE"`），见 `spikes/qwen3_mac_hw_accel/SUMMARY.md`
 - **Dispatch**: `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 按 engine 名分支
 - **引擎选择优先级**: `upload_request.engine` > `config.transcription.default_engine`（env `FUNASR_DEFAULT_ENGINE`）> `funasr`
-- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，跨引擎不命中
+- **缓存隔离**: 缓存 key 按 `(file_hash, engine)` 区分，跨引擎不命中；engine 维折 word_align / diarize 状态（`qwen3+wa:<lang>+nospk` 形态，见「diarize 开关」节），折维参数统一走 `database.cache_params_for(task)`
 
 ## Runtime + Diarize backend 抽象
 
@@ -76,7 +76,7 @@ Qwen3 diarize 有 **两个 backend 实现**，通过 `src/core/qwen3/diarize.py:
 
 ## Qwen3 后处理 pipeline
 
-`Qwen3DiarizeTranscriber.transcribe` 在 ASR + diarize 后串联多层后处理（顺序固定，第 1–5 + 5.5 层各有 config flag + env override 可关，第 6 层是无条件的输出层规范化）：
+`Qwen3DiarizeTranscriber.transcribe` 在 ASR + diarize 后串联多层后处理（顺序固定，第 1–5 + 5.5 + 5.7 层各有 config flag + env override 可关，第 6 层是无条件的输出层规范化）。**per-request `options.diarize=False` 时走精简管线**（见下文「diarize 开关」节）：
 
 1. **`filter_spurious_speakers`** — 丢掉总时长太小的"假说话人"，把碎片归到时间最近的有效 speaker
 2. **`apply_cluster_centroid_merge`**（PR3，`cluster_merge_enabled`）— 多人场景把过聚的 cluster 合并；用 sherpa embedding extractor 算 centroid。dominant share ≥ 0.6 时还会用更宽松的 `cluster_merge_dominant_minor_threshold`（默认 0.5）把跟 dominant 接近的 minor cluster 也合到 dominant（兜底拦截解码器漂移引入的中长噪声 cluster，见 `docs/开发/archive/spk-over-detect-归因调研结果.md`）
@@ -84,9 +84,24 @@ Qwen3 diarize 有 **两个 backend 实现**，通过 `src/core/qwen3/diarize.py:
 4. **`apply_short_segment_guard`**（PR4，`short_segment_guard_enabled`）— drop 微短段 / ABA 抖动平滑 / 合并连续同 speaker
 5. **`apply_silence_align_to_segments`**（spike 405abf6，`silence_align_enabled`）— ffmpeg silencedetect + snap-to-silence 把段切点吸附到最近静音中点，60s podcast +19pp / 60min long +33pp 对齐率，RTF 影响 <1%，见 `spikes/qwen3_silence_align/SUMMARY.md`
 5.5. **word_align 词级时间戳**（`word_align_enabled`，**字段默认关；`cuda_prod`/`cuda_dev` profile 默认开**，Mac profile 保持关）— MMS-300M CTC-FA（`src/core/qwen3/word_align.py`，deskpai `ctc-forced-aligner` ONNX）按 ASR chunk 逐窗口对齐，把每个词的绝对秒时间**增量挂进** `segment.words`（`attach_words_to_segments` 最大时间重叠归段），**不替换段边界**。挂在 silence_align 之后、relabel 之前（干净段上挂词）。**JSON-only**（SRT 不带词，跳过省 RTF）。语言来源：per-request `language` 字段（ISO 码 chi/eng/jpn/kor…）> config `word_align_language` 兜底。**逐 window fallback**：某 chunk 对齐失败→该段 words=None，段照常出，stats 记失败数。provider="auto"→runtime 选（Mac/Cpu→CPU EP，Cuda→CUDA EP）。开启会加载 ~1.2GB MMS ONNX + 改 cache key（`compute_cache_engine`→`qwen3+wa:<lang>`）。RTF 代价：Mac CPU +0.166（+17%），RTX 3060 CUDA 仅 +0.011（~1%，3060 实测）——故 CUDA profile 默认开、Mac 不开。模型预下到 `word_align_model_path`（`scripts/download_qwen3_models.sh --word-align`，从 `~/ctc_forced_aligner/model.onnx` 拷或 HF 直下）。WordAligner per-worker 单例复用 ONNX session。见 `spikes/qwen3_word_timestamp/SUMMARY.md`
-6. **`relabel_segments_by_duration_desc`**（commit ceb9fa1，**无 config flag，无条件执行**）— 输出层 Speaker ID 稳定化：把内部 raw cluster int 按 speaker 总时长降序重映射成 0/1/2/…，让下游 `f"Speaker{i+1}"` 渲染出的 **Speaker1 始终是说话最多的主说话人**；底层 raw cluster int 由算法决定（ort_cuda / sherpa 互不兼容、跨平台不一致），不重映射会让客户端看到 "Speaker7" / "Speaker55" 这种漂移编号。平局按原 int 升序 tie-break 保证 deterministic。实现见 `src/core/qwen3/merge.py:relabel_segments_by_duration_desc`
+5.7. **nospk 分层切段**（`nospk_split_enabled`，**仅 diarize=False 分支执行**）— `src/core/qwen3/segment_split.py:split_long_segments`：diarize=false 没有 turn 边界、段 = ASR ~40s chunk，对超过 `nospk_split_max_segment_sec`（默认 12s）的段做两层 fallback 切分：有 `segment.words`（word_align 挂的）→ 词隙中点精确切；无 words → 静音中点切（**SRT 路径因 word_align JSON-only 永远走静音 fallback**，设计内不变量 T-D #5）；无候选硬切目标等分点保 max 上界。文本归属沿用现役 char-ratio 机制（标点优先）逐字无损，`nospk_split_min_segment_sec`（默认 1.5s）兜底最小片时长（吸收 short_segment_guard 的通用清理职责）。transcriber 薄 wrapper `apply_nospk_split_to_segments` 照 silence_align 形状（关/空/异常→fallback to input），挂 word_align 之后
+6. **`relabel_segments_by_duration_desc`**（commit ceb9fa1，**无 config flag**；diarize=True 无条件执行，diarize=False 分支跳过）— 输出层 Speaker ID 稳定化：把内部 raw cluster int 按 speaker 总时长降序重映射成 0/1/2/…，让下游 `f"Speaker{i+1}"` 渲染出的 **Speaker1 始终是说话最多的主说话人**；底层 raw cluster int 由算法决定（ort_cuda / sherpa 互不兼容、跨平台不一致），不重映射会让客户端看到 "Speaker7" / "Speaker55" 这种漂移编号。平局按原 int 升序 tie-break 保证 deterministic。实现见 `src/core/qwen3/merge.py:relabel_segments_by_duration_desc`
 
 加新后处理层：照 `apply_silence_align_to_segments` 的 helper 形状（`(enabled / 空 / 异常)→fallback to input`），挂到 transcribe 流程内同时给 stats 日志，配 5 个 config 字段就行。
+
+## diarize 开关（2026-06-10 落地，定案: `docs/开发/2026-06-10-diarize开关API-设计定案.md`）
+
+**API 语义引擎无关，实现策略引擎相关**：`FileUploadRequest.diarize: bool = True`，`diarize=false` ⇒ 响应不含说话人区分（JSON `speaker=null` + `speakers=[]`，SRT 无 `SpeakerN:` 前缀），默认 true 完全向后兼容。
+
+- **options 穿透（E3/D1）**：`language` + `diarize` 收进 `TranscribeOptions`（`src/models/schemas.py`），`TranscriptionTask.options` 嵌套（平铺 language 已删）。整体穿透 schema → handler（含分片 session 回填）→ task_manager → 两套 pool → worker → `transcribe(options=...)`。file-based pool 用 `model_dump()` 写 .task JSON，worker 解析回 TranscribeOptions（老任务文件平铺 language 兜底）。**funasr 任务文件不写 options**（协议钉测试）。
+- **qwen3 = 真跳层（D2/D5）**：跳 diarize + filter_spurious / cluster_merge / short_guard / relabel，段来自 ASR ~40s chunk，超长段走 nospk 分层切段（pipeline 5.7 层）。**内部 `Segment(speaker:int)` 永不为 None**，null 只在出口转换层出现。
+- **funasr = 出口投影（D4）**：cam++ 提取无 per-call 开关，照算后由 serve 层投影抹 speaker；**缓存免折维**——存一行 diarized，serve 时按需投影，一行通吃两种请求。
+- **缓存折维（D9）**：`compute_cache_engine` 字符串折维，顺序固定缺省不写：`qwen3` / `qwen3+wa:<lang>` / `qwen3+nospk` / `qwen3+wa:<lang>+nospk`（2 维 4 形态；**维度 >3 升级结构化 variant**）。折维 tag 一律禁 cross-engine。折维参数收拢在 `database.cache_params_for(task)` / `cache_params(engine, options)`，**不要手写**。
+- **投影双出口（D3+T-A）**：纯函数 `src/core/result_projection.py`（`project_result_nospk` + `segments_to_srt_text` 引擎中立 SRT 渲染点 + `build_result_metadata`），引擎代码零改动。出口 1 = `db_manager.get_cached_result`（exact `+nospk` miss → 同引擎同 wa-tag diarized 行现场投影，标 `projected:true`，**不回写**——缓存永远只存真算结果；SRT nospk 旁路 funasr raw 路径从投影 segments 重渲染）；出口 2 = task_manager fresh 结果（缓存先存引擎真算结果再投影）。坏行具名异常当 miss + warn，禁 catch-all。
+- **metadata 回显（E2）**：`TranscriptionResult.metadata = {engine, diarize, word_align, language, projected}`，serve 层组装（fresh 出口 + 3 个缓存命中出口），**save_result exclude 不入库**（projected 是请求级属性）。合并优先级：request > 分片 session 回填 > config > 引擎默认。
+- **可观测性**：per-task 日志带 diarize 生效值；`db_manager.projected_serves` 计数进 `get_cache_stats()`；切段 stats 进 raw_result.nospk_split + 日志。
+- **部署顺序**：老 server Pydantic 忽略未知 diarize 字段 → **server 先升级、客户端后启用**（部署假设有单测钉死）。
+- **NOT in scope**：mode 三档枚举 / num_speakers per-request（TODOS #15，diarize=false 时闲置打 info 日志）/ funasr 启动不加载 cam++（TODOS #16）/ 词级替换式 merge（TODOS #14）。
 
 ### ⚠️ Qwen3 worker audio 转换的边界
 
