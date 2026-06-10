@@ -29,20 +29,33 @@ def compute_cache_engine(
     word_align_enabled: bool,
     language: Optional[str],
     word_align_language: str,
+    diarize: bool = True,
 ) -> str:
-    """把 word_align 状态折进缓存用的 engine tag.
+    """把 word_align / diarize 状态折进缓存用的 engine tag (D9 字符串折维).
 
-    word_align 给 segment 加 words 是契约变化: 开启的结果跟未开启的不能互相命中,
-    不同语言的词时间戳也不同. 所以缓存 key (file_hash, engine) 的 engine 维加 word_align 状态.
+    word_align 给 segment 加 words、diarize=false 抹 speaker, 都是契约变化:
+    不同形态的结果不能互相命中. 所以缓存 key (file_hash, engine) 的 engine 维
+    按固定顺序折状态 (缺省不写):
 
-    - qwen3 + word_align 开 → "qwen3+wa:<lang>" (lang = per-request language or config 兜底)
-    - qwen3 + word_align 关 → "qwen3" (老 key 不变, 向后兼容)
-    - 非 qwen3 → 原样 (FunASR 无 word_align)
+    - qwen3                  (word_align 关 + diarize 开, 老 key 不变)
+    - qwen3+wa:<lang>        (word_align 开; lang = per-request language strip 后
+                              非空则用之, 否则 config word_align_language 兜底)
+    - qwen3+nospk            (diarize 关)
+    - qwen3+wa:<lang>+nospk  (两者叠加, 顺序固定 +wa 在前)
+    - 非 qwen3 → 原样 (funasr 免折维, D4: 存一行 diarized, serve 层按需投影)
+
+    ⚠️ 触发条件写死: 折维维度 >3 时升级结构化 variant 列, 不再加字符串后缀.
     """
-    if engine == "qwen3" and word_align_enabled:
-        lang = language or word_align_language
-        return f"{engine}+wa:{lang}"
-    return engine
+    if engine != "qwen3":
+        return engine
+    tag = engine
+    if word_align_enabled:
+        # language 规范化 (T-D #8): strip() 后非空才生效, 否则 config 兜底
+        lang = (language or "").strip() or word_align_language
+        tag += f"+wa:{lang}"
+    if not diarize:
+        tag += "+nospk"
+    return tag
 
 
 def cache_lookup_params(
@@ -51,20 +64,47 @@ def cache_lookup_params(
     word_align_enabled: bool,
     language: Optional[str],
     word_align_language: str,
+    diarize: bool = True,
 ):
     """返回 (cache_engine, allow_cross_engine) 给 get_cached_result.
 
-    带 wa tag 时强制 strict (allow_cross_engine=False): 否则跨引擎按 file_hash 回退
-    可能命中无词的 plain "qwen3" 行, 把 word_align 请求降级成无词结果.
+    带折维 tag (+wa / +nospk) 时强制 strict (allow_cross_engine=False): 否则
+    跨引擎按 file_hash 回退可能命中形态不符的行 (无词 / 带 speaker), 把请求
+    降级成错误形态结果 (T-D #7).
     """
     cache_engine = compute_cache_engine(
         engine,
         word_align_enabled=word_align_enabled,
         language=language,
         word_align_language=word_align_language,
+        diarize=diarize,
     )
     allow_cross = False if cache_engine != engine else None
     return cache_engine, allow_cross
+
+
+def cache_params(engine: str, options) -> tuple:
+    """(cache_engine_tag, allow_cross_engine) — 查询与写入共用的统一入口 (D4 收拢).
+
+    word_align 状态从全局 config 读 (server 级开关), language / diarize 从
+    per-request options 读. 写入只用第一个元素 (tag), 查询两个都用.
+
+    Args:
+        engine: ASR 引擎名 (task.engine 或 session 回退 default_engine 后的值).
+        options: TranscribeOptions (language / diarize).
+    """
+    return cache_lookup_params(
+        engine,
+        word_align_enabled=config.qwen3.word_align_enabled,
+        language=options.language,
+        word_align_language=config.qwen3.word_align_language,
+        diarize=options.diarize,
+    )
+
+
+def cache_params_for(task) -> tuple:
+    """cache_params 的 TranscriptionTask 便捷入口 — 消灭各处手写折维参数."""
+    return cache_params(task.engine, task.options)
 
 
 class DatabaseManager:

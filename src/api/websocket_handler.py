@@ -192,16 +192,10 @@ class WebSocketHandler:
             self.task_connections[task.task_id].add(connection_id)
             
             # 检查缓存（如果不强制刷新）
-            # PR1: cache key 含 engine；词级时间戳: word_align 状态折进 engine tag
+            # cache key 含 engine; word_align / diarize 折维收拢在 cache_params_for (D4)
             if not request.force_refresh:
-                from src.core.database import db_manager, cache_lookup_params
-                from src.core.config import config as _cfg
-                _ce, _allow = cache_lookup_params(
-                    task.engine,
-                    word_align_enabled=_cfg.qwen3.word_align_enabled,
-                    language=task.options.language,
-                    word_align_language=_cfg.qwen3.word_align_language,
-                )
+                from src.core.database import db_manager, cache_params_for
+                _ce, _allow = cache_params_for(task)
                 cached_result = await db_manager.get_cached_result(
                     request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow
                 )
@@ -573,16 +567,19 @@ class WebSocketHandler:
                 return
             
             # 检查缓存（如果不强制刷新）
-            # PR1: cache key 含 engine（session 中已记录，无则回退 default_engine）
+            # cache key 含 engine（session 中已记录，无则回退 default_engine）;
+            # word_align / diarize 折维收拢在 cache_params (D4, 此处无 task 对象走低层入口)
             if not session["force_refresh"]:
-                from src.core.database import db_manager, cache_lookup_params
+                from src.core.database import db_manager, cache_params
                 from src.core.config import config as _config
+                from src.models.schemas import TranscribeOptions
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
-                _ce, _allow = cache_lookup_params(
+                _ce, _allow = cache_params(
                     _engine_for_cache,
-                    word_align_enabled=_config.qwen3.word_align_enabled,
-                    language=session.get("language"),
-                    word_align_language=_config.qwen3.word_align_language,
+                    TranscribeOptions(
+                        language=session.get("language"),
+                        diarize=session.get("diarize", True),
+                    ),
                 )
                 cached_result = await db_manager.get_cached_result(
                     session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow
