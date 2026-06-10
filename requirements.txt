@@ -38,6 +38,14 @@ srt==3.5.3
 # - ctc-forced-aligner: deskpai ONNX fork, 多语种 CTC 强制对齐 (走 onnxruntime)
 # - unidecode: ctc-forced-aligner 罗马化 (get_uroman_tokens) 依赖
 # 模型 ONNX (~1.2GB) 由 scripts/download_qwen3_models.sh 预下, 不进 pip
+#
+# ⚠️ CUDA 部署陷阱: ctc-forced-aligner 依赖声明的是 CPU 版 `onnxruntime`, pip install
+#    会把它装上并**覆盖** `onnxruntime-gpu` 的 onnxruntime/capi/*.so → CUDAExecutionProvider
+#    消失 (ORT 退回 CPU). CUDA 机器装完本 requirements 后必须修复:
+#       pip uninstall -y onnxruntime
+#       pip install --force-reinstall --no-deps onnxruntime-gpu==<原版本>
+#    (onnxruntime-gpu 提供同名 `import onnxruntime`, API 兼容, ctc 仍能跑.)
+#    Mac/CPU 部署无此问题 (本就用 CPU onnxruntime). 见 docs 部署 + 3060 probe 记录.
 ctc-forced-aligner==1.0.2
 unidecode==1.4.0
 

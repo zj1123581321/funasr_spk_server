@@ -5,6 +5,21 @@
 
 > **✅ 已落地生产实现(2026-06-09)**:选型 MMS-300M CTC-FA,增量挂 `segment.words`(`word_align_enabled` 默认关 opt-in)。实现见 `src/core/qwen3/word_align.py` + `CLAUDE.md`「Qwen3 后处理 pipeline」5.5 层;落地清单见 PoC 计划文档顶部「已落地实现」。集成测试 `tests/integration/test_qwen3_word_align_e2e.py` 真 MMS 跑通(podcast 60s 出词、词时间落段窗内、覆盖率≥0.5)。
 
+## 3060 CUDA 实测(2026-06-10,probe `scripts/_remote_word_align_rtf_probe.py`)
+
+RTX 3060 上 word_align 走 `CUDAExecutionProvider`,podcast 60s 端到端(ASR cuda + diarize ort_cuda + MMS cuda):
+
+| | RTF | 备注 |
+|---|---|---|
+| OFF(纯 ASR+diarize) | **0.0461** | |
+| ON(加词级时间戳) | **0.0570** | |
+| **增量 Δ** | **+0.0109(~1.1%)** | 对比 Mac CPU 的 +0.166,快一个数量级 |
+
+- 出词 368(挂段 349),`failed_windows=0`;MMS ONNX session 首次 build ~2.3s(一次性),稳态每次 +0.65s wall(60s 音频)。
+- **✅ 共存安全**:MMS CUDA + llama.cpp CUDA(Qwen3 ASR)+ ORT CUDA diarize 三者进程内共存,跑完未 segfault(验证了 sherpa CUDA build 曾撞 llama.cpp 的同类风险在 ORT Python API 路径下不复现)。
+- **⚠️ 部署陷阱**:装 `ctc-forced-aligner` 会拉 CPU `onnxruntime` 覆盖 `onnxruntime-gpu` 的 capi → CUDA provider 消失;CUDA 机器装后须 `pip uninstall onnxruntime + force-reinstall --no-deps onnxruntime-gpu`(见 requirements.txt 注释)。
+- 结论:**CUDA 上词级时间戳几乎免费,可放心常开;Mac CPU 上 +17% 需权衡。** diarize 开关议题可塌缩成纯布尔(时间戳恒有基线)。
+
 ## PoC-B — FunASR fa-zh 轻量 forced aligner ✅(2026-06-09)
 
 脚本:`scripts/poc_b_fa_zh.py`(ASR 全文当参考,fa-zh 吃 `(audio, text)` → 字级时间戳)。
