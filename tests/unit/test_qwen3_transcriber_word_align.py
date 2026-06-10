@@ -101,7 +101,11 @@ async def test_word_align_on_attaches_words(tmp_path):
         for p in _COMMON_PATCHES():
             st.enter_context(p)
         st.enter_context(patch.object(tx, "_ensure_word_aligner", return_value=fake_aligner))
-        result, raw = await tx.transcribe(str(audio), "t", output_format="json", language="chi")
+        from src.models.schemas import TranscribeOptions
+        result, raw = await tx.transcribe(
+            str(audio), "t", output_format="json",
+            options=TranscribeOptions(language="chi"),
+        )
 
     # 词被挂到对应时间窗的段
     all_words = [w for s in result.segments if s.words for w in s.words]

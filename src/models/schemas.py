@@ -68,6 +68,9 @@ class TranscribeOptions(BaseModel):
     worker 端读 dict 并对缺失字段用本模型默认值兜底（老任务文件兼容）.
     """
     language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+    # diarize 开关（设计定案 D2）: 对外契约是 diarize=false ⇒ 响应不含说话人区分;
+    # 各引擎自行决定达成方式（qwen3 真跳过 diarize+speaker 后处理省算力, funasr 出口投影）
+    diarize: bool = Field(default=True, description="是否输出说话人区分；False 时 segments.speaker=null、SRT 无 SpeakerN: 前缀")
 
     model_config = {"protected_namespaces": ()}
 
@@ -132,6 +135,9 @@ class FileUploadRequest(BaseModel):
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     engine: Optional[str] = Field(default=None, description="ASR 引擎名（None 表示走 config.transcription.default_engine）")
     language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+    # diarize=false ⇒ 响应不含说话人区分（JSON speaker=null + SRT 无前缀, D8）.
+    # 默认 true 完全向后兼容; 老 server Pydantic 忽略未知字段（部署顺序: server 先升级）.
+    diarize: bool = Field(default=True, description="是否输出说话人区分（默认 True 向后兼容）")
 
     model_config = {"protected_namespaces": ()}
 

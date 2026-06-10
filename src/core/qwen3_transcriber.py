@@ -39,7 +39,12 @@ from src.core.qwen3.merge import (
     snap_segments_to_silence,
 )
 from src.core.qwen3.postprocess import apply_short_segment_guard
-from src.models.schemas import TranscriptionResult, TranscriptionSegment, WordTimestamp
+from src.models.schemas import (
+    TranscribeOptions,
+    TranscriptionResult,
+    TranscriptionSegment,
+    WordTimestamp,
+)
 from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
 
@@ -408,13 +413,17 @@ class Qwen3DiarizeTranscriber:
         task_id: str,
         progress_callback: Optional[Callable] = None,
         output_format: str = "json",
-        language: Optional[str] = None,
+        options: Optional["TranscribeOptions"] = None,
     ) -> Union[Tuple[TranscriptionResult, dict], dict]:
         """跑一遍 ASR + Diarize + Merge, 返回 (TranscriptionResult, raw_result) 或 SRT dict
 
-        language: per-request 识别语言 ISO 码 (chi/eng/jpn/kor…), 驱动 word_align
-        词级时间戳语言; None 时走 self.word_align_language 兜底 (见 transcribe 内 word_align 层).
+        options: per-request 转录选项 (E3 收拢):
+        - language: 识别语言 ISO 码 (chi/eng/jpn/kor…), 驱动 word_align 词级时间戳
+          语言; None 时走 self.word_align_language 兜底 (见 transcribe 内 word_align 层).
+        - diarize: False 时跳过 diarize + speaker 后处理层, 输出不含说话人区分.
         """
+        options = options or TranscribeOptions()
+        language = options.language
         start_time = time.time()
         loop = asyncio.get_event_loop()
 

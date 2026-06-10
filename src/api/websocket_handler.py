@@ -460,6 +460,8 @@ class WebSocketHandler:
                 "engine": data.get("engine"),
                 # 词级时间戳: 记录 per-request 语言，最终化时回填
                 "language": data.get("language"),
+                # diarize 开关: 记录 per-request 值，最终化时回填（缺省 True 向后兼容）
+                "diarize": data.get("diarize", True),
             }
             
             self.upload_sessions[task_id] = session
@@ -628,6 +630,7 @@ class WebSocketHandler:
                 output_format=session["output_format"],
                 engine=session.get("engine"),
                 language=session.get("language"),
+                diarize=session.get("diarize", True),
             )
             
             # 创建任务

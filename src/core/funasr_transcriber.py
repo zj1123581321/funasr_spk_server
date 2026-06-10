@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from loguru import logger
 from funasr import AutoModel
-from src.models.schemas import TranscriptionSegment, TranscriptionResult
+from src.models.schemas import TranscribeOptions, TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
 from src.core.device_manager import DeviceManager
 from src.core.config import config as global_config
@@ -135,12 +135,14 @@ class FunASRTranscriber:
         progress_callback: Optional[callable] = None,
         enable_speaker: bool = True,
         output_format: str = "json",
-        language: Optional[str] = None,
+        options: Optional["TranscribeOptions"] = None,
     ) -> Union[TranscriptionResult, str, Dict[str, Any]]:
         """转录音频文件 - 使用与测试脚本相同的方法
 
-        language: per-request 识别语言 ISO 码。FunASR 引擎不消费此参数（仅为
-        与 Qwen3 transcribe 签名对齐，由 task_manager 统一透传），接受后忽略。
+        options: per-request 转录选项（仅为与 Qwen3 transcribe 签名对齐，由
+        task_manager 统一透传）。FunASR 引擎不消费 language；diarize=False 的
+        语义由 serve 层出口投影实现（D4: cam++ 提取无 per-call 开关，照算后
+        投影抹 speaker），引擎内接受后忽略，options 不进 funasr 任务文件。
         """
         if not self.is_initialized:
             await self.initialize()

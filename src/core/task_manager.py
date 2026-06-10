@@ -93,7 +93,7 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
-            options=TranscribeOptions(language=request.language),
+            options=TranscribeOptions(language=request.language, diarize=request.diarize),
         )
 
         # 保存任务
@@ -293,7 +293,7 @@ class TaskManager:
                 task_id=task_id,
                 progress_callback=progress_callback,
                 output_format=task.output_format,
-                language=task.options.language,
+                options=task.options,
             )
             
             # 更新任务结果

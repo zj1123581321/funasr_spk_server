@@ -71,7 +71,15 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
     task_id = task["task_id"]
     audio_path = task["audio_path"]
     output_format = task.get("output_format", "json")
-    language = task.get("language")
+    # per-request 选项: 新协议是嵌套 options dict (pool 端 model_dump 序列化);
+    # 老任务文件 (无 options, 平铺 language) 兜底构造, diarize 走默认 True.
+    from src.models.schemas import TranscribeOptions
+
+    options_dict = task.get("options")
+    if options_dict is None:
+        options = TranscribeOptions(language=task.get("language"))
+    else:
+        options = TranscribeOptions(**options_dict)
 
     result_file = task_file.replace(".task", ".pkl")
     original_audio_path = task.get("source_audio_path", audio_path)
@@ -107,7 +115,7 @@ def process_task(worker_id: int, transcriber, task_file: str, task_dir: str) -> 
                 task_id=task_id,
                 progress_callback=None,
                 output_format=output_format,
-                language=language,
+                options=options,
             )
         )
 

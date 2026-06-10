@@ -26,7 +26,7 @@ def _make_fake_transcriber_capturing(captured_path: dict):
     """fake transcriber, 把 transcribe 实际拿到的 audio_path 记录到 captured_path['actual']"""
     fake = MagicMock()
 
-    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
+    async def fake_transcribe(audio_path, task_id, progress_callback=None, output_format="json", options=None):
         captured_path["actual"] = audio_path
         from src.models.schemas import TranscriptionResult, TranscriptionSegment
         return (

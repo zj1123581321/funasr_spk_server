@@ -81,7 +81,9 @@ async def test_chunked_session_captures_language(fake_ws):
 
 @pytest.mark.asyncio
 async def test_inproc_pool_forwards_language():
+    # 1b 后 language 收进 TranscribeOptions 整体穿透 pool
     from src.core.qwen3_inproc_pool import Qwen3InProcPool
+    from src.models.schemas import TranscribeOptions
 
     inner = MagicMock()
     inner.initialize = AsyncMock(return_value=None)
@@ -90,7 +92,7 @@ async def test_inproc_pool_forwards_language():
     await pool.initialize()
     await pool.transcribe(
         audio_path="a.wav", task_id="t", progress_callback=None,
-        output_format="json", language="eng",
+        output_format="json", options=TranscribeOptions(language="eng"),
     )
     _, kwargs = inner.transcribe.call_args
-    assert kwargs.get("language") == "eng"
+    assert kwargs.get("options").language == "eng"

@@ -50,7 +50,7 @@ def _make_tx_mock(tx_id: int = 0, sleep_sec: float = 0.0) -> MagicMock:
     tx.tx_id = tx_id
     tx.initialize = AsyncMock(return_value=None)
 
-    async def _transcribe(audio_path, task_id, progress_callback=None, output_format="json", language=None):
+    async def _transcribe(audio_path, task_id, progress_callback=None, output_format="json", options=None):
         if sleep_sec > 0:
             await asyncio.sleep(sleep_sec)
         return _fake_json_result(task_id)

@@ -23,6 +23,7 @@ from loguru import logger
 
 from src.core.file_based_process_pool import FileBasedProcessPool
 from src.core.runtime import detect_runtime
+from src.models.schemas import TranscribeOptions
 
 
 class Qwen3PoolTranscriber:
@@ -64,9 +65,12 @@ class Qwen3PoolTranscriber:
         task_id: str,
         progress_callback: Optional[Callable] = None,
         output_format: str = "json",
-        language: Optional[str] = None,
+        options: Optional[TranscribeOptions] = None,
     ) -> Any:
         """通过 pool 派发任务给 worker subprocess.
+
+        options 用 model_dump() 序列化进 .task JSON (跨进程边界), worker 端
+        qwen3_worker_process 解析回 TranscribeOptions (缺省兜底).
 
         进度通知:
         - 0% 起始 / 100% 完成
@@ -86,7 +90,10 @@ class Qwen3PoolTranscriber:
         try:
             result = await self._pool.generate_with_pool(
                 audio_path=audio_path,
-                extra_task_fields={"output_format": output_format, "language": language},
+                extra_task_fields={
+                    "output_format": output_format,
+                    "options": (options or TranscribeOptions()).model_dump(),
+                },
             )
         except Exception:
             raise
