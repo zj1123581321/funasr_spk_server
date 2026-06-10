@@ -9,7 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from src.core.config import config
 from src.core.database import db_manager
-from src.models.schemas import TranscriptionTask, TaskStatus, FileUploadRequest, TranscriptionResult
+from src.models.schemas import (
+    FileUploadRequest,
+    TaskStatus,
+    TranscribeOptions,
+    TranscriptionResult,
+    TranscriptionTask,
+)
 
 
 class TaskManager:
@@ -87,7 +93,7 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
-            language=request.language,
+            options=TranscribeOptions(language=request.language),
         )
 
         # 保存任务
@@ -105,7 +111,7 @@ class TaskManager:
         return cache_lookup_params(
             task.engine,
             word_align_enabled=config.qwen3.word_align_enabled,
-            language=task.language,
+            language=task.options.language,
             word_align_language=config.qwen3.word_align_language,
         )
 
@@ -117,7 +123,7 @@ class TaskManager:
         return compute_cache_engine(
             task.engine,
             word_align_enabled=config.qwen3.word_align_enabled,
-            language=task.language,
+            language=task.options.language,
             word_align_language=config.qwen3.word_align_language,
         )
 
@@ -287,7 +293,7 @@ class TaskManager:
                 task_id=task_id,
                 progress_callback=progress_callback,
                 output_format=task.output_format,
-                language=task.language,
+                language=task.options.language,
             )
             
             # 更新任务结果

@@ -28,10 +28,11 @@ def test_file_upload_request_language_set():
 
 
 def test_transcription_task_language_default_none():
+    # 1a 重构后 language 收进嵌套 options (平铺字段已删, 见 test_transcribe_options.py)
     task = TranscriptionTask(
         task_id="t", file_name="a.wav", file_path="", file_size=1, file_hash="h"
     )
-    assert task.language is None
+    assert task.options.language is None
 
 
 # ==================== task_manager.create_task ====================
@@ -46,7 +47,7 @@ async def test_create_task_propagates_language():
         file_name="a.wav", file_size=1, file_hash="h", language="jpn"
     )
     task = await tm.create_task(req, task_id="t1")
-    assert task.language == "jpn"
+    assert task.options.language == "jpn"
 
 
 # ==================== websocket chunked session ====================

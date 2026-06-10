@@ -57,6 +57,21 @@ class TranscriptionResult(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class TranscribeOptions(BaseModel):
+    """per-request 转录选项（E3 收拢）
+
+    language（后续 diarize）收进一个结构, 整体穿透:
+    schema → websocket_handler（含分片 session 回填）→ task_manager → 两套 pool
+    → worker → transcribe.
+
+    跨 file-based pool 进程边界时用 model_dump() 序列化成 dict 写任务文件,
+    worker 端读 dict 并对缺失字段用本模型默认值兜底（老任务文件兼容）.
+    """
+    language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+
+    model_config = {"protected_namespaces": ()}
+
+
 class TranscriptionTask(BaseModel):
     """转录任务"""
     task_id: str = Field(..., description="任务ID")
@@ -76,7 +91,8 @@ class TranscriptionTask(BaseModel):
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     srt_content: Optional[str] = Field(None, description="SRT格式内容")
     engine: str = Field(default="funasr", description="ASR 引擎名（由 task_manager 根据 request.engine 或 default_engine 解析后填入）")
-    language: Optional[str] = Field(default=None, description="per-request 识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+    # per-request 选项嵌套结构（D1）: 平铺 language 已删, options 是唯一 source of truth
+    options: TranscribeOptions = Field(default_factory=TranscribeOptions, description="per-request 转录选项（language 等），整体穿透到 transcribe")
 
     model_config = {"protected_namespaces": ()}
 

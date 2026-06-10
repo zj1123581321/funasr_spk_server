@@ -199,7 +199,7 @@ class WebSocketHandler:
                 _ce, _allow = cache_lookup_params(
                     task.engine,
                     word_align_enabled=_cfg.qwen3.word_align_enabled,
-                    language=task.language,
+                    language=task.options.language,
                     word_align_language=_cfg.qwen3.word_align_language,
                 )
                 cached_result = await db_manager.get_cached_result(
