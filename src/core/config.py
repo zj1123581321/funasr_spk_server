@@ -162,6 +162,15 @@ class Qwen3Config(BaseModel):
     silence_vad_noise_db: str = "-25dB"
     silence_vad_min_silence_sec: float = 0.20
 
+    # nospk 分层切段 (diarize 开关 D5+T1): diarize=false 时段 = ASR ~40s chunk,
+    # 对超长段做两层 fallback 切分 (有 words 词隙切 / 无 words 静音切 + char-ratio
+    # 文本归属), 见 src/core/qwen3/segment_split.py.
+    #   - max_segment_sec: 超过此值触发切分 (也是切出片的近似上界, 字幕可用粒度)
+    #   - min_segment_sec: 切出片的最小时长 (吸收 short_segment_guard 的通用清理职责)
+    nospk_split_enabled: bool = True
+    nospk_split_max_segment_sec: float = 12.0
+    nospk_split_min_segment_sec: float = 1.5
+
     # 词级时间戳 (word_align, MMS-300M CTC-FA): 增量挂 segment.words, 不替换段边界.
     # 见 docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
     #   - word_align_enabled: 字段默认关; cuda_prod/cuda_dev profile 默认开 (CUDA 仅 +1% RTF),
@@ -515,6 +524,10 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "silence_align_min_segment_dur_sec", "FUNASR_QWEN3_SILENCE_ALIGN_MIN_SEGMENT_DUR_SEC", float)
         cls._override_if_set(config_data["qwen3"], "silence_vad_noise_db", "FUNASR_QWEN3_SILENCE_VAD_NOISE_DB")
         cls._override_if_set(config_data["qwen3"], "silence_vad_min_silence_sec", "FUNASR_QWEN3_SILENCE_VAD_MIN_SILENCE_SEC", float)
+        # nospk 分层切段 (diarize 开关)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_enabled", "FUNASR_QWEN3_NOSPK_SPLIT_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_max_segment_sec", "FUNASR_QWEN3_NOSPK_SPLIT_MAX_SEGMENT_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_min_segment_sec", "FUNASR_QWEN3_NOSPK_SPLIT_MIN_SEGMENT_SEC", float)
         # 词级时间戳 word_align (MMS-300M CTC-FA)
         cls._override_if_set(config_data["qwen3"], "word_align_enabled", "FUNASR_QWEN3_WORD_ALIGN_ENABLED", cls._parse_bool)
         cls._override_if_set(config_data["qwen3"], "word_align_language", "FUNASR_QWEN3_WORD_ALIGN_LANGUAGE")

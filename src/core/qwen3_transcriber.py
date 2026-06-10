@@ -195,6 +195,55 @@ def apply_silence_align_to_segments(
     return new_segs, stats
 
 
+def apply_nospk_split_to_segments(
+    segments: list[Segment],
+    audio_path: str,
+    audio_duration: float,
+    qwen3_config,
+) -> tuple[list[Segment], dict]:
+    """diarize=false 的超长段分层切分 wrapper (照 apply_silence_align_to_segments 形状).
+
+    enabled=False / 空输入 / ffmpeg 异常 → fallback to input, 不阻塞主流程.
+    切分策略 (词隙切→静音切→硬切) 见 src/core/qwen3/segment_split.py.
+    与 silence_align 各自调一次 ffmpeg silencedetect (60min ~2s, RTF <1%),
+    不共享 speech_regions 以保持两层独立可关.
+
+    Args:
+        segments: nospk 路径的 Segment 列表 (ASR chunk 出段, 可能已挂 words).
+        audio_path: 已转好的 wav 路径 (worker 内 actual_audio_path).
+        audio_duration: 音频总时长 (秒).
+        qwen3_config: Qwen3Config 实例 (读 nospk_split_* + silence_vad_* 字段).
+
+    Returns:
+        (new_segments, stats). stats 含 enabled / split_segments / word_split /
+        silence_split / hard_cuts; ffmpeg 失败时含 error 字段.
+    """
+    if not getattr(qwen3_config, "nospk_split_enabled", True):
+        return segments, {"enabled": False}
+    if not segments:
+        return segments, {"enabled": True, "skipped": "empty_segments"}
+    try:
+        speech_regions = ffmpeg_speech_regions(
+            audio_path,
+            audio_duration,
+            noise_db=qwen3_config.silence_vad_noise_db,
+            min_silence_sec=qwen3_config.silence_vad_min_silence_sec,
+        )
+    except Exception as exc:
+        return segments, {"enabled": True, "error": str(exc)}
+    from src.core.qwen3.segment_split import split_long_segments
+
+    new_segs, stats = split_long_segments(
+        segments,
+        speech_regions=speech_regions,
+        audio_duration=audio_duration,
+        max_dur=qwen3_config.nospk_split_max_segment_sec,
+        min_dur=qwen3_config.nospk_split_min_segment_sec,
+    )
+    stats["enabled"] = True
+    return new_segs, stats
+
+
 def apply_short_segment_guard_to_segments(
     merged_segments: list[Segment],
     qwen3_config,
@@ -286,6 +335,10 @@ class Qwen3DiarizeTranscriber:
         silence_align_min_segment_dur_sec: float = 0.1,
         silence_vad_noise_db: str = "-25dB",
         silence_vad_min_silence_sec: float = 0.20,
+        # nospk 分层切段 (diarize 开关 D5)
+        nospk_split_enabled: bool = True,
+        nospk_split_max_segment_sec: float = 12.0,
+        nospk_split_min_segment_sec: float = 1.5,
         # 词级时间戳 word_align (MMS CTC-FA, 默认关)
         word_align_enabled: bool = False,
         word_align_language: str = "chi",
@@ -320,6 +373,9 @@ class Qwen3DiarizeTranscriber:
         self.silence_align_min_segment_dur_sec = silence_align_min_segment_dur_sec
         self.silence_vad_noise_db = silence_vad_noise_db
         self.silence_vad_min_silence_sec = silence_vad_min_silence_sec
+        self.nospk_split_enabled = nospk_split_enabled
+        self.nospk_split_max_segment_sec = nospk_split_max_segment_sec
+        self.nospk_split_min_segment_sec = nospk_split_min_segment_sec
         self.word_align_enabled = word_align_enabled
         self.word_align_language = word_align_language
         self.word_align_model_path = word_align_model_path
@@ -632,6 +688,36 @@ class Qwen3DiarizeTranscriber:
                 word_align_stats = {"enabled": True, "error": str(exc), "language": effective_lang}
                 logger.warning(f"[{task_id}] word_align 失败, 段不带词: {exc}")
 
+        # nospk 分层切段 (D5+T1, 仅 diarize=False): 超长 chunk 段切成字幕可用粒度.
+        # 挂在 word_align 之后 — JSON 路径段上已挂 words 可词隙精确切;
+        # SRT 路径无 words (word_align JSON-only 不变量) 永远走静音 fallback.
+        if not do_diarize:
+            merged_segments, nospk_split_stats = await loop.run_in_executor(
+                None,
+                apply_nospk_split_to_segments,
+                merged_segments,
+                audio_path,
+                asr_result.duration,
+                self,
+            )
+            if nospk_split_stats.get("enabled"):
+                if nospk_split_stats.get("error"):
+                    logger.warning(
+                        f"[{task_id}] nospk-split: ffmpeg 失败, 跳过 ({nospk_split_stats['error']})"
+                    )
+                else:
+                    logger.info(
+                        f"[{task_id}] nospk-split: "
+                        f"split={nospk_split_stats.get('split_segments', 0)} "
+                        f"produced={nospk_split_stats.get('produced_segments', 0)} "
+                        f"word={nospk_split_stats.get('word_split', 0)} "
+                        f"silence={nospk_split_stats.get('silence_split', 0)} "
+                        f"hard={nospk_split_stats.get('hard_cuts', 0)} "
+                        f"final_segments={len(merged_segments)}"
+                    )
+        else:
+            nospk_split_stats = {"enabled": False, "skipped": "diarize_on"}
+
         # Speaker ID 稳定化: 把内部 raw cluster int 按总时长降序重映射成 0/1/2/...,
         # 让下游 f"Speaker{i+1}" 输出的 Speaker1 始终是说话最多的人, 跨 backend
         # (ort_cuda / sherpa) / 跨平台 (cuda / Mac) 一致. 见 docs/开发/gpu加速/
@@ -664,6 +750,7 @@ class Qwen3DiarizeTranscriber:
             "filtered_turns": filtered_turns,
             "word_align": word_align_stats,
             "diarize": do_diarize,
+            "nospk_split": nospk_split_stats,
             "engine": "qwen3",
         }
 
@@ -778,6 +865,9 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         silence_align_min_segment_dur_sec=q.silence_align_min_segment_dur_sec,
         silence_vad_noise_db=q.silence_vad_noise_db,
         silence_vad_min_silence_sec=q.silence_vad_min_silence_sec,
+        nospk_split_enabled=q.nospk_split_enabled,
+        nospk_split_max_segment_sec=q.nospk_split_max_segment_sec,
+        nospk_split_min_segment_sec=q.nospk_split_min_segment_sec,
         word_align_enabled=q.word_align_enabled,
         word_align_language=q.word_align_language,
         word_align_model_path=q.word_align_model_path,
