@@ -314,6 +314,18 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 ## EMA 处理时长
 `_record_processing_seconds`/`_estimate_task_seconds`(EMA,抗长音频离群)替代硬编码 2min。`retry_after`≈槽位释放时间(est/并发),`estimated_wait`≈位置/并发×est(**单位改秒**,消息键 `estimated_wait_seconds`)。
 
+# 可观测性仪表盘（P1，2026-06-16）
+
+定案: `docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md`（CEO+Eng+codex 三重审稿）。
+
+**架构**: 不新起 HTTP server，复用 `websockets.serve` 的 `process_request` 钩子，在 WebSocket **同端口**暴露只读 HTTP 端点（`src/api/http_endpoints.py`，零新依赖）。⚠️ `websockets==12.0` 是 **legacy** API，签名 `async def process_request(path, request_headers)`，bump 13+ 会破（`test_http_endpoints_live.py` 钉版本）。
+
+- **`/health`**(JSON, 裸放): A3-final **liveness only**(维护循环活 + `is_running`)。**不**把模型加载当 gate——模型 eager 加载(`main.py:47-49`)，model_warm 几乎恒真。冷启动盲区(socket 在模型加载后才绑)记 TODOS #23。
+- **`/metrics`**(Prometheus 文本): A5 安全——只出聚合计数；`server.host=0.0.0.0` + `metrics_token` 未设 → 拒绝(防全网段暴露)；响应不回显 token。query token 走 `urlsplit`(codex #2)。VRAM 探针 off-loop + TTL(codex #11，`free_vram_mib` 同步 subprocess 禁直调事件循环)。
+- **指标源**: `task_manager.get_metrics_snapshot()`。**单调计数器**(A1/codex #14)`tasks_terminal_total{status}`/`errors_total{kind}` 在**全部终态化点**(缓存命中/完成/失败/取消/看门狗)累加，**不扫 self.tasks**(TTL 淘汰会让 Prometheus rate 静默回退)。瞬时 gauge(queue/inflight/pending/cache)读现态。
+- **config**: `ObservabilityConfig`(`metrics_enabled`/`metrics_token`) + env `FUNASR_METRICS_ENABLED`/`FUNASR_METRICS_TOKEN`。
+- **测试便利**: `scripts/run_checks.sh [--parity|--all]`（改 FunASR 路径后跑 `--parity`）。
+
 # 部署约定（macOS only）
 
 本项目仅在 macOS Apple Silicon 上运行（依赖 MPS GPU 加速）。**不要调用全局 `docker-deploy` skill**。

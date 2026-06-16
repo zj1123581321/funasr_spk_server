@@ -16,6 +16,7 @@
 - ✅ WebSocket 实时通信 + 任务队列 + 高负载准入控制
 - ✅ 异步轮询契约（批量 `task_status_batch`，根治高负载 300s 超时）
 - ✅ 按 `(file_hash, engine)` 的智能缓存，相同文件秒回
+- ✅ 可观测性：同端口 `/health`（存活探针）+ `/metrics`（Prometheus 指标）
 - ✅ 企微机器人通知 + JWT 认证
 
 ## 文档导航
@@ -79,6 +80,19 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 | **`qwen3`**<br>(1.7B GGUF/ONNX + diarize) | **CUDA / 强 GPU** | **更高** | 中（~0.118 RTF M1 Max；提速需更强 GPU） | `qwen3_pool_size`（默认 1；RTX 3060 12G 显存上限 1 进程） | `cuda_prod` / `cuda_dev` |
 
 > 用 `FUNASR_PROFILE=mac_prod|mac_dev|cuda_prod|cuda_dev` 一行切平台/环境。profile 与配置优先级（`defaults < config.json < FUNASR_PROFILE < FUNASR_* env`）详见 [CLAUDE.md](CLAUDE.md) Config 体系章节。
+
+## 可观测性
+
+服务在 WebSocket 同端口暴露两个只读 HTTP 端点（零额外端口）：
+
+```bash
+curl http://<host>:<port>/health     # 存活探针: 200 healthy / 503 degraded (JSON)
+curl http://<host>:<port>/metrics    # Prometheus 文本: 队列深度/在途/错误率/缓存命中/EMA/VRAM
+```
+
+- `/health` 裸放（只是死活）；客户端可在打转录前预检。
+- `/metrics` 默认仅在显式绑 LAN/loopback 时裸放；`server.host=0.0.0.0` 时必须设 `FUNASR_METRICS_TOKEN`（否则拒绝，防全网段暴露），访问带 `?token=` 或 `Authorization`。
+- 总开关 `FUNASR_METRICS_ENABLED`（默认 on）。设计与指标清单见 [docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md](docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md)。
 
 ## 测试
 
