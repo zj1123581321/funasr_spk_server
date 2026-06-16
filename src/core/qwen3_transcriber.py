@@ -598,6 +598,10 @@ class Qwen3DiarizeTranscriber:
                         self._ensure_word_aligner_cpu(), "cpu",
                         {"preflight_skipped_cuda": True, "free_vram_mib": free},
                     )
+                logger.info(
+                    f"[{task_id}] word_align CUDA preflight OK "
+                    f"(free={free} MiB ≥ {self.word_align_preflight_free_mib} MiB)"
+                )
             return _run(aligner, aligner.effective_provider)
         except Exception as exc:
             # 3) CUDA 资源错误 → poison + 转 CPU (用返回的 aligner 引用判 is_cuda,
