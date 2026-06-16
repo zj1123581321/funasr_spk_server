@@ -255,7 +255,8 @@ const ws = new WebSocket('ws://localhost:8767');
 
 客户端可发送的消息：
 - `finalize_upload`: `{task_id}` — 分片收齐后或 `queue_full` 后重试入队（幂等：已提交则回 `task_status`，不重传分片）
-- `task_status`: `{task_id}` — 轮询任务进度/结果（长任务/高负载推荐轮询而非同步等待）
+- `task_status`: `{task_id}` — 轮询单个任务进度/结果（长任务/高负载推荐轮询而非同步等待）
+- `task_status_batch`: `{task_ids: [...]}` — **批量轮询（推荐用于批量提交）**。一帧拿全集状态，完成项 result/srt_content 随响应内联（防 N+1 拉取风暴），上限 50/批。响应逐 id 含 `status`/`progress`/`result?`/`srt_content?`/`error?`：终态全集 `completed/failed/timed_out/cancelled` 停轮，`status=null`+`task_expired`/`task_not_found` 凭 file_hash 重投。详见[客户端交互指南](docs/使用/客户端交互指南.md)「批量任务与异步轮询契约」节。
 
 ## 输出格式对比
 

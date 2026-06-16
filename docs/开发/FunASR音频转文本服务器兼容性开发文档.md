@@ -336,7 +336,7 @@
 
 #### 2.3.8 任务控制
 
-**查询任务状态**:
+**查询任务状态**（单任务）:
 ```json
 {
   "type": "task_status",
@@ -345,6 +345,17 @@
   }
 }
 ```
+
+**批量查询任务状态**（异步轮询契约，推荐用于批量提交，根治 300s 超时）:
+```json
+{
+  "type": "task_status_batch",
+  "data": {
+    "task_ids": ["id1", "id2", "..."]
+  }
+}
+```
+响应 `type:"task_status_batch"`，`data.items` 逐 id 含 `status`/`progress`/`result?`/`srt_content?`/`error?`：COMPLETED-JSON 走 `result`、COMPLETED-SRT 走 `srt_content`；终态全集 `completed/failed/timed_out/cancelled` 停轮询；`status=null`+`error:"task_expired"/"task_not_found"` 凭 file_hash 重投。`task_ids` 上限 50/批（超出截断）。完整规格见 `docs/开发/Server-Client 交互协议.md` 异步轮询契约节。
 
 **取消任务**:
 ```json
