@@ -30,6 +30,8 @@ import json
 import os
 import socket
 import struct
+import subprocess
+import threading
 import time
 from typing import Any, Callable, List, Optional, Tuple
 
@@ -225,3 +227,203 @@ def wait_for_socket(sock_path: str, timeout: float = 5.0, interval: float = 0.02
             return True
         time.sleep(interval)
     return False
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 3. client (主进程侧 manager, 进程全局单例)
+# ════════════════════════════════════════════════════════════════════════
+class SidecarUnavailable(Exception):
+    """sidecar 起不来 / 连不上 / 重试耗尽 — 调用方降级主进程 CPU."""
+
+
+class SidecarConnectError(Exception):
+    """连接 sidecar 失败 (refused/missing) — 视为 sidecar 已退出, 触发 respawn."""
+
+
+class SidecarTimeout(Exception):
+    """对齐超时 (sidecar 已被杀, 杜绝 CUDA+CPU 双跑 codex #4) — 降级 CPU."""
+
+
+class SidecarResourceError(Exception):
+    """sidecar CUDA 资源错误 (已退休 codex #8) — 降级 CPU."""
+
+
+class SidecarAlignError(Exception):
+    """sidecar 普通对齐错误 (非资源) — sidecar 仍健康, 调用方按无词处理."""
+
+
+def request(
+    sock_path: str,
+    req: dict,
+    *,
+    connect_timeout: float,
+    recv_timeout: float,
+) -> Optional[dict]:
+    """连 sidecar 发一个请求收响应. connect 失败 → SidecarConnectError;
+    recv 超时 → socket.timeout (= 对齐太慢). 对端半截 → None.
+    """
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.settimeout(connect_timeout)
+        try:
+            s.connect(sock_path)
+        except OSError as exc:  # refused / 文件不存在 / connect 超时 → sidecar 不可达
+            raise SidecarConnectError(str(exc)) from exc
+        send_msg(s, req)
+        s.settimeout(recv_timeout)
+        return recv_msg(s)  # socket.timeout 在此抛出 = 对齐超时
+    finally:
+        s.close()
+
+
+class WordAlignSidecarClient:
+    """word_align CUDA sidecar 的主进程侧 manager (进程全局单例, codex #6).
+
+    生命周期: lazy spawn (首个请求) → 复用 (idle TTL 内) → 死了 respawn →
+    超时/资源错误杀掉. 串行化 (一把锁): pool>1 多 worker 也只一个 CUDA sidecar.
+
+    降级 (调用方据异常转主进程 CPU):
+      SidecarTimeout / SidecarResourceError / SidecarUnavailable → CPU 兜底.
+      SidecarAlignError → 无词 (sidecar 健康, 不必杀).
+    """
+
+    def __init__(
+        self,
+        sock_path: str,
+        spawn_cmd: List[str],
+        *,
+        align_timeout_sec: float = 120.0,
+        connect_timeout_sec: float = 2.0,
+        ready_timeout_sec: float = 30.0,
+    ):
+        self._sock_path = sock_path
+        self._spawn_cmd = spawn_cmd
+        self._align_timeout = align_timeout_sec
+        self._connect_timeout = connect_timeout_sec
+        self._ready_timeout = ready_timeout_sec
+        self._proc: Optional[Any] = None
+        self._lock = threading.RLock()
+
+    def _alive(self) -> bool:
+        return (
+            self._proc is not None
+            and self._proc.poll() is None
+            and ping(self._sock_path, timeout=self._connect_timeout)
+        )
+
+    def _kill(self) -> None:
+        """杀 sidecar 进程 + 清 socket 文件 (超时/资源错误/respawn/shutdown)."""
+        proc = self._proc
+        self._proc = None
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            except Exception as exc:  # 杀不掉不致命, 下次 respawn 用新 socket 文件
+                logger.warning(f"word_align sidecar kill 失败: {exc}")
+        try:
+            os.unlink(self._sock_path)
+        except OSError:
+            pass
+
+    def _ensure_running(self) -> None:
+        """sidecar 活着就复用, 否则 (re)spawn 并等就绪. 不就绪 → SidecarUnavailable."""
+        if self._alive():
+            return
+        self._kill()  # 清残留进程/socket
+        logger.info(f"启动 word_align sidecar: {' '.join(self._spawn_cmd)}")
+        self._proc = subprocess.Popen(self._spawn_cmd)
+        if not wait_for_socket(self._sock_path, timeout=self._ready_timeout):
+            self._kill()
+            raise SidecarUnavailable("sidecar 启动后 socket 未在超时内就绪")
+
+    def align(
+        self, audio_path: str, chunks: List[Any], language: Optional[str]
+    ) -> Tuple[List[dict], dict]:
+        """经 sidecar 出词级时间戳. 失败抛具体异常供调用方降级 (见类 docstring)."""
+        req = {"audio_path": audio_path, "chunks": chunks, "language": language}
+        with self._lock:
+            last_exc: Optional[Exception] = None
+            for attempt in range(2):  # 初次 + sidecar 死了 respawn 一次
+                self._ensure_running()
+                try:
+                    resp = request(
+                        self._sock_path, req,
+                        connect_timeout=self._connect_timeout,
+                        recv_timeout=self._align_timeout,
+                    )
+                except socket.timeout as exc:  # 对齐超时 → 杀 sidecar (codex #4)
+                    self._kill()
+                    raise SidecarTimeout(f"word_align sidecar 对齐超时 {self._align_timeout}s") from exc
+                except (SidecarConnectError, ConnectionError, FileNotFoundError) as exc:
+                    last_exc = exc  # sidecar 死了 → respawn 重试
+                    self._kill()
+                    continue
+                if resp is None:  # 半截响应 → 视为死, respawn
+                    last_exc = SidecarUnavailable("sidecar 响应半截")
+                    self._kill()
+                    continue
+                if not resp.get("ok"):
+                    if resp.get("resource_error"):
+                        self._kill()  # OOM 退休 (codex #8), 确保进程已死
+                        raise SidecarResourceError(resp.get("error", "cuda resource error"))
+                    raise SidecarAlignError(resp.get("error", "align failed"))
+                return resp["words"], resp["stats"]
+            raise SidecarUnavailable(f"word_align sidecar 重试耗尽: {last_exc}")
+
+    def shutdown(self) -> None:
+        """服务停时杀 sidecar 进程 (清理)."""
+        with self._lock:
+            self._kill()
+
+
+# ── 进程全局单例 ──────────────────────────────────────────────────────────
+_client_singleton: Optional[WordAlignSidecarClient] = None
+_client_lock = threading.Lock()
+
+
+def _build_default_client() -> WordAlignSidecarClient:
+    """按 config + runtime 构造默认 sidecar client (spawn_cmd 指向本模块 entry).
+
+    Step 3 (entry point) 落地后补全参数透传; 此处先组 spawn_cmd 骨架.
+    """
+    import sys
+
+    from src.core.config import config
+
+    cfg = config.qwen3
+    sock_path = default_socket_path()
+    spawn_cmd = [
+        sys.executable, "-m", "src.core.qwen3.word_align_sidecar",
+        "--socket", sock_path,
+        "--model-path", cfg.word_align_model_path,
+        "--language", cfg.word_align_language,
+        "--cuda-batch-size", str(cfg.word_align_cuda_batch_size),
+        "--idle-ttl", str(cfg.word_align_sidecar_idle_ttl_sec),
+    ]
+    return WordAlignSidecarClient(
+        sock_path, spawn_cmd,
+        align_timeout_sec=cfg.word_align_sidecar_align_timeout_sec,
+    )
+
+
+def get_word_align_sidecar_client() -> WordAlignSidecarClient:
+    """进程全局单例 (codex #6): pool>1 多 worker 共用一个 CUDA sidecar."""
+    global _client_singleton
+    with _client_lock:
+        if _client_singleton is None:
+            _client_singleton = _build_default_client()
+        return _client_singleton
+
+
+def reset_word_align_sidecar_client() -> None:
+    """清单例 (测试用; 先 shutdown 杀进程)."""
+    global _client_singleton
+    with _client_lock:
+        if _client_singleton is not None:
+            try:
+                _client_singleton.shutdown()
+            except Exception:
+                pass
+        _client_singleton = None

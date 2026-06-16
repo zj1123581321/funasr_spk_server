@@ -209,6 +209,17 @@ class Qwen3Config(BaseModel):
     word_align_preflight_enabled: bool = True
     word_align_preflight_free_mib: int = 4608
 
+    # word_align CUDA sidecar (TODOS #18, 评审定案 A1/A3): CUDA word_align 拆独立
+    # 长驻进程, 空闲 idle TTL 自杀**真正释放 VRAM** (ORT BFCArena 唯进程退出可还).
+    # **仅 cuda runtime 生效** (runtime gate 另控; Mac worker 即退 / CPU 不碰显存).
+    #   - word_align_sidecar_enabled: 关掉则 CUDA word_align 退回进程内加载 (Lane 1 行为).
+    #   - word_align_sidecar_idle_ttl_sec: 空闲多久无请求 → sidecar 退出释放显存.
+    #   - word_align_sidecar_align_timeout_sec: 单次对齐超时, 超时主进程杀 sidecar 再 CPU
+    #     (codex #4 杜绝 CUDA+CPU 双跑). 长音频 word_align CUDA 仅 +1% RTF, 180s 够宽.
+    word_align_sidecar_enabled: bool = True
+    word_align_sidecar_idle_ttl_sec: float = 90.0
+    word_align_sidecar_align_timeout_sec: float = 180.0
+
     # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
     # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
     #   - CPU_AND_NE: 默认, frontend ANE + backend mlpackage ANE
@@ -557,6 +568,9 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "word_align_cuda_batch_size", "FUNASR_QWEN3_WORD_ALIGN_CUDA_BATCH_SIZE", int)
         cls._override_if_set(config_data["qwen3"], "word_align_preflight_enabled", "FUNASR_QWEN3_WORD_ALIGN_PREFLIGHT_ENABLED", cls._parse_bool)
         cls._override_if_set(config_data["qwen3"], "word_align_preflight_free_mib", "FUNASR_QWEN3_WORD_ALIGN_PREFLIGHT_FREE_MIB", int)
+        cls._override_if_set(config_data["qwen3"], "word_align_sidecar_enabled", "FUNASR_QWEN3_WORD_ALIGN_SIDECAR_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "word_align_sidecar_idle_ttl_sec", "FUNASR_QWEN3_WORD_ALIGN_SIDECAR_IDLE_TTL_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "word_align_sidecar_align_timeout_sec", "FUNASR_QWEN3_WORD_ALIGN_SIDECAR_ALIGN_TIMEOUT_SEC", float)
         # A2 治理: vendor 字段 (D4)
         cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
         cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)
