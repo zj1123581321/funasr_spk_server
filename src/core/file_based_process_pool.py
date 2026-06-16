@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -27,18 +27,29 @@ class FileBasedProcessPool:
     每个工作进程完全独立运行
     """
 
-    def __init__(self, config_path: str = "config.json", pool_size: Optional[int] = None):
+    def __init__(
+        self,
+        config_path: str = "config.json",
+        pool_size: Optional[int] = None,
+        worker_entry_script: str = "src/core/worker_process.py",
+        task_dir: str = "./temp/tasks",
+    ):
         """
         初始化进程池
 
         Args:
             config_path: 配置文件路径（已废弃，保留用于兼容性）
             pool_size: 进程池大小
+            worker_entry_script: worker 子进程入口脚本路径。默认 FunASR worker;
+                Qwen3 池传 "src/core/qwen3_worker_process.py"。
+            task_dir: 任务文件目录。FunASR 默认 ./temp/tasks; Qwen3 必须用独立目录
+                (如 ./temp/tasks_qwen3), 避免与 prod FunASR daemon 抢 worker_X_*.task 文件。
         """
         self.pool_size = pool_size or global_config.transcription.max_concurrent_tasks
+        self.worker_entry_script = worker_entry_script
 
         # 任务目录
-        self.task_dir = Path("./temp/tasks")
+        self.task_dir = Path(task_dir)
         self.task_dir.mkdir(parents=True, exist_ok=True)
 
         # 进程管理
@@ -86,7 +97,7 @@ class FileBasedProcessPool:
         """在当前事件循环内同步启动进程"""
         cmd = [
             sys.executable,
-            "src/core/worker_process.py",
+            self.worker_entry_script,
             "--worker-id",
             str(worker_id),
             "--task-dir",
@@ -354,9 +365,14 @@ class FileBasedProcessPool:
         batch_size_s: int = 300,
         hotword: str = "",
         use_pickle: bool = True,
+        extra_task_fields: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         使用进程池进行推理
+
+        Args:
+            extra_task_fields: 引擎特定的额外任务字段(默认 None).
+                FunASR 路径不传, Qwen3 池传 {"output_format": "json"/"srt"} 给 worker.
         """
         if not self.is_initialized:
             await self.initialize()
@@ -404,6 +420,8 @@ class FileBasedProcessPool:
             "hotword": hotword,
             "use_pickle": use_pickle,
         }
+        if extra_task_fields:
+            task_data.update(extra_task_fields)
 
         try:
             with open(task_file, "w", encoding="utf-8") as f:
@@ -560,13 +578,22 @@ class FileBasedProcessPool:
         logger.info("进程池资源已清理")
 
     def __del__(self):
-        """析构函数 - 确保资源清理"""
-        if hasattr(self, "is_initialized") and self.is_initialized:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.cleanup())
-            else:
-                loop.run_until_complete(self.cleanup())
+        """析构函数 - 确保资源清理.
+
+        解释器关闭路径调用时 main thread event loop 已不存在,
+        asyncio.get_event_loop() 抛 RuntimeError. 全局 try/except 兜底,
+        生产端走 src/main.py SIGTERM signal_handler 主动 cleanup, 这里只是防
+        stderr 噪声.
+        """
+        try:
+            if hasattr(self, "is_initialized") and self.is_initialized:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.cleanup())
+                else:
+                    loop.run_until_complete(self.cleanup())
+        except Exception:
+            pass
 
 
 # 全局进程池实例

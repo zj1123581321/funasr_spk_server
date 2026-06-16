@@ -1,0 +1,3257 @@
+{
+  "totals": {
+    "asr.encoder.frontend_onnx": 22.444716965001135,
+    "asr.encoder.backend_onnx": 60.6794373369994,
+    "asr.encoder.total": 84.9368318720044,
+    "audio.load": 3.732392374999108,
+    "audio.load_file_wrap": 3.73250220799855,
+    "sherpa.pipeline.process": 209.82372383299844,
+    "sherpa.diarize.total": 215.9155429579987,
+    "asr.llm_decode": 348.1704184580067,
+    "asr.safe_decode_total": 348.1717504590015,
+    "asr.run_total": 433.18279058400003,
+    "sherpa.embedding.compute": 11.546168706987373,
+    "cluster_merge.apply": 13.511105833000329
+  },
+  "counts": {
+    "asr.encoder.frontend_onnx": 67,
+    "asr.encoder.backend_onnx": 67,
+    "asr.encoder.total": 67,
+    "audio.load": 1,
+    "audio.load_file_wrap": 1,
+    "sherpa.pipeline.process": 1,
+    "sherpa.diarize.total": 1,
+    "asr.llm_decode": 66,
+    "asr.safe_decode_total": 66,
+    "asr.run_total": 1,
+    "sherpa.embedding.compute": 195,
+    "cluster_merge.apply": 1
+  },
+  "events": [
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 2.5402699159985787,
+      "t_end_rel": 2.5625658749995637,
+      "elapsed": 0.02229595900098502
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 2.562573915998655,
+      "t_end_rel": 2.6217353749998438,
+      "elapsed": 0.05916145900118863
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 2.5366643749985087,
+      "t_end_rel": 2.621749207999528,
+      "elapsed": 0.08508483300101943
+    },
+    {
+      "stage": "audio.load",
+      "t_start_rel": 3.245152790999782,
+      "t_end_rel": 6.97754516599889,
+      "elapsed": 3.732392374999108
+    },
+    {
+      "stage": "audio.load_file_wrap",
+      "t_start_rel": 3.2451499580001837,
+      "t_end_rel": 6.977652165998734,
+      "elapsed": 3.73250220799855
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 6.990012124999339,
+      "t_end_rel": 7.311550499998702,
+      "elapsed": 0.32153837499936344
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 7.311560707999888,
+      "t_end_rel": 8.660979624999527,
+      "elapsed": 1.349418916999639
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 6.977948957999615,
+      "t_end_rel": 8.66099204099919,
+      "elapsed": 1.6830430829995748
+    },
+    {
+      "stage": "sherpa.pipeline.process",
+      "t_start_rel": 9.33509283300009,
+      "t_end_rel": 219.15881666599853,
+      "elapsed": 209.82372383299844
+    },
+    {
+      "stage": "sherpa.diarize.total",
+      "t_start_rel": 3.2451750000000175,
+      "t_end_rel": 219.1607179579987,
+      "elapsed": 215.9155429579987
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 8.662751500000013,
+      "t_end_rel": 220.39494779099914,
+      "elapsed": 211.73219629099913
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 8.662747374999526,
+      "t_end_rel": 220.39497462500003,
+      "elapsed": 211.7322272500005
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 220.4212223329996,
+      "t_end_rel": 220.8143414999995,
+      "elapsed": 0.39311916699989524
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 220.81434799999988,
+      "t_end_rel": 221.72936554099942,
+      "elapsed": 0.9150175409995427
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 220.3950072079988,
+      "t_end_rel": 221.7293832079995,
+      "elapsed": 1.3343760000007023
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 221.73201283299932,
+      "t_end_rel": 223.40809491599975,
+      "elapsed": 1.6760820830004377
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 221.732008166,
+      "t_end_rel": 223.4081100409985,
+      "elapsed": 1.6761018749984942
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 223.43836904099953,
+      "t_end_rel": 223.81399587499982,
+      "elapsed": 0.3756268340002862
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 223.81400374999976,
+      "t_end_rel": 224.72463224999956,
+      "elapsed": 0.9106284999998024
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 223.40816825000002,
+      "t_end_rel": 224.72464379099983,
+      "elapsed": 1.316475540999818
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 224.7271894159985,
+      "t_end_rel": 226.71120024999982,
+      "elapsed": 1.9840108340013103
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 224.72718795799847,
+      "t_end_rel": 226.7112402499988,
+      "elapsed": 1.9840522920003423
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 226.73884829099916,
+      "t_end_rel": 227.0844188329993,
+      "elapsed": 0.34557054200013226
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 227.0844257079989,
+      "t_end_rel": 227.9961059999987,
+      "elapsed": 0.9116802919998008
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 226.71167904100002,
+      "t_end_rel": 227.99611770799856,
+      "elapsed": 1.2844386669985397
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 227.99844141599897,
+      "t_end_rel": 230.13202208300027,
+      "elapsed": 2.133580667001297
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 227.99843979099933,
+      "t_end_rel": 230.13204249999944,
+      "elapsed": 2.1336027090001153
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 230.15940291599873,
+      "t_end_rel": 230.5375819159999,
+      "elapsed": 0.37817900000118243
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 230.53758804099925,
+      "t_end_rel": 231.4522490829986,
+      "elapsed": 0.9146610419993522
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 230.13210620799873,
+      "t_end_rel": 231.45226137499958,
+      "elapsed": 1.3201551670008485
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 231.45488670799932,
+      "t_end_rel": 233.40123529099947,
+      "elapsed": 1.9463485830001446
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 231.45488491600008,
+      "t_end_rel": 233.40124691599885,
+      "elapsed": 1.9463619999987714
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 233.4227460000002,
+      "t_end_rel": 233.75217066599907,
+      "elapsed": 0.32942466599888576
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 233.7521766659993,
+      "t_end_rel": 234.66441020799903,
+      "elapsed": 0.9122335419997398
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 233.40127741600008,
+      "t_end_rel": 234.66442170799928,
+      "elapsed": 1.2631442919991969
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 234.66658433299926,
+      "t_end_rel": 236.74018774999968,
+      "elapsed": 2.073603417000413
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 234.6665829579997,
+      "t_end_rel": 236.74019666599997,
+      "elapsed": 2.0736137080002663
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 236.77707783299957,
+      "t_end_rel": 237.16293958299866,
+      "elapsed": 0.3858617499990942
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 237.16294566599936,
+      "t_end_rel": 238.07512549999956,
+      "elapsed": 0.9121798340001988
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 236.74022266599968,
+      "t_end_rel": 238.07513670799926,
+      "elapsed": 1.334914041999582
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 238.07741804099896,
+      "t_end_rel": 240.32392720799908,
+      "elapsed": 2.246509167000113
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 238.0774162079997,
+      "t_end_rel": 240.32393954100007,
+      "elapsed": 2.2465233330003684
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 240.34556470799907,
+      "t_end_rel": 240.66678212499937,
+      "elapsed": 0.32121741700029816
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 240.666787958,
+      "t_end_rel": 241.5942267499995,
+      "elapsed": 0.9274387919995206
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 240.3239719159992,
+      "t_end_rel": 241.59423874999993,
+      "elapsed": 1.2702668340007222
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 241.59687762499925,
+      "t_end_rel": 243.9203368749986,
+      "elapsed": 2.3234592499993596
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 241.59687595799915,
+      "t_end_rel": 243.92035191600007,
+      "elapsed": 2.3234759580009268
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 243.94897949999904,
+      "t_end_rel": 244.2647004999999,
+      "elapsed": 0.315721000000849
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 244.26470691599934,
+      "t_end_rel": 245.1882692909985,
+      "elapsed": 0.9235623749991646
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 243.92039449999902,
+      "t_end_rel": 245.18828099999882,
+      "elapsed": 1.267886499999804
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 245.1914712910002,
+      "t_end_rel": 247.11334370799887,
+      "elapsed": 1.9218724169986672
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 245.19146891599848,
+      "t_end_rel": 247.11336074999963,
+      "elapsed": 1.9218918340011442
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 247.15123112499896,
+      "t_end_rel": 247.50975262499924,
+      "elapsed": 0.35852150000027905
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 247.50975891599956,
+      "t_end_rel": 248.42240579099962,
+      "elapsed": 0.912646875000064
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 247.11340137499974,
+      "t_end_rel": 248.42241804100013,
+      "elapsed": 1.3090166660003888
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 248.4246670829998,
+      "t_end_rel": 250.0620017909987,
+      "elapsed": 1.637334707998889
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 248.42466537499968,
+      "t_end_rel": 250.062013499999,
+      "elapsed": 1.6373481249993347
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 250.0843584159993,
+      "t_end_rel": 250.32652429100017,
+      "elapsed": 0.24216587500086462
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 250.32653008299894,
+      "t_end_rel": 251.244628208,
+      "elapsed": 0.9180981250010518
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 250.06204666600024,
+      "t_end_rel": 251.244640040999,
+      "elapsed": 1.1825933749987598
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 251.24703174999922,
+      "t_end_rel": 253.36548612499973,
+      "elapsed": 2.1184543750005105
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 251.24702916599927,
+      "t_end_rel": 253.36549724999895,
+      "elapsed": 2.1184680839996872
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 253.37842733300022,
+      "t_end_rel": 253.74876374999985,
+      "elapsed": 0.3703364169996348
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 253.74876945799951,
+      "t_end_rel": 254.66038495799876,
+      "elapsed": 0.9116154999992432
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 253.3655214999999,
+      "t_end_rel": 254.66039737499887,
+      "elapsed": 1.2948758749989793
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 254.6632470409986,
+      "t_end_rel": 257.0115602079986,
+      "elapsed": 2.348313167000015
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 254.66324529099984,
+      "t_end_rel": 257.01157783300005,
+      "elapsed": 2.3483325420002075
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 257.04586054099855,
+      "t_end_rel": 257.3362503749995,
+      "elapsed": 0.29038983400096186
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 257.33625633299926,
+      "t_end_rel": 258.2475391659991,
+      "elapsed": 0.9112828329998592
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 257.01162824999847,
+      "t_end_rel": 258.24755045799975,
+      "elapsed": 1.2359222080012842
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 258.25025924999863,
+      "t_end_rel": 260.48540033300014,
+      "elapsed": 2.2351410830015084
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 258.2502572499998,
+      "t_end_rel": 260.48541708299854,
+      "elapsed": 2.235159832998761
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 260.51856762499847,
+      "t_end_rel": 260.8904908329987,
+      "elapsed": 0.3719232080002257
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 260.89049583299857,
+      "t_end_rel": 261.7990039999986,
+      "elapsed": 0.9085081670000363
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 260.485464333,
+      "t_end_rel": 261.79901604099905,
+      "elapsed": 1.3135517079990677
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 261.80132412499916,
+      "t_end_rel": 263.8066582909996,
+      "elapsed": 2.005334166000466
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 261.8013224999995,
+      "t_end_rel": 263.80667295799867,
+      "elapsed": 2.005350457999157
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 263.83180408299995,
+      "t_end_rel": 264.0964174159999,
+      "elapsed": 0.26461333299994294
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 264.09642362500017,
+      "t_end_rel": 265.005973207999,
+      "elapsed": 0.9095495829988067
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 263.80672058299933,
+      "t_end_rel": 265.00598587499917,
+      "elapsed": 1.1992652919998363
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 265.0082050000001,
+      "t_end_rel": 267.0161572910001,
+      "elapsed": 2.007952291000038
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 265.0082035409996,
+      "t_end_rel": 267.0161729579995,
+      "elapsed": 2.007969416999913
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 267.0432477909999,
+      "t_end_rel": 267.3326464999991,
+      "elapsed": 0.28939870899921516
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 267.3326523329997,
+      "t_end_rel": 268.2391455830002,
+      "elapsed": 0.9064932500004943
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 267.0162201659987,
+      "t_end_rel": 268.23915716599913,
+      "elapsed": 1.2229370000004565
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 268.24149583299914,
+      "t_end_rel": 270.8049700829997,
+      "elapsed": 2.5634742500005814
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 268.24149416599903,
+      "t_end_rel": 270.8049877909998,
+      "elapsed": 2.563493625000774
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 270.8284237499993,
+      "t_end_rel": 271.17794524999954,
+      "elapsed": 0.3495215000002645
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 271.17795066599865,
+      "t_end_rel": 272.08702066600017,
+      "elapsed": 0.9090700000015204
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 270.80504554099934,
+      "t_end_rel": 272.08703333299854,
+      "elapsed": 1.2819877919991995
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 272.0897037499999,
+      "t_end_rel": 274.351302957999,
+      "elapsed": 2.2615992079990974
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 272.0897019999993,
+      "t_end_rel": 274.351316332999,
+      "elapsed": 2.2616143329996703
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 274.3772837910001,
+      "t_end_rel": 274.7173230829994,
+      "elapsed": 0.34003929199934646
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 274.71732970799894,
+      "t_end_rel": 275.6320439579995,
+      "elapsed": 0.914714250000543
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 274.35137316599867,
+      "t_end_rel": 275.63205562499934,
+      "elapsed": 1.2806824590006727
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 275.63449954099997,
+      "t_end_rel": 278.1058062079992,
+      "elapsed": 2.471306666999226
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 275.6344979159985,
+      "t_end_rel": 278.10582033299943,
+      "elapsed": 2.47132241700092
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 278.13434612499987,
+      "t_end_rel": 278.4519458750001,
+      "elapsed": 0.3175997500002268
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 278.45195137500014,
+      "t_end_rel": 279.36024412499864,
+      "elapsed": 0.908292749998509
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 278.1058681249997,
+      "t_end_rel": 279.36025866599994,
+      "elapsed": 1.254390541000248
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 279.36280291599905,
+      "t_end_rel": 281.4335208749999,
+      "elapsed": 2.070717959000831
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 279.3628002079986,
+      "t_end_rel": 281.433540041,
+      "elapsed": 2.0707398330014257
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 281.455993915999,
+      "t_end_rel": 281.8156852909997,
+      "elapsed": 0.35969137500069337
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 281.8156912499999,
+      "t_end_rel": 282.727212415999,
+      "elapsed": 0.9115211659991473
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 281.43359274999966,
+      "t_end_rel": 282.7272264160001,
+      "elapsed": 1.29363366600046
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 282.72942562499884,
+      "t_end_rel": 284.5074231660001,
+      "elapsed": 1.7779975410012412
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 282.72942395799873,
+      "t_end_rel": 284.50743995799894,
+      "elapsed": 1.778016000000207
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 284.53745033299856,
+      "t_end_rel": 284.88168383299853,
+      "elapsed": 0.344233499999973
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 284.8816899579997,
+      "t_end_rel": 285.7930299999989,
+      "elapsed": 0.9113400419992104
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 284.5074913749995,
+      "t_end_rel": 285.79304520799997,
+      "elapsed": 1.2855538330004492
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 285.7951302909987,
+      "t_end_rel": 287.84140841599947,
+      "elapsed": 2.046278125000754
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 285.79512875,
+      "t_end_rel": 287.84142387499924,
+      "elapsed": 2.046295124999233
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 287.8576059999996,
+      "t_end_rel": 288.22044158300014,
+      "elapsed": 0.3628355830005603
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 288.2204472909998,
+      "t_end_rel": 289.1302273330002,
+      "elapsed": 0.9097800420004205
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 287.8414655830002,
+      "t_end_rel": 289.1302400409986,
+      "elapsed": 1.2887744579984428
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 289.1326388329999,
+      "t_end_rel": 291.2655208750002,
+      "elapsed": 2.1328820420003467
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 289.13263695800015,
+      "t_end_rel": 291.2655397079998,
+      "elapsed": 2.13290274999963
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 291.2937425829987,
+      "t_end_rel": 291.64003870799934,
+      "elapsed": 0.34629612500066287
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 291.6400452079997,
+      "t_end_rel": 292.564935082999,
+      "elapsed": 0.9248898749992804
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 291.26561395799945,
+      "t_end_rel": 292.5649466249997,
+      "elapsed": 1.2993326670002716
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 292.56729350000023,
+      "t_end_rel": 294.7915778329989,
+      "elapsed": 2.22428433299865
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 292.5672920830002,
+      "t_end_rel": 294.7915915829999,
+      "elapsed": 2.224299499999688
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 294.81215708299897,
+      "t_end_rel": 295.1470454999999,
+      "elapsed": 0.33488841700091143
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 295.1470517500002,
+      "t_end_rel": 296.0546371250002,
+      "elapsed": 0.9075853750000533
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 294.79162783299944,
+      "t_end_rel": 296.0546484159986,
+      "elapsed": 1.263020582999161
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 296.05701320799926,
+      "t_end_rel": 298.21788479099996,
+      "elapsed": 2.1608715830006986
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 296.05701154099916,
+      "t_end_rel": 298.21789737499967,
+      "elapsed": 2.16088583400051
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 298.2378286659987,
+      "t_end_rel": 298.58638945799976,
+      "elapsed": 0.3485607920010807
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 298.58639633299936,
+      "t_end_rel": 299.4948587500003,
+      "elapsed": 0.9084624170009192
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 298.21793145799893,
+      "t_end_rel": 299.49487645799854,
+      "elapsed": 1.276944999999614
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 299.4972471659985,
+      "t_end_rel": 301.3532324579992,
+      "elapsed": 1.855985292000696
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 299.4972455829993,
+      "t_end_rel": 301.3532506249994,
+      "elapsed": 1.8560050420001062
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 301.378790666,
+      "t_end_rel": 301.73451699999896,
+      "elapsed": 0.35572633399897313
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 301.734522540999,
+      "t_end_rel": 302.6447843749993,
+      "elapsed": 0.9102618340002664
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 301.35330624999915,
+      "t_end_rel": 302.64479670799847,
+      "elapsed": 1.2914904579993163
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 302.64697712499947,
+      "t_end_rel": 304.8972769159991,
+      "elapsed": 2.250299790999634
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 302.64697529099976,
+      "t_end_rel": 304.897294082999,
+      "elapsed": 2.2503187919992342
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 304.925124333,
+      "t_end_rel": 305.2464799579993,
+      "elapsed": 0.32135562499934167
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 305.2464850409997,
+      "t_end_rel": 306.155071707999,
+      "elapsed": 0.9085866669993266
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 304.89734512499854,
+      "t_end_rel": 306.1550842079996,
+      "elapsed": 1.25773908300107
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 306.1574670409991,
+      "t_end_rel": 308.4568937499989,
+      "elapsed": 2.2994267089998175
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 306.1574652499985,
+      "t_end_rel": 308.45690775,
+      "elapsed": 2.2994425000015326
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 308.4852318329995,
+      "t_end_rel": 308.7987122909999,
+      "elapsed": 0.3134804580004129
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 308.79871812499914,
+      "t_end_rel": 309.7143622499989,
+      "elapsed": 0.9156441249997442
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 308.456950374999,
+      "t_end_rel": 309.7143755830002,
+      "elapsed": 1.257425208001223
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 309.71687024999846,
+      "t_end_rel": 312.0946411249988,
+      "elapsed": 2.3777708750003512
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 309.71686841599876,
+      "t_end_rel": 312.0946574999998,
+      "elapsed": 2.3777890840010514
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 312.11989991599876,
+      "t_end_rel": 312.48590970799887,
+      "elapsed": 0.3660097920001135
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 312.4859157079991,
+      "t_end_rel": 313.3943985829992,
+      "elapsed": 0.9084828750001179
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 312.0946988329997,
+      "t_end_rel": 313.3944146249996,
+      "elapsed": 1.2997157919999154
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 313.3969280000001,
+      "t_end_rel": 315.6592730829998,
+      "elapsed": 2.2623450829996727
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 313.39692620799906,
+      "t_end_rel": 315.6592885409991,
+      "elapsed": 2.2623623330000555
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 315.69350616599877,
+      "t_end_rel": 316.0722668749986,
+      "elapsed": 0.3787607089998346
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 316.0722727499997,
+      "t_end_rel": 316.9876152079996,
+      "elapsed": 0.915342457999941
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 315.65938504099904,
+      "t_end_rel": 316.98762979099956,
+      "elapsed": 1.328244750000522
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 316.9901389579991,
+      "t_end_rel": 319.17619154099884,
+      "elapsed": 2.186052582999764
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 316.99013754099906,
+      "t_end_rel": 319.17629208299877,
+      "elapsed": 2.186154541999713
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 319.2130559999987,
+      "t_end_rel": 319.5563908749991,
+      "elapsed": 0.343334875000437
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 319.5563967500002,
+      "t_end_rel": 320.46363374999964,
+      "elapsed": 0.9072369999994407
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 319.17642016599893,
+      "t_end_rel": 320.4636446249988,
+      "elapsed": 1.2872244589998445
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 320.4659113329999,
+      "t_end_rel": 322.8889249579988,
+      "elapsed": 2.42301362499893
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 320.46590970800025,
+      "t_end_rel": 322.88893854100024,
+      "elapsed": 2.4230288329999894
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 322.9186062079989,
+      "t_end_rel": 323.26054183299857,
+      "elapsed": 0.3419356249996781
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 323.2605475829987,
+      "t_end_rel": 324.17203254099877,
+      "elapsed": 0.9114849580000737
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 322.8889814159993,
+      "t_end_rel": 324.1720443329996,
+      "elapsed": 1.2830629170002794
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 324.17451083299966,
+      "t_end_rel": 326.62867970799925,
+      "elapsed": 2.4541688749995956
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 324.174509208,
+      "t_end_rel": 326.62869116599904,
+      "elapsed": 2.454181957999026
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 326.64940691599986,
+      "t_end_rel": 327.02364449999914,
+      "elapsed": 0.37423758399927465
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 327.02365087499857,
+      "t_end_rel": 327.9323179999992,
+      "elapsed": 0.9086671250006475
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 326.62872437499936,
+      "t_end_rel": 327.9323299579992,
+      "elapsed": 1.3036055829998077
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 327.9347344580001,
+      "t_end_rel": 330.4648548749992,
+      "elapsed": 2.530120416999125
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 327.93473283299863,
+      "t_end_rel": 330.4648762910001,
+      "elapsed": 2.5301434580014757
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 330.49756254099884,
+      "t_end_rel": 330.8859519999987,
+      "elapsed": 0.38838945899988175
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 330.8859592909994,
+      "t_end_rel": 331.79691795799954,
+      "elapsed": 0.910958667000159
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 330.46494516599887,
+      "t_end_rel": 331.79692950000026,
+      "elapsed": 1.3319843340013904
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 331.7996687499999,
+      "t_end_rel": 333.8982637499994,
+      "elapsed": 2.0985949999994773
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 331.799666375,
+      "t_end_rel": 333.89831008299916,
+      "elapsed": 2.0986437079991447
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 333.92821754099896,
+      "t_end_rel": 334.26670508299867,
+      "elapsed": 0.33848754199971154
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 334.26671054100007,
+      "t_end_rel": 335.176954999999,
+      "elapsed": 0.9102444589989318
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 333.8984547079999,
+      "t_end_rel": 335.1769666660002,
+      "elapsed": 1.2785119580003084
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 335.1791401249993,
+      "t_end_rel": 337.57555916599995,
+      "elapsed": 2.3964190410006267
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 335.1791384999997,
+      "t_end_rel": 337.5755759579988,
+      "elapsed": 2.396437457999127
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 337.6107982499998,
+      "t_end_rel": 338.0153087079998,
+      "elapsed": 0.4045104580000043
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 338.015314708,
+      "t_end_rel": 338.9238726249987,
+      "elapsed": 0.9085579169986886
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 337.5756232909989,
+      "t_end_rel": 338.92388379099975,
+      "elapsed": 1.3482605000008334
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 338.9262908749988,
+      "t_end_rel": 341.1371624579988,
+      "elapsed": 2.210871582999971
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 338.92628916600006,
+      "t_end_rel": 341.1371783329996,
+      "elapsed": 2.21088916699955
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 341.1675959999993,
+      "t_end_rel": 341.4601685409998,
+      "elapsed": 0.2925725410004816
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 341.460174165999,
+      "t_end_rel": 342.3731426249997,
+      "elapsed": 0.9129684590006946
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 341.1372247499985,
+      "t_end_rel": 342.3731531249996,
+      "elapsed": 1.2359283750010945
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 342.37551804099894,
+      "t_end_rel": 344.3890562079996,
+      "elapsed": 2.013538167000661
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 342.3755159579996,
+      "t_end_rel": 344.38907220799956,
+      "elapsed": 2.013556249999965
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 344.4279688329989,
+      "t_end_rel": 344.77963229099987,
+      "elapsed": 0.351663458000985
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 344.7796384579997,
+      "t_end_rel": 345.68990854099866,
+      "elapsed": 0.9102700829989772
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 344.38912091599923,
+      "t_end_rel": 345.68992099999923,
+      "elapsed": 1.3008000840000022
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 345.69207954099875,
+      "t_end_rel": 347.7424499159988,
+      "elapsed": 2.050370375000057
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 345.69207812499917,
+      "t_end_rel": 347.74245645799965,
+      "elapsed": 2.050378333000481
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 347.76874416600003,
+      "t_end_rel": 348.12965820799946,
+      "elapsed": 0.3609140419994219
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 348.1296640829987,
+      "t_end_rel": 349.03999295799986,
+      "elapsed": 0.9103288750011416
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 347.7424746249999,
+      "t_end_rel": 349.0400073749988,
+      "elapsed": 1.2975327499989362
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 349.04225574999873,
+      "t_end_rel": 351.08343741599856,
+      "elapsed": 2.0411816659998294
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 349.0422541659991,
+      "t_end_rel": 351.08345483299854,
+      "elapsed": 2.04120066699943
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 351.1197859160002,
+      "t_end_rel": 351.42770550000023,
+      "elapsed": 0.3079195840000466
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 351.4277107500002,
+      "t_end_rel": 352.3364966249992,
+      "elapsed": 0.9087858749990119
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 351.08349895799984,
+      "t_end_rel": 352.33650874999876,
+      "elapsed": 1.2530097919989203
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 352.3388527499992,
+      "t_end_rel": 354.62335670799985,
+      "elapsed": 2.2845039580006414
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 352.33885112499956,
+      "t_end_rel": 354.62337416599985,
+      "elapsed": 2.284523041000284
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 354.6546371659988,
+      "t_end_rel": 354.99437899999975,
+      "elapsed": 0.3397418340009608
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 354.9943844999998,
+      "t_end_rel": 355.90394179099894,
+      "elapsed": 0.9095572909991461
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 354.6235968330002,
+      "t_end_rel": 355.90395575,
+      "elapsed": 1.2803589169998304
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 355.90627737499926,
+      "t_end_rel": 357.96739012499893,
+      "elapsed": 2.0611127499996655
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 355.90627579099964,
+      "t_end_rel": 357.96740920799857,
+      "elapsed": 2.0611334169989277
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 357.9971937909995,
+      "t_end_rel": 358.3310974999986,
+      "elapsed": 0.33390370899905975
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 358.3311023749993,
+      "t_end_rel": 359.2433892079989,
+      "elapsed": 0.9122868329995981
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 357.9674554579997,
+      "t_end_rel": 359.2434005409996,
+      "elapsed": 1.2759450829998968
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 359.2457161659986,
+      "t_end_rel": 361.4130395409993,
+      "elapsed": 2.1673233750007057
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 359.24571454099896,
+      "t_end_rel": 361.41305333299897,
+      "elapsed": 2.1673387920000096
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 361.44298341600006,
+      "t_end_rel": 361.7833786249994,
+      "elapsed": 0.3403952089993254
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 361.78338424999856,
+      "t_end_rel": 362.6929094579991,
+      "elapsed": 0.9095252080005594
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 361.41309224999895,
+      "t_end_rel": 362.69292162499914,
+      "elapsed": 1.2798293750001903
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 362.6953402499985,
+      "t_end_rel": 364.7679304159992,
+      "elapsed": 2.0725901660007366
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 362.69533837499876,
+      "t_end_rel": 364.76794833299937,
+      "elapsed": 2.072609958000612
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 364.8001486659996,
+      "t_end_rel": 365.1456367079991,
+      "elapsed": 0.3454880419994879
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 365.1456428749989,
+      "t_end_rel": 366.0547101659995,
+      "elapsed": 0.9090672910006106
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 364.7679924160002,
+      "t_end_rel": 366.054722416,
+      "elapsed": 1.2867299999998068
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 366.0569391249992,
+      "t_end_rel": 368.5112166250001,
+      "elapsed": 2.4542775000008987
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 366.0569376659987,
+      "t_end_rel": 368.51123395799914,
+      "elapsed": 2.4542962920004356
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 368.539037999999,
+      "t_end_rel": 368.8645191659998,
+      "elapsed": 0.3254811660008272
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 368.86452524999913,
+      "t_end_rel": 369.77526408299855,
+      "elapsed": 0.9107388329994137
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 368.5112780829986,
+      "t_end_rel": 369.7752765409987,
+      "elapsed": 1.26399845800006
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 369.7777629579996,
+      "t_end_rel": 372.19930816600026,
+      "elapsed": 2.42154520800068
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 369.77776154099956,
+      "t_end_rel": 372.19932858299944,
+      "elapsed": 2.4215670419998787
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 372.22751574999893,
+      "t_end_rel": 372.56124737499886,
+      "elapsed": 0.3337316249999276
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 372.5612548749996,
+      "t_end_rel": 373.4791634579997,
+      "elapsed": 0.9179085830000986
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 372.1993876249999,
+      "t_end_rel": 373.4791757080002,
+      "elapsed": 1.2797880830003123
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 373.48160133300007,
+      "t_end_rel": 375.49988083300013,
+      "elapsed": 2.0182795000000624
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 373.48159962499994,
+      "t_end_rel": 375.49989795799956,
+      "elapsed": 2.0182983329996205
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 375.5253895829992,
+      "t_end_rel": 375.85172975000023,
+      "elapsed": 0.3263401670010353
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 375.85173516599934,
+      "t_end_rel": 376.76334487500026,
+      "elapsed": 0.9116097090009134
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 375.4999391659985,
+      "t_end_rel": 376.7633588329991,
+      "elapsed": 1.2634196670005622
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 376.7656055409989,
+      "t_end_rel": 378.7575662499985,
+      "elapsed": 1.9919607089996134
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 376.7656037910001,
+      "t_end_rel": 378.7575846660002,
+      "elapsed": 1.9919808750000811
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 378.7753697909993,
+      "t_end_rel": 379.15667958299855,
+      "elapsed": 0.38130979199922876
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 379.15668591599933,
+      "t_end_rel": 380.0649318329997,
+      "elapsed": 0.9082459170003858
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 378.7576261659997,
+      "t_end_rel": 380.0649432499995,
+      "elapsed": 1.3073170839998056
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 380.0670976659985,
+      "t_end_rel": 382.3073908749993,
+      "elapsed": 2.2402932090008107
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 380.06709629099896,
+      "t_end_rel": 382.30740937500013,
+      "elapsed": 2.2403130840011727
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 382.3397005829993,
+      "t_end_rel": 382.71641612500025,
+      "elapsed": 0.3767155420009658
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 382.71642220799913,
+      "t_end_rel": 383.6410295409987,
+      "elapsed": 0.9246073329995852
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 382.307451749999,
+      "t_end_rel": 383.6410407909989,
+      "elapsed": 1.3335890409998683
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 383.6433444159993,
+      "t_end_rel": 385.7175846659993,
+      "elapsed": 2.0742402500000026
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 383.64334279099967,
+      "t_end_rel": 385.7176034160002,
+      "elapsed": 2.0742606250005338
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 385.7449864579994,
+      "t_end_rel": 386.04127020799933,
+      "elapsed": 0.29628374999992957
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 386.04127579099986,
+      "t_end_rel": 386.94888012499905,
+      "elapsed": 0.9076043339991884
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 385.71765491599945,
+      "t_end_rel": 386.94889112499914,
+      "elapsed": 1.2312362089996896
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 386.9511390409989,
+      "t_end_rel": 389.13836512499984,
+      "elapsed": 2.1872260840009403
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 386.9511374579997,
+      "t_end_rel": 389.1383796659993,
+      "elapsed": 2.1872422079995886
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 389.15819633299907,
+      "t_end_rel": 389.4646457909985,
+      "elapsed": 0.30644945799940615
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 389.4646518749996,
+      "t_end_rel": 390.3755895409995,
+      "elapsed": 0.9109376659998816
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 389.1384211659988,
+      "t_end_rel": 390.375601791,
+      "elapsed": 1.2371806250012014
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 390.3779022079998,
+      "t_end_rel": 392.3907246250001,
+      "elapsed": 2.0128224170002795
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 390.37790058300016,
+      "t_end_rel": 392.390744332999,
+      "elapsed": 2.012843749998865
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 392.41545508299896,
+      "t_end_rel": 392.8171879579986,
+      "elapsed": 0.40173287499965227
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 392.8172049999994,
+      "t_end_rel": 393.7399451249985,
+      "elapsed": 0.922740124999109
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 392.3907901659986,
+      "t_end_rel": 393.73995733299853,
+      "elapsed": 1.349167166999905
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 393.7421089159998,
+      "t_end_rel": 395.74664508299975,
+      "elapsed": 2.0045361669999693
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 393.74210720799965,
+      "t_end_rel": 395.746660666,
+      "elapsed": 2.004553458000373
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 395.7680843749986,
+      "t_end_rel": 396.0994549999996,
+      "elapsed": 0.331370625001
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 396.0994609579993,
+      "t_end_rel": 397.0081258749997,
+      "elapsed": 0.9086649170003511
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 395.7467039999992,
+      "t_end_rel": 397.00813954099976,
+      "elapsed": 1.2614355410005373
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 397.01042233299995,
+      "t_end_rel": 398.9437543749991,
+      "elapsed": 1.933332041999165
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 397.0104203329993,
+      "t_end_rel": 398.9437722499988,
+      "elapsed": 1.933351916999527
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 398.97723274999953,
+      "t_end_rel": 399.3080621659992,
+      "elapsed": 0.3308294159996876
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 399.30806737499915,
+      "t_end_rel": 400.21821341599934,
+      "elapsed": 0.9101460410001891
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 398.94382337499883,
+      "t_end_rel": 400.21822591599994,
+      "elapsed": 1.274402541001109
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 400.2203484579986,
+      "t_end_rel": 402.44120041599854,
+      "elapsed": 2.220851957999912
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 400.220346832999,
+      "t_end_rel": 402.4412153329995,
+      "elapsed": 2.220868500000506
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 402.4700029579999,
+      "t_end_rel": 402.8249810409998,
+      "elapsed": 0.3549780829998781
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 402.8249874159992,
+      "t_end_rel": 403.73598141599905,
+      "elapsed": 0.910993999999846
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 402.441342832999,
+      "t_end_rel": 403.7359929159993,
+      "elapsed": 1.294650083000306
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 403.7382067079998,
+      "t_end_rel": 405.88240366599894,
+      "elapsed": 2.1441969579991564
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 403.7382049579992,
+      "t_end_rel": 405.88242841600004,
+      "elapsed": 2.1442234580008517
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 405.9174006659996,
+      "t_end_rel": 406.25340879099895,
+      "elapsed": 0.33600812499935273
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 406.25341758299874,
+      "t_end_rel": 407.1659647910001,
+      "elapsed": 0.9125472080013424
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 405.88249837500007,
+      "t_end_rel": 407.16597637499945,
+      "elapsed": 1.283477999999377
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 407.1681549579989,
+      "t_end_rel": 409.39938662500026,
+      "elapsed": 2.231231667001339
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 407.1681531659997,
+      "t_end_rel": 409.3994011249997,
+      "elapsed": 2.2312479590000294
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 409.430963666,
+      "t_end_rel": 409.77194662500006,
+      "elapsed": 0.34098295900002995
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 409.77195545799987,
+      "t_end_rel": 410.69175829099913,
+      "elapsed": 0.9198028329992667
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 409.3994446249999,
+      "t_end_rel": 410.6917727909986,
+      "elapsed": 1.292328165998697
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 410.6942474159987,
+      "t_end_rel": 413.0465412499998,
+      "elapsed": 2.3522938340011024
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 410.6942456659999,
+      "t_end_rel": 413.04656483299914,
+      "elapsed": 2.352319166999223
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 413.05885283299904,
+      "t_end_rel": 413.39932383299856,
+      "elapsed": 0.3404709999995248
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 413.39932987499924,
+      "t_end_rel": 414.3058456250001,
+      "elapsed": 0.9065157500008354
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 413.046629208,
+      "t_end_rel": 414.3058620409993,
+      "elapsed": 1.2592328329992597
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 414.30824349999966,
+      "t_end_rel": 416.27618724999957,
+      "elapsed": 1.967943749999904
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 414.30824183299956,
+      "t_end_rel": 416.27620266600024,
+      "elapsed": 1.9679608330006886
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 416.310969958,
+      "t_end_rel": 416.6530792079993,
+      "elapsed": 0.3421092499993392
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 416.65308566599924,
+      "t_end_rel": 417.55989512499946,
+      "elapsed": 0.9068094590002147
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 416.27627808299985,
+      "t_end_rel": 417.5599265410001,
+      "elapsed": 1.2836484580002434
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 417.562252624999,
+      "t_end_rel": 419.81688620800014,
+      "elapsed": 2.254633583001123
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 417.5622511249985,
+      "t_end_rel": 419.8169017909986,
+      "elapsed": 2.2546506660000887
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 419.8510702499989,
+      "t_end_rel": 420.1325315409995,
+      "elapsed": 0.28146129100059625
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 420.13253820799946,
+      "t_end_rel": 421.04152158299985,
+      "elapsed": 0.9089833750003891
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 419.816951666,
+      "t_end_rel": 421.0415334999998,
+      "elapsed": 1.224581833999764
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 421.043860415999,
+      "t_end_rel": 423.01600858299935,
+      "elapsed": 1.9721481670003413
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 421.0438586250002,
+      "t_end_rel": 423.0160272909998,
+      "elapsed": 1.9721686659995612
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 423.03962733299886,
+      "t_end_rel": 423.3384130409995,
+      "elapsed": 0.29878570800065063
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 423.33841941599894,
+      "t_end_rel": 424.24734887500017,
+      "elapsed": 0.9089294590012287
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 423.0160844999991,
+      "t_end_rel": 424.24736254100026,
+      "elapsed": 1.2312780410011328
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 424.2495237080002,
+      "t_end_rel": 426.3866557909987,
+      "elapsed": 2.137132082998505
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 424.2495219579996,
+      "t_end_rel": 426.38667133299896,
+      "elapsed": 2.1371493749993533
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 426.4122861249998,
+      "t_end_rel": 426.7199231249997,
+      "elapsed": 0.30763699999988603
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 426.7199285409988,
+      "t_end_rel": 427.62879954100026,
+      "elapsed": 0.9088710000014544
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 426.38672495799983,
+      "t_end_rel": 427.62881045799986,
+      "elapsed": 1.2420855000000302
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 427.63103837499875,
+      "t_end_rel": 429.27372108300005,
+      "elapsed": 1.6426827080013027
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 427.631036666,
+      "t_end_rel": 429.27373979099866,
+      "elapsed": 1.6427031249986612
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 429.29714370799957,
+      "t_end_rel": 429.6667046659986,
+      "elapsed": 0.369560957999056
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 429.66671066599883,
+      "t_end_rel": 430.5759531249987,
+      "elapsed": 0.90924245899987
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 429.27378345800025,
+      "t_end_rel": 430.5759665829992,
+      "elapsed": 1.302183124998919
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 430.5779910000001,
+      "t_end_rel": 432.2064954999987,
+      "elapsed": 1.6285044999985985
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 430.5779867909987,
+      "t_end_rel": 432.206507416,
+      "elapsed": 1.6285206250013289
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 432.22477287499896,
+      "t_end_rel": 432.5571547499985,
+      "elapsed": 0.3323818749995553
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 432.55716054099867,
+      "t_end_rel": 433.4651464159997,
+      "elapsed": 0.9079858750010317
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 432.2065428749993,
+      "t_end_rel": 433.4651584160001,
+      "elapsed": 1.258615541000836
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 433.4669446659991,
+      "t_end_rel": 434.11158674999933,
+      "elapsed": 0.6446420840002247
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 433.4669431659986,
+      "t_end_rel": 434.1116050410001,
+      "elapsed": 0.644661875001475
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 434.14202883299913,
+      "t_end_rel": 434.4659747499991,
+      "elapsed": 0.32394591699994635
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 434.4659807909993,
+      "t_end_rel": 435.374132166,
+      "elapsed": 0.9081513750006707
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 434.11165358299877,
+      "t_end_rel": 435.3741426249999,
+      "elapsed": 1.262489042001107
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 435.3750676660002,
+      "t_end_rel": 438.10288616599973,
+      "elapsed": 2.7278184999995574
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 435.3750662499988,
+      "t_end_rel": 438.10290545799944,
+      "elapsed": 2.7278392080006597
+    },
+    {
+      "stage": "asr.encoder.frontend_onnx",
+      "t_start_rel": 438.13736020800025,
+      "t_end_rel": 438.46511379099866,
+      "elapsed": 0.32775358299841173
+    },
+    {
+      "stage": "asr.encoder.backend_onnx",
+      "t_start_rel": 438.4651201659999,
+      "t_end_rel": 439.38443070799985,
+      "elapsed": 0.9193105419999483
+    },
+    {
+      "stage": "asr.encoder.total",
+      "t_start_rel": 438.1033840829987,
+      "t_end_rel": 439.38444341600007,
+      "elapsed": 1.2810593330013944
+    },
+    {
+      "stage": "asr.llm_decode",
+      "t_start_rel": 439.38724020799964,
+      "t_end_rel": 440.15977224999915,
+      "elapsed": 0.7725320419995114
+    },
+    {
+      "stage": "asr.safe_decode_total",
+      "t_start_rel": 439.3872382499994,
+      "t_end_rel": 440.15978149999864,
+      "elapsed": 0.7725432499992166
+    },
+    {
+      "stage": "asr.run_total",
+      "t_start_rel": 6.977659790998587,
+      "t_end_rel": 440.1604503749986,
+      "elapsed": 433.18279058400003
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 443.13931616599984,
+      "t_end_rel": 443.5041187909992,
+      "elapsed": 0.36480262499935634
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 443.53795016599906,
+      "t_end_rel": 443.7358822499991,
+      "elapsed": 0.19793208400005824
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 443.7672539159994,
+      "t_end_rel": 443.944504957999,
+      "elapsed": 0.17725104199962516
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 443.96952454099846,
+      "t_end_rel": 444.12289749999945,
+      "elapsed": 0.1533729590009898
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.14868812500026,
+      "t_end_rel": 444.29681724999864,
+      "elapsed": 0.14812912499837694
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.3206664579993,
+      "t_end_rel": 444.45907766599885,
+      "elapsed": 0.13841120799952478
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.4816364159997,
+      "t_end_rel": 444.6127195829995,
+      "elapsed": 0.13108316699981515
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.6339135829985,
+      "t_end_rel": 444.757007582999,
+      "elapsed": 0.12309400000049209
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.7774228749986,
+      "t_end_rel": 444.8998123749989,
+      "elapsed": 0.12238950000028126
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 444.9200209999999,
+      "t_end_rel": 445.0389415409991,
+      "elapsed": 0.11892054099917004
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.0584412909993,
+      "t_end_rel": 445.17635454099945,
+      "elapsed": 0.11791325000012876
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.1941587909987,
+      "t_end_rel": 445.29710870799863,
+      "elapsed": 0.10294991699993261
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.3144773749991,
+      "t_end_rel": 445.41855270799897,
+      "elapsed": 0.10407533299985516
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.43486183299865,
+      "t_end_rel": 445.5341156249997,
+      "elapsed": 0.09925379200103635
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.5504847909997,
+      "t_end_rel": 445.65040320799926,
+      "elapsed": 0.09991841699957149
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.6663519579997,
+      "t_end_rel": 445.7645297499985,
+      "elapsed": 0.09817779199875076
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.78003174999867,
+      "t_end_rel": 445.87496208299854,
+      "elapsed": 0.09493033299986564
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.8891785830001,
+      "t_end_rel": 445.97450204099914,
+      "elapsed": 0.08532345799903851
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 445.98805533299856,
+      "t_end_rel": 446.0674969159991,
+      "elapsed": 0.0794415830005164
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.08045758299886,
+      "t_end_rel": 446.1597609579985,
+      "elapsed": 0.0793033749996539
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.17122195799857,
+      "t_end_rel": 446.23875283300004,
+      "elapsed": 0.06753087500146648
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.250048291,
+      "t_end_rel": 446.31655899999896,
+      "elapsed": 0.06651070899897604
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.3273609579992,
+      "t_end_rel": 446.3886815829992,
+      "elapsed": 0.06132062500000757
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.3990633329995,
+      "t_end_rel": 446.45940233299916,
+      "elapsed": 0.06033899999965797
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.4697479999995,
+      "t_end_rel": 446.5297883329986,
+      "elapsed": 0.060040332999051316
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.53947587499897,
+      "t_end_rel": 446.59393379099856,
+      "elapsed": 0.05445791599959193
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.6031665829996,
+      "t_end_rel": 446.65642449999905,
+      "elapsed": 0.053257916999427835
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.6654193329996,
+      "t_end_rel": 446.71684562500013,
+      "elapsed": 0.05142629200054216
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.72575770799995,
+      "t_end_rel": 446.7749782079991,
+      "elapsed": 0.049220499999137246
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.78377104099854,
+      "t_end_rel": 446.83415737499854,
+      "elapsed": 0.05038633399999526
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 446.8569856659997,
+      "t_end_rel": 446.9906436659985,
+      "elapsed": 0.13365799999883166
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.0108037909995,
+      "t_end_rel": 447.12635629099896,
+      "elapsed": 0.11555249999946682
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.14397229099995,
+      "t_end_rel": 447.25448991600024,
+      "elapsed": 0.11051762500028417
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.27237491599954,
+      "t_end_rel": 447.3785898749993,
+      "elapsed": 0.10621495899977162
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.395151499999,
+      "t_end_rel": 447.4952402079998,
+      "elapsed": 0.10008870800083969
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.511765457999,
+      "t_end_rel": 447.61086720799904,
+      "elapsed": 0.09910175000004529
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.6225869579994,
+      "t_end_rel": 447.69356191599945,
+      "elapsed": 0.07097495800007891
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.7048529579988,
+      "t_end_rel": 447.7699210409992,
+      "elapsed": 0.06506808300036937
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.7800522910002,
+      "t_end_rel": 447.8407999579995,
+      "elapsed": 0.060747666999304784
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.8502468329989,
+      "t_end_rel": 447.90326891599943,
+      "elapsed": 0.0530220830005419
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.9118298329995,
+      "t_end_rel": 447.9646540829999,
+      "elapsed": 0.052824250000412576
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 447.97318837499915,
+      "t_end_rel": 448.0239416659988,
+      "elapsed": 0.0507532909996371
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.0320195409986,
+      "t_end_rel": 448.0796538750001,
+      "elapsed": 0.04763433400148642
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.0876412079997,
+      "t_end_rel": 448.1337772499992,
+      "elapsed": 0.04613604199948895
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.1411452499997,
+      "t_end_rel": 448.1846528749993,
+      "elapsed": 0.04350762499962002
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.19219291599984,
+      "t_end_rel": 448.2352994159992,
+      "elapsed": 0.043106499999339576
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.24215391599864,
+      "t_end_rel": 448.28310283300016,
+      "elapsed": 0.04094891700151493
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.28997383299975,
+      "t_end_rel": 448.32892162499957,
+      "elapsed": 0.03894779199981713
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.3356009580002,
+      "t_end_rel": 448.3753479999996,
+      "elapsed": 0.03974704199936241
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.3821383329996,
+      "t_end_rel": 448.4211849579988,
+      "elapsed": 0.03904662499917322
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.4274833749987,
+      "t_end_rel": 448.46505974999855,
+      "elapsed": 0.03757637499984412
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.4713248749995,
+      "t_end_rel": 448.5082185829997,
+      "elapsed": 0.03689370800020697
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.51426187499965,
+      "t_end_rel": 448.55076958300015,
+      "elapsed": 0.036507708000499406
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.5559212909993,
+      "t_end_rel": 448.58628233299896,
+      "elapsed": 0.030361041999640292
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.59097491600005,
+      "t_end_rel": 448.6192542079989,
+      "elapsed": 0.028279291998842382
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.6239864580002,
+      "t_end_rel": 448.6522585829989,
+      "elapsed": 0.02827212499869347
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.65679958299916,
+      "t_end_rel": 448.6851297909998,
+      "elapsed": 0.028330208000625134
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.68981020799947,
+      "t_end_rel": 448.71787291599867,
+      "elapsed": 0.0280627079991973
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.7222943329998,
+      "t_end_rel": 448.7491576659995,
+      "elapsed": 0.02686333299971011
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.75313795799957,
+      "t_end_rel": 448.777319625,
+      "elapsed": 0.024181667000448215
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.7915284999999,
+      "t_end_rel": 448.8785770409995,
+      "elapsed": 0.08704854099960357
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.8904817499988,
+      "t_end_rel": 448.95851975000005,
+      "elapsed": 0.06803800000125193
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 448.968819791,
+      "t_end_rel": 449.0264141659991,
+      "elapsed": 0.05759437499909836
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.03653462500006,
+      "t_end_rel": 449.09425079099856,
+      "elapsed": 0.05771616599849949
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.1041541659997,
+      "t_end_rel": 449.1603047079989,
+      "elapsed": 0.05615054199915903
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.1692977909988,
+      "t_end_rel": 449.22084716599966,
+      "elapsed": 0.05154937500083179
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.22990599999866,
+      "t_end_rel": 449.2813955829988,
+      "elapsed": 0.05148958300014783
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.29030654099915,
+      "t_end_rel": 449.34235720799916,
+      "elapsed": 0.05205066700000316
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.3512469159996,
+      "t_end_rel": 449.4020834999992,
+      "elapsed": 0.05083658399962587
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.41072512499886,
+      "t_end_rel": 449.46121974999915,
+      "elapsed": 0.05049462500028312
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.46976770799847,
+      "t_end_rel": 449.5184684579999,
+      "elapsed": 0.04870075000144425
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.5267547909989,
+      "t_end_rel": 449.5742995410001,
+      "elapsed": 0.047544750001179636
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.5821037499991,
+      "t_end_rel": 449.6274922909997,
+      "elapsed": 0.04538854100064782
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.63491416599936,
+      "t_end_rel": 449.6784438750001,
+      "elapsed": 0.043529709000722505
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.68560808300026,
+      "t_end_rel": 449.72847075000027,
+      "elapsed": 0.042862667000008514
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.73556316599934,
+      "t_end_rel": 449.777741291,
+      "elapsed": 0.042178125000646105
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.78403366599923,
+      "t_end_rel": 449.82008320800014,
+      "elapsed": 0.03604954200091015
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.8261469579993,
+      "t_end_rel": 449.8628384579988,
+      "elapsed": 0.03669149999950605
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.86874033299864,
+      "t_end_rel": 449.902790832999,
+      "elapsed": 0.034050500000375905
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.9081255000001,
+      "t_end_rel": 449.9391994580001,
+      "elapsed": 0.03107395799997903
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.9442922500002,
+      "t_end_rel": 449.974536791,
+      "elapsed": 0.030244540999774472
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 449.9795696249985,
+      "t_end_rel": 450.00788724999984,
+      "elapsed": 0.028317625001363922
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.01291033300004,
+      "t_end_rel": 450.0432949999995,
+      "elapsed": 0.030384666999452747
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.0477114999994,
+      "t_end_rel": 450.07382983299976,
+      "elapsed": 0.0261183330003405
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.0782589999999,
+      "t_end_rel": 450.1037037499991,
+      "elapsed": 0.02544474999922386
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.1080530829986,
+      "t_end_rel": 450.133929874999,
+      "elapsed": 0.02587679200041748
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.1381794579993,
+      "t_end_rel": 450.16364424999847,
+      "elapsed": 0.025464791999183944
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.1678869159987,
+      "t_end_rel": 450.19271474999914,
+      "elapsed": 0.024827834000461735
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.1968338329989,
+      "t_end_rel": 450.2216335409994,
+      "elapsed": 0.024799708000500686
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.22571375000007,
+      "t_end_rel": 450.2509824159988,
+      "elapsed": 0.02526866599873756
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.26406258299903,
+      "t_end_rel": 450.3424721249994,
+      "elapsed": 0.07840954200037231
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.34753099999944,
+      "t_end_rel": 450.37749679099943,
+      "elapsed": 0.02996579099999508
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.3812259159986,
+      "t_end_rel": 450.4033375409999,
+      "elapsed": 0.022111625001343782
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.4064345409988,
+      "t_end_rel": 450.42544704099964,
+      "elapsed": 0.01901250000082655
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.4277745829986,
+      "t_end_rel": 450.44158641600006,
+      "elapsed": 0.013811833001454943
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.4436554999993,
+      "t_end_rel": 450.457444665999,
+      "elapsed": 0.013789165999696706
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.45945191600003,
+      "t_end_rel": 450.47277224999925,
+      "elapsed": 0.013320333999217837
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.4742576659992,
+      "t_end_rel": 450.48473874999945,
+      "elapsed": 0.010481084000275587
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.48616412499905,
+      "t_end_rel": 450.4960529159998,
+      "elapsed": 0.00988879100077611
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.497332166,
+      "t_end_rel": 450.50608316599937,
+      "elapsed": 0.008750999999392661
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.5069450409992,
+      "t_end_rel": 450.5141331249997,
+      "elapsed": 0.007188084000517847
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.5149307499996,
+      "t_end_rel": 450.52076987500004,
+      "elapsed": 0.0058391250004206086
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.52155133299857,
+      "t_end_rel": 450.5273865829986,
+      "elapsed": 0.005835250000018277
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.52811762499914,
+      "t_end_rel": 450.533179,
+      "elapsed": 0.005061375000877888
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.5337773329993,
+      "t_end_rel": 450.53831199999877,
+      "elapsed": 0.0045346669994614786
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.53872441599924,
+      "t_end_rel": 450.54146624999885,
+      "elapsed": 0.002741833999607479
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.541860583,
+      "t_end_rel": 450.5446119579992,
+      "elapsed": 0.002751374999206746
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.5927829579996,
+      "t_end_rel": 450.8655855830002,
+      "elapsed": 0.27280262500062236
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 450.9040872909991,
+      "t_end_rel": 451.1242379159994,
+      "elapsed": 0.2201506250003149
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 451.15947137500007,
+      "t_end_rel": 451.36009874999945,
+      "elapsed": 0.2006273749993852
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 451.39455104099943,
+      "t_end_rel": 451.58809404099884,
+      "elapsed": 0.1935429999994085
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 451.6202062499997,
+      "t_end_rel": 451.802298790999,
+      "elapsed": 0.1820925409992924
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 451.82933545800006,
+      "t_end_rel": 451.98546158299905,
+      "elapsed": 0.15612612499899114
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.0114468749998,
+      "t_end_rel": 452.1622755829994,
+      "elapsed": 0.150828707999608
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.18682791599895,
+      "t_end_rel": 452.32982191599876,
+      "elapsed": 0.14299399999981688
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.35241579099966,
+      "t_end_rel": 452.4817670829998,
+      "elapsed": 0.12935129200013762
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.5033411659988,
+      "t_end_rel": 452.63333474999854,
+      "elapsed": 0.1299935839997488
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.65387145800014,
+      "t_end_rel": 452.77541762500005,
+      "elapsed": 0.12154616699990584
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.7957994999997,
+      "t_end_rel": 452.91471270799957,
+      "elapsed": 0.11891320799986715
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 452.93430137499854,
+      "t_end_rel": 453.0481457499991,
+      "elapsed": 0.11384437500055355
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.06590895799854,
+      "t_end_rel": 453.170963999999,
+      "elapsed": 0.10505504200045834
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.18786620799983,
+      "t_end_rel": 453.285477333,
+      "elapsed": 0.09761112500018498
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.30181637500027,
+      "t_end_rel": 453.3972719159992,
+      "elapsed": 0.09545554099895526
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.4132048329993,
+      "t_end_rel": 453.5056832499995,
+      "elapsed": 0.09247841700016579
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.5215046249996,
+      "t_end_rel": 453.61567874999855,
+      "elapsed": 0.09417412499897182
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.63116704099957,
+      "t_end_rel": 453.723898708,
+      "elapsed": 0.09273166700040747
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.73792116599907,
+      "t_end_rel": 453.8212079999994,
+      "elapsed": 0.08328683400031878
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.8346994579988,
+      "t_end_rel": 453.9153498329997,
+      "elapsed": 0.08065037500091421
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 453.9287189159986,
+      "t_end_rel": 454.00722558300004,
+      "elapsed": 0.07850666700142028
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.02024729099867,
+      "t_end_rel": 454.09637349999866,
+      "elapsed": 0.07612620899999456
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.1085458749985,
+      "t_end_rel": 454.17972349999945,
+      "elapsed": 0.07117762500092795
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.19016762499996,
+      "t_end_rel": 454.25021204099903,
+      "elapsed": 0.06004441599907295
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.2592853749993,
+      "t_end_rel": 454.31126641599985,
+      "elapsed": 0.05198104100054479
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.31988137499866,
+      "t_end_rel": 454.37068312500014,
+      "elapsed": 0.050801750001483015
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.3790211249998,
+      "t_end_rel": 454.4258055829996,
+      "elapsed": 0.046784457999820006
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.4340731249995,
+      "t_end_rel": 454.4811123749987,
+      "elapsed": 0.047039249999215826
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.4891986249986,
+      "t_end_rel": 454.53480266599945,
+      "elapsed": 0.0456040410008427
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.5532175829994,
+      "t_end_rel": 454.6660433749985,
+      "elapsed": 0.1128257919990574
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.67860420800025,
+      "t_end_rel": 454.7552092499991,
+      "elapsed": 0.07660504199884599
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.76583537499937,
+      "t_end_rel": 454.8284260829987,
+      "elapsed": 0.06259070799933397
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.8374555829996,
+      "t_end_rel": 454.8891577909999,
+      "elapsed": 0.051702208000278915
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.8974164579995,
+      "t_end_rel": 454.94539783300024,
+      "elapsed": 0.047981375000745174
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 454.95335079100005,
+      "t_end_rel": 455.00143562499943,
+      "elapsed": 0.04808483399938268
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.0083769159992,
+      "t_end_rel": 455.0493048749995,
+      "elapsed": 0.040927959000327974
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.0557546250002,
+      "t_end_rel": 455.0937189159995,
+      "elapsed": 0.0379642909992981
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.10023366599853,
+      "t_end_rel": 455.13849591599865,
+      "elapsed": 0.03826225000011618
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.144541665999,
+      "t_end_rel": 455.18166141599977,
+      "elapsed": 0.037119750000783824
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.1872509579989,
+      "t_end_rel": 455.22068712500004,
+      "elapsed": 0.033436167001127615
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.22593462499935,
+      "t_end_rel": 455.25700166599927,
+      "elapsed": 0.031067040999914752
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.26226583300013,
+      "t_end_rel": 455.2943929159992,
+      "elapsed": 0.03212708299906808
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.2987185000002,
+      "t_end_rel": 455.32491070799915,
+      "elapsed": 0.02619220799897448
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.3288385830001,
+      "t_end_rel": 455.35080045799987,
+      "elapsed": 0.021961874999760767
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.35459904100026,
+      "t_end_rel": 455.3781092499994,
+      "elapsed": 0.02351020899914147
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.3818602079991,
+      "t_end_rel": 455.4026034159997,
+      "elapsed": 0.020743208000567392
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.40621379099866,
+      "t_end_rel": 455.4288995829993,
+      "elapsed": 0.02268579200062959
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.43251324999983,
+      "t_end_rel": 455.4546863329997,
+      "elapsed": 0.02217308299987053
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.45793612499983,
+      "t_end_rel": 455.47861704099887,
+      "elapsed": 0.020680915999037097
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.48159129099986,
+      "t_end_rel": 455.499578166,
+      "elapsed": 0.017986875000133296
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.50243308300014,
+      "t_end_rel": 455.5208384999987,
+      "elapsed": 0.018405416998575674
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.5237207909995,
+      "t_end_rel": 455.5416881659985,
+      "elapsed": 0.017967374998988817
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.54426950000015,
+      "t_end_rel": 455.55938245799916,
+      "elapsed": 0.015112957999008358
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.5619004579985,
+      "t_end_rel": 455.57824191599866,
+      "elapsed": 0.01634145800016995
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.5806749579988,
+      "t_end_rel": 455.5967431249992,
+      "elapsed": 0.01606816700041236
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.59899287499866,
+      "t_end_rel": 455.6132758329986,
+      "elapsed": 0.014282957999967039
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.61533645799864,
+      "t_end_rel": 455.62845933300014,
+      "elapsed": 0.013122875001499779
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.63045349999993,
+      "t_end_rel": 455.6420306660002,
+      "elapsed": 0.011577166000279249
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.64393374999963,
+      "t_end_rel": 455.6568499999994,
+      "elapsed": 0.01291624999976193
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.66464229099984,
+      "t_end_rel": 455.7067852079999,
+      "elapsed": 0.042142917000091984
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.7125000830001,
+      "t_end_rel": 455.74550941599955,
+      "elapsed": 0.03300933299942699
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.7505363330001,
+      "t_end_rel": 455.7794563749994,
+      "elapsed": 0.02892004199929943
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.7833871249986,
+      "t_end_rel": 455.80653687499944,
+      "elapsed": 0.023149750000811764
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.8101867079986,
+      "t_end_rel": 455.83281483300016,
+      "elapsed": 0.022628125001574517
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.8361593749996,
+      "t_end_rel": 455.8563365409991,
+      "elapsed": 0.020177165999484714
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.8590630409999,
+      "t_end_rel": 455.8763419579991,
+      "elapsed": 0.01727891699920292
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.8789414160001,
+      "t_end_rel": 455.89524645799975,
+      "elapsed": 0.016305041999657988
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.89629174999936,
+      "t_end_rel": 455.90329783299967,
+      "elapsed": 0.007006083000305807
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.90423008299877,
+      "t_end_rel": 455.91060629099957,
+      "elapsed": 0.006376208000801853
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.91140325000015,
+      "t_end_rel": 455.9171982079988,
+      "elapsed": 0.005794957998659811
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.9175752499996,
+      "t_end_rel": 455.92048441599945,
+      "elapsed": 0.0029091659998812247
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 455.9470895409995,
+      "t_end_rel": 456.10049737499867,
+      "elapsed": 0.1534078339991538
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.1231200000002,
+      "t_end_rel": 456.25657262499954,
+      "elapsed": 0.13345262499933597
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.26419087499926,
+      "t_end_rel": 456.3087531659985,
+      "elapsed": 0.04456229099923803
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.31599795799957,
+      "t_end_rel": 456.35850537499937,
+      "elapsed": 0.04250741699979699
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.36460174999957,
+      "t_end_rel": 456.40145720799956,
+      "elapsed": 0.036855457999990904
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.4056596249993,
+      "t_end_rel": 456.4298787909993,
+      "elapsed": 0.024219165999966208
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.4339114579998,
+      "t_end_rel": 456.4586756659992,
+      "elapsed": 0.024764207999396604
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.4624551249999,
+      "t_end_rel": 456.4849812079992,
+      "elapsed": 0.02252608299932035
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.48871883299944,
+      "t_end_rel": 456.5106224579995,
+      "elapsed": 0.021903625000049942
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.5127564579998,
+      "t_end_rel": 456.5271335409998,
+      "elapsed": 0.014377082999999402
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.5289418329994,
+      "t_end_rel": 456.5412534579991,
+      "elapsed": 0.012311624999711057
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.54301041599865,
+      "t_end_rel": 456.55470262499875,
+      "elapsed": 0.011692209000102594
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.55645187499977,
+      "t_end_rel": 456.5682099159985,
+      "elapsed": 0.011758040998756769
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.5693540409993,
+      "t_end_rel": 456.577813124999,
+      "elapsed": 0.008459083999696304
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.57838012499997,
+      "t_end_rel": 456.5825243749987,
+      "elapsed": 0.004144249998716987
+    },
+    {
+      "stage": "sherpa.embedding.compute",
+      "t_start_rel": 456.58299245799935,
+      "t_end_rel": 456.58640645800006,
+      "elapsed": 0.0034140000007027993
+    },
+    {
+      "stage": "cluster_merge.apply",
+      "t_start_rel": 443.07565720799903,
+      "t_end_rel": 456.58676304099936,
+      "elapsed": 13.511105833000329
+    }
+  ],
+  "wall": 457.0238298329987,
+  "meta": {
+    "label": "4spk-44min",
+    "audio_path": "/Users/zhanglixing/Dev/projects/250729_funasr_spk_server/funasr_spk_server/tmp_long_audio/eval_set/audio_4spk.m4a",
+    "wall": 453.77824062500076,
+    "duration": 2625.89825,
+    "rtf": 0.17280876767597553,
+    "n_segments": 298,
+    "speakers": [
+      "Speaker17",
+      "Speaker3",
+      "Speaker5",
+      "Speaker6",
+      "Speaker71"
+    ],
+    "num_threads": 4,
+    "provider": "cpu",
+    "onnx_provider": "COREML_ANE_FE",
+    "coreml_asr_patch": false,
+    "asr_text_len": 13753
+  }
+}

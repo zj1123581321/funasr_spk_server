@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from loguru import logger
 from funasr import AutoModel
-from src.models.schemas import TranscriptionSegment, TranscriptionResult
+from src.models.schemas import TranscribeOptions, TranscriptionSegment, TranscriptionResult
 from src.utils.file_utils import convert_to_wav, get_audio_duration
 from src.core.device_manager import DeviceManager
 from src.core.config import config as global_config
@@ -134,9 +134,16 @@ class FunASRTranscriber:
         task_id: str,
         progress_callback: Optional[callable] = None,
         enable_speaker: bool = True,
-        output_format: str = "json"
+        output_format: str = "json",
+        options: Optional["TranscribeOptions"] = None,
     ) -> Union[TranscriptionResult, str, Dict[str, Any]]:
-        """转录音频文件 - 使用与测试脚本相同的方法"""
+        """转录音频文件 - 使用与测试脚本相同的方法
+
+        options: per-request 转录选项（仅为与 Qwen3 transcribe 签名对齐，由
+        task_manager 统一透传）。FunASR 引擎不消费 language；diarize=False 的
+        语义由 serve 层出口投影实现（D4: cam++ 提取无 per-call 开关，照算后
+        投影抹 speaker），引擎内接受后忽略，options 不进 funasr 任务文件。
+        """
         if not self.is_initialized:
             await self.initialize()
         
@@ -311,8 +318,10 @@ class FunASRTranscriber:
                     logger.debug(f"[{task_id}] 发送进度更新: 100% (SRT格式)")
                 
                 logger.info(f"转录完成(SRT格式): 耗时{processing_time:.2f}秒")
-                
+
                 # 返回包含原始结果的字典，以便调用者可以保存缓存
+                # segments: SRT 模式也携真 segments(与 JSON 同源解析), 缓存存真 segments
+                # 才能支撑后续投影/重渲染 (T-B). SRT content 本身仍由 raw sentence_info 生成.
                 return {
                     "format": "srt",
                     "content": srt_content,
@@ -320,7 +329,8 @@ class FunASRTranscriber:
                     "file_hash": file_hash,
                     "duration": duration,
                     "processing_time": processing_time,
-                    "raw_result": result  # 保存原始结果用于缓存
+                    "raw_result": result,  # 保存原始结果用于缓存
+                    "segments": self._parse_and_merge_segments(result),
                 }
             else:
                 # JSON格式：原有逻辑，合并相同说话人的连续句子

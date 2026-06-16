@@ -1,0 +1,15 @@
+{
+  "tag": "verify_phase3_n1_with_workaround",
+  "mode": "n1",
+  "num_threads": 4,
+  "provider": "cpu",
+  "onnx_provider": "COREML_ANE_FULL",
+  "coreml_asr_patch": false,
+  "wall_total": 40.829405069351196,
+  "tasks": {
+    "4spk-44min": {
+      "error": "no json",
+      "rc": -11
+    }
+  }
+}

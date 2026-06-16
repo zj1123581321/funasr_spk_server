@@ -5,10 +5,48 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field, validator
+from typing import Dict, Any, Optional, List, Tuple, Literal
+from pydantic import BaseModel, Field, validator, model_validator
 from loguru import logger
 from dotenv import load_dotenv
+
+
+# ==================== FUNASR_PROFILE 套餐 (A1 治理) ====================
+# 切平台 / 切环境一句 env 搞定: FUNASR_PROFILE=mac_prod / mac_dev / cuda_prod / cuda_dev
+# 优先级: defaults < config.json < profile < env (env 仍可覆盖 profile)
+# profile 覆盖 config.json 已有字段, 启动日志会列出被覆盖的字段防止"惊讶感"
+# pool_size 全 profile 默认 1 (2026-06-10 用户拍板):
+# - 3060 12GB 实测 pool=2 + word_align 双 MMS CUDA session 撞 BFCArena OOM
+#   (fallback 虽不挂但词级时间戳静默丢失), 单实例稳定可预期
+# - 并发需求再用 FUNASR_QWEN3_POOL_SIZE env 按机器显存/内存显式开
+PROFILES: Dict[str, Dict[str, Any]] = {
+    "mac_prod": {
+        "server": {"port": 8767},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
+    },
+    "mac_dev": {
+        "server": {"port": 8867},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
+        "logging": {"level": "DEBUG"},
+    },
+    # CUDA word_align 仅 +1% RTF (3060 实测, spikes/qwen3_word_timestamp/SUMMARY.md),
+    # 几乎免费, profile 默认开词级时间戳 (provider="auto" 在 cuda runtime 自动走 CUDA EP).
+    # Mac profile 不开 (CPU 上 +17% RTF). env FUNASR_QWEN3_WORD_ALIGN_ENABLED 仍可覆盖.
+    # 前提: CUDA 机器须预下 MMS 模型 (scripts/download_qwen3_models.sh --word-align) +
+    #       修 onnxruntime-gpu 被覆盖 (见 docs/部署.md 五节).
+    "cuda_prod": {
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
+    },
+    "cuda_dev": {
+        "server": {"port": 8867},
+        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
+        "logging": {"level": "DEBUG"},
+    },
+}
 
 
 class ServerConfig(BaseModel):
@@ -48,6 +86,146 @@ class FunASRConfig(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class Qwen3Config(BaseModel):
+    """Qwen3-Diarize 引擎配置(C3 落地)
+
+    服务器启动时,如果 transcription.default_engine == "qwen3", 这些字段会被
+    Qwen3DiarizeTranscriber 读取并构造引擎.
+
+    模型路径默认指向 scripts/download_qwen3_models.sh 落地的位置.
+    """
+    # 模型路径
+    asr_model_dir: str = "./models/qwen3_diarize/Qwen3-ASR-1.7B"
+    segmentation_model: str = "./models/qwen3_diarize/sherpa/pyannote-segmentation-3.0/model.onnx"
+    embedding_model: str = "./models/qwen3_diarize/sherpa/nemo-titanet-small/embedding.onnx"
+
+    # Diarize preset (PoC 报告 preset=auto 普适最优)
+    num_speakers: Optional[int] = None    # None = 自适应聚类
+    cluster_threshold: float = 0.9
+    # A2 治理 (D1): num_threads / provider 默认 "auto" → Pydantic model_validator 在 load 时
+    # 一次性解析为具体 int / "cpu", 下游 (transcriber:58/237/399/575, inproc_pool:117) 永远拿到 int.
+    # auto 解析规则:
+    #   num_threads="auto" → detect_runtime().recommend_num_threads()
+    #     · MacRuntime  → 4 (PoC: t=4 比 t=8 wall -11.5%, 10 cores M1 Max + pool=2 最优)
+    #     · CudaRuntime → 2/4 按 vCPU 数 (≤4 vCPU=2, ≥5=4, 详见 runtime.py)
+    #     · CpuRuntime  → 同 cuda 按 vCPU
+    #   provider="auto" → "cpu" (sherpa SpeakerEmbeddingExtractor 在所有 runtime 都 cpu;
+    #                            cuda 上 sherpa diarize 已被 ort_cuda 替代, embedding 只在
+    #                            cluster_centroid_merge 用一次)
+    # 显式 int / 显式 provider 字符串不被覆盖.
+    # 详见 spikes/qwen3_mac_hw_accel/num_threads_tuning.md + docs/开发/config-治理-新session-prompt.md
+    num_threads: int | str = "auto"
+    provider: str = "auto"
+
+    # Phase 2/3 escape hatch: 生产环境如果 ANE 出问题, 改 env 一键回退 CPU
+    # auto: build_engine_config 按平台感知 (macOS → COREML_ANE_FE, 其他 → CPU)
+    # cpu: 强制 CPU (关掉 ANE)
+    # coreml_ane_fe: Phase 2 — frontend ANE + backend ONNX CPU (生产稳定路径, 默认)
+    # coreml_ane_full: Phase 3 — frontend ANE + backend mlpackage ANE (需 .mlpackage)
+    #                  ⚠️ macOS 26 Beta + diarize pipeline 端到端 SIGSEGV 已知问题
+    #                  (CoreML MLE5ExecutionStream lingering reset 与 sherpa-onnx
+    #                   libdispatch worker thread 抢 Python GIL race);
+    #                  单 audio ASR (不带 diarize) parity 通过 cos=0.9891
+    #                  Phase 3 路径暂作 dev 实验, 不切生产默认
+    # 可通过 FUNASR_QWEN3_ASR_ENCODER_PROVIDER 环境变量覆盖
+    asr_encoder_provider: str = "auto"
+
+    # ASR 参数
+    language: str = "Chinese"
+    temperature: float = 0.4
+
+    # PR2: short-segment guard 后处理
+    # 默认开启 (PoC v12 数据显示对所有 baseline 都正向, 见 docs/开发/PR4-149min校对稿对比分析.md)
+    short_segment_guard_enabled: bool = True
+    short_segment_drop_sec: float = 1.5
+    short_segment_aba_max_mid_sec: float = 1.5
+    short_segment_merge_same: bool = True
+
+    # PR3: cluster centroid merge (多人场景修复, 加载 audio + sherpa embedding extractor 算 centroid)
+    # 默认开启 (PoC eval_set 5 个样本 1/2/3+/4/6 speaker 全过, 见 docs/开发/PR4-*)
+    cluster_merge_enabled: bool = True
+    cluster_merge_min_main_share: float = 0.03
+    cluster_merge_relabel_threshold: float = 0.55
+    cluster_merge_main_threshold: float = 0.78
+    cluster_merge_dominant_share: float = 0.6
+    cluster_merge_dominant_threshold: float = 0.6
+    # dominant 模式吃相似 minor cluster 的阈值 (修 over-detect 兜底, 见
+    # docs/开发/archive/spk-over-detect-归因调研结果.md). 默认 0.5, 比 relabel(0.55) 宽松.
+    cluster_merge_dominant_minor_threshold: float = 0.5
+
+    # silence-aware 段切点对齐 (携进自 spike 405abf6, 见 spikes/qwen3_silence_align/SUMMARY.md)
+    # 在 merge_asr_chunks_and_diarize 输出后做 snap-to-silence 后处理:
+    #   60s podcast: align_ratio 54.55% → 73.68% (+19pp)
+    #   60min long: 27.41% → 60.73% (+33pp)
+    # tolerance=2.0 是用户拍板的平衡值 (sweep 数据见 SUMMARY)
+    # min_segment_dur=0.1 保护吸附后段不退化成 0 时长
+    # VAD 默认 -25dB/0.2s (生产 FunASR 默认 -35dB/0.8s 在 podcast 完全失效, 必须改)
+    silence_align_enabled: bool = True
+    silence_align_tolerance_sec: float = 2.0
+    silence_align_min_segment_dur_sec: float = 0.1
+    silence_vad_noise_db: str = "-25dB"
+    silence_vad_min_silence_sec: float = 0.20
+
+    # nospk 分层切段 (diarize 开关 D5+T1): diarize=false 时段 = ASR ~40s chunk,
+    # 对超长段做两层 fallback 切分 (有 words 词隙切 / 无 words 静音切 + char-ratio
+    # 文本归属), 见 src/core/qwen3/segment_split.py.
+    #   - max_segment_sec: 超过此值触发切分 (也是切出片的近似上界, 字幕可用粒度)
+    #   - min_segment_sec: 切出片的最小时长 (吸收 short_segment_guard 的通用清理职责)
+    nospk_split_enabled: bool = True
+    nospk_split_max_segment_sec: float = 12.0
+    nospk_split_min_segment_sec: float = 1.5
+
+    # 词级时间戳 (word_align, MMS-300M CTC-FA): 增量挂 segment.words, 不替换段边界.
+    # 见 docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
+    #   - word_align_enabled: 字段默认关; cuda_prod/cuda_dev profile 默认开 (CUDA 仅 +1% RTF),
+    #     Mac profile 保持关 (CPU +17% RTF). 开启会加载 ~1.2GB MMS ONNX + 改 cache key.
+    #   - word_align_language: ISO 码 (chi/eng/jpn/kor...) 兜底语言, per-request
+    #     language 字段优先. 中英混排用 chi (preprocess_text 对 chi 逐字切, 能吃英文).
+    #   - word_align_model_path: 本地预下的 MMS ONNX 路径 (download_qwen3_models.sh
+    #     从 ~/ctc_forced_aligner/model.onnx 拷过来, 不走 deskpai 运行时下载).
+    #   - word_align_provider: "auto" → runtime.recommend_word_align_provider()
+    #     (Mac/Cpu → CPUExecutionProvider, Cuda → CUDAExecutionProvider). 显式 EP
+    #     字符串不被覆盖. 解析在 word_align wrapper 做 (不在 Pydantic, 区别于 sherpa provider).
+    #   - word_align_batch_size: generate_emissions ONNX 推理 batch.
+    word_align_enabled: bool = False
+    word_align_language: str = "chi"
+    word_align_model_path: str = "./models/qwen3_diarize/ctc_forced_aligner/model.onnx"
+    word_align_provider: str = "auto"
+    word_align_batch_size: int = 16
+
+    # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
+    # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
+    #   - CPU_AND_NE: 默认, frontend ANE + backend mlpackage ANE
+    #     ⚠️ N=2 并发可能跟 frontend ANE 4 路冲突触发 llama.cpp ggml_abort, 用 CPU_AND_GPU 错开
+    #   - CPU_AND_GPU: frontend 独占 ANE, backend 走 Metal GPU
+    #   - ALL: 三路全开 (mac 26 Beta 有 issue, 仅 dev 实验)
+    # encoder_timing_enabled: True 时 encoder 每段打印 mel/frontend/backend 耗时 (排查性能用)
+    backend_mlpackage_units: Literal["CPU_AND_NE", "CPU_AND_GPU", "ALL"] = "CPU_AND_NE"
+    encoder_timing_enabled: bool = False
+
+    model_config = {"protected_namespaces": ()}
+
+    @model_validator(mode="after")
+    def _resolve_auto_sentinels(self):
+        """A2 治理 (D1): num_threads/provider "auto" 在 model load 时一次性解析.
+
+        解析后字段类型保证是 int / 具体字符串, 下游消费点 (5 处) 零改动.
+        数字字符串 (env override "4" 走 _override_if_set int converter 已是 int, 这里兜底).
+        """
+        if isinstance(self.num_threads, str):
+            v = self.num_threads.strip().lower()
+            if v == "auto":
+                from src.core.runtime import detect_runtime
+                self.num_threads = detect_runtime().recommend_num_threads()
+            else:
+                self.num_threads = int(v)
+        if isinstance(self.provider, str) and self.provider.strip().lower() == "auto":
+            # sherpa SpeakerEmbeddingExtractor 在 cuda runtime 也走 cpu
+            # (sherpa diarize 已被 ort_cuda 接管, embedding 只在 cluster_merge 用一次)
+            self.provider = "cpu"
+        return self
+
+
 class TranscriptionConfig(BaseModel):
     """转录配置"""
     max_concurrent_tasks: int = 2
@@ -62,6 +240,19 @@ class TranscriptionConfig(BaseModel):
     # PR1: ASR 引擎默认选择。upload request 未指定 engine 时走这个。
     # 可通过 FUNASR_DEFAULT_ENGINE 环境变量覆盖。
     default_engine: str = "funasr"
+
+    # PR2: 跨引擎缓存共享开关(默认 True)
+    # True: get_cached_result 先按 (file_hash, engine) 精确查, miss 后回退按 file_hash 查任意 engine 最新行
+    # False: strict 模式, 仅按 (file_hash, engine) 查
+    # 跨引擎 SRT 命中时从 TranscriptionResult.segments 重建(避开 raw_result 引擎特定结构)
+    # 可通过 FUNASR_CACHE_CROSS_ENGINE 环境变量覆盖
+    cache_cross_engine: bool = True
+
+    # PR3: Qwen3 引擎的 worker pool 大小(独立于 max_concurrent_tasks)
+    # FunASR pool 用 max_concurrent_tasks(物理最优 2), Qwen3 pool 用 qwen3_pool_size(PoC v5 sweet spot 3)
+    # 两者独立, 切引擎不需要改 env
+    # 可通过 FUNASR_QWEN3_POOL_SIZE 环境变量覆盖
+    qwen3_pool_size: int = 3
 
     model_config = {"protected_namespaces": ()}
 
@@ -109,6 +300,7 @@ class Config(BaseModel):
     """总配置 - 支持环境变量覆盖"""
     server: ServerConfig = ServerConfig()
     funasr: FunASRConfig = FunASRConfig()
+    qwen3: Qwen3Config = Qwen3Config()
     transcription: TranscriptionConfig = TranscriptionConfig()
     database: DatabaseConfig = DatabaseConfig()
     notification: NotificationConfig = NotificationConfig()
@@ -126,6 +318,9 @@ class Config(BaseModel):
 
         # 从 config.json 加载基础配置
         config_data = cls._load_json_config(config_path)
+
+        # 应用 FUNASR_PROFILE 套餐 (覆盖 config.json, env 仍可覆盖 profile)
+        config_data = cls._apply_profile_defaults(config_data)
 
         # 应用环境变量覆盖
         config_data = cls._apply_env_overrides(config_data)
@@ -172,6 +367,90 @@ class Config(BaseModel):
         return filtered
 
     @classmethod
+    def _validate_engine_runtime(cls, config: "Config", errors: List[str]) -> None:
+        """A3 治理 (D3): 启动时校验 engine ↔ runtime 兼容性.
+
+        触发条件: default_engine=qwen3 且 runtime.validate() 抛 (典型: cuda runtime + ORT EP 缺).
+        Mac/Cpu runtime 的 validate() 是 no-op, 自然不挂.
+
+        per-request engine ≠ default_engine 已被 transcriber_dispatch.py:57 拒,
+        所以这里只查 default_engine, 不需要扫所有可能 engine.
+        """
+        engine = config.transcription.default_engine
+        if engine != "qwen3":
+            return
+        try:
+            from src.core.runtime import detect_runtime
+        except Exception as exc:
+            errors.append(f"无法导入 runtime 模块校验 engine={engine}: {exc}")
+            return
+        runtime = detect_runtime()
+        try:
+            runtime.validate()
+        except RuntimeError as exc:
+            errors.append(
+                f"default_engine={engine} + runtime={runtime.name} 启动校验失败: {exc}. "
+                f"用 FUNASR_RUNTIME=cpu 降级或修依赖 (onnxruntime-gpu / LD_LIBRARY_PATH)."
+            )
+
+    @classmethod
+    def _apply_profile_defaults(cls, config_data: Dict[str, Any]) -> Dict[str, Any]:
+        """应用 FUNASR_PROFILE 套餐 — 在 env override 之前 apply, profile 覆盖 config.json.
+
+        优先级链: defaults < config.json < profile < env
+        - 未设 FUNASR_PROFILE: no-op, 直接返回 config_data
+        - 未知 profile name: warn + ignore, 不挂
+        - 已知 profile: deep-merge 进 config_data, profile 字段覆盖 config.json 已有字段
+
+        启动日志列出被覆盖的字段, 防止"我明明 config.json 写了 X profile 怎么变 Y"的惊讶感.
+        """
+        profile_name = os.getenv("FUNASR_PROFILE", "").strip().lower()
+        if not profile_name:
+            return config_data
+
+        if profile_name not in PROFILES:
+            logger.warning(
+                f"⚠️  FUNASR_PROFILE={profile_name!r} 未知, "
+                f"可选: {list(PROFILES.keys())}. 忽略 profile, 走 config.json + env."
+            )
+            return config_data
+
+        profile_data = PROFILES[profile_name]
+        overridden = cls._deep_merge_profile(config_data, profile_data)
+        logger.info(
+            f"FUNASR_PROFILE={profile_name} applied. "
+            f"覆盖字段 ({len(overridden)}): "
+            + ", ".join(f"{path}({old!r}→{new!r})" for path, old, new in overridden)
+        )
+        return config_data
+
+    @classmethod
+    def _deep_merge_profile(
+        cls,
+        base: Dict[str, Any],
+        override: Dict[str, Any],
+        path: str = "",
+    ) -> List[Tuple[str, Any, Any]]:
+        """递归 deep-merge: override 覆盖 base. 返回 [(path, old_value, new_value), ...] 用于日志."""
+        records: List[Tuple[str, Any, Any]] = []
+        for k, v in override.items():
+            full_path = f"{path}.{k}" if path else k
+            if isinstance(v, dict):
+                base.setdefault(k, {})
+                if not isinstance(base[k], dict):
+                    # base 该 key 不是 dict, 直接覆盖整段
+                    records.append((full_path, base[k], v))
+                    base[k] = v
+                else:
+                    records.extend(cls._deep_merge_profile(base[k], v, full_path))
+            else:
+                old = base.get(k, "(默认)")
+                if old != v:
+                    records.append((full_path, old, v))
+                base[k] = v
+        return records
+
+    @classmethod
     def _apply_env_overrides(cls, config_data: Dict[str, Any]) -> Dict[str, Any]:
         """应用环境变量覆盖"""
 
@@ -190,6 +469,8 @@ class Config(BaseModel):
             config_data["auth"] = {}
         if "logging" not in config_data:
             config_data["logging"] = {}
+        if "qwen3" not in config_data:
+            config_data["qwen3"] = {}
 
         # ==================== 服务器配置 ====================
         cls._override_if_set(config_data["server"], "host", "FUNASR_SERVER_HOST")
@@ -215,6 +496,62 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "task_timeout_minutes", "FUNASR_TASK_TIMEOUT_MINUTES", int)
         cls._override_if_set(config_data["transcription"], "transcription_speed_ratio", "FUNASR_TRANSCRIPTION_SPEED_RATIO", int)
         cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
+        cls._override_if_set(config_data["transcription"], "cache_cross_engine", "FUNASR_CACHE_CROSS_ENGINE", cls._parse_bool)
+        cls._override_if_set(config_data["transcription"], "qwen3_pool_size", "FUNASR_QWEN3_POOL_SIZE", int)
+
+        # ==================== Qwen3-Diarize 配置 ====================
+        cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")
+        cls._override_if_set(config_data["qwen3"], "segmentation_model", "FUNASR_QWEN3_SEGMENTATION_MODEL")
+        cls._override_if_set(config_data["qwen3"], "embedding_model", "FUNASR_QWEN3_EMBEDDING_MODEL")
+        cls._override_if_set(config_data["qwen3"], "cluster_threshold", "FUNASR_QWEN3_CLUSTER_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "num_threads", "FUNASR_QWEN3_NUM_THREADS", int)
+        cls._override_if_set(config_data["qwen3"], "provider", "FUNASR_QWEN3_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "asr_encoder_provider", "FUNASR_QWEN3_ASR_ENCODER_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "language", "FUNASR_QWEN3_LANGUAGE")
+        cls._override_if_set(config_data["qwen3"], "temperature", "FUNASR_QWEN3_TEMPERATURE", float)
+        # PR2 short-segment guard
+        cls._override_if_set(config_data["qwen3"], "short_segment_guard_enabled", "FUNASR_QWEN3_SHORT_GUARD_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "short_segment_drop_sec", "FUNASR_QWEN3_SHORT_DROP_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "short_segment_aba_max_mid_sec", "FUNASR_QWEN3_SHORT_ABA_MAX_MID_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "short_segment_merge_same", "FUNASR_QWEN3_SHORT_MERGE_SAME", cls._parse_bool)
+        # PR3 cluster centroid merge
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_enabled", "FUNASR_QWEN3_CLUSTER_MERGE_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_min_main_share", "FUNASR_QWEN3_CLUSTER_MERGE_MIN_MAIN_SHARE", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_relabel_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_RELABEL_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_main_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_MAIN_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_share", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_SHARE", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_THRESHOLD", float)
+        cls._override_if_set(config_data["qwen3"], "cluster_merge_dominant_minor_threshold", "FUNASR_QWEN3_CLUSTER_MERGE_DOMINANT_MINOR_THRESHOLD", float)
+        # silence-aware align (spike 405abf6)
+        cls._override_if_set(config_data["qwen3"], "silence_align_enabled", "FUNASR_QWEN3_SILENCE_ALIGN_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "silence_align_tolerance_sec", "FUNASR_QWEN3_SILENCE_ALIGN_TOLERANCE_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "silence_align_min_segment_dur_sec", "FUNASR_QWEN3_SILENCE_ALIGN_MIN_SEGMENT_DUR_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "silence_vad_noise_db", "FUNASR_QWEN3_SILENCE_VAD_NOISE_DB")
+        cls._override_if_set(config_data["qwen3"], "silence_vad_min_silence_sec", "FUNASR_QWEN3_SILENCE_VAD_MIN_SILENCE_SEC", float)
+        # nospk 分层切段 (diarize 开关)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_enabled", "FUNASR_QWEN3_NOSPK_SPLIT_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_max_segment_sec", "FUNASR_QWEN3_NOSPK_SPLIT_MAX_SEGMENT_SEC", float)
+        cls._override_if_set(config_data["qwen3"], "nospk_split_min_segment_sec", "FUNASR_QWEN3_NOSPK_SPLIT_MIN_SEGMENT_SEC", float)
+        # 词级时间戳 word_align (MMS-300M CTC-FA)
+        cls._override_if_set(config_data["qwen3"], "word_align_enabled", "FUNASR_QWEN3_WORD_ALIGN_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "word_align_language", "FUNASR_QWEN3_WORD_ALIGN_LANGUAGE")
+        cls._override_if_set(config_data["qwen3"], "word_align_model_path", "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH")
+        cls._override_if_set(config_data["qwen3"], "word_align_provider", "FUNASR_QWEN3_WORD_ALIGN_PROVIDER")
+        cls._override_if_set(config_data["qwen3"], "word_align_batch_size", "FUNASR_QWEN3_WORD_ALIGN_BATCH_SIZE", int)
+        # A2 治理: vendor 字段 (D4)
+        cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
+        cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)
+        # num_speakers: "" 或 "auto" 视为 None(自适应聚类), 否则转 int
+        _num_spk_env = os.getenv("FUNASR_QWEN3_NUM_SPEAKERS")
+        if _num_spk_env is not None:
+            _s = _num_spk_env.strip().lower()
+            if _s in ("", "auto", "none"):
+                config_data["qwen3"]["num_speakers"] = None
+            else:
+                try:
+                    config_data["qwen3"]["num_speakers"] = int(_s)
+                except ValueError:
+                    logger.error(f"FUNASR_QWEN3_NUM_SPEAKERS 必须是整数或 auto/none/空, 当前: {_num_spk_env!r}")
 
         # ==================== 数据库配置 ====================
         # 数据库路径由 FUNASR_DATA_DIR 构建
@@ -293,6 +630,11 @@ class Config(BaseModel):
         # 验证并发任务数
         if config.transcription.max_concurrent_tasks < 1:
             errors.append(f"最大并发任务数必须 >= 1，当前值: {config.transcription.max_concurrent_tasks}")
+
+        # A3 治理 (D3): startup engine ↔ runtime 兼容性 fail-fast
+        # default_engine=qwen3 + cuda runtime + ORT CUDA EP 缺 → 直接挂, 不留到第一个 task 才挂.
+        # per-request engine ≠ default 已被 transcriber_dispatch.py:57 拒, startup 仅查 default 充分.
+        cls._validate_engine_runtime(config, errors)
 
         # 打印警告
         for warning in warnings:

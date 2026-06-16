@@ -26,57 +26,92 @@ def make_request(engine=None, file_hash="abc123") -> FileUploadRequest:
     )
 
 
+@pytest.fixture
+def server_engine_funasr():
+    from src.core.config import config
+    original = config.transcription.default_engine
+    config.transcription.default_engine = "funasr"
+    yield
+    config.transcription.default_engine = original
+
+
+@pytest.fixture
+def server_engine_qwen3():
+    from src.core.config import config
+    original = config.transcription.default_engine
+    config.transcription.default_engine = "qwen3"
+    yield
+    config.transcription.default_engine = original
+
+
 class TestCreateTaskEnginePropagation:
+    """全局唯一引擎模式: request.engine 只能 None/相同, 不同则 reject"""
+
     @pytest.mark.asyncio
-    async def test_engine_from_request_propagates_to_task(self):
+    async def test_engine_from_request_propagates_when_matching_server(self, server_engine_qwen3):
         mgr = TaskManager()
         req = make_request(engine="qwen3")
         task = await mgr.create_task(req, task_id="t1")
         assert task.engine == "qwen3"
 
     @pytest.mark.asyncio
-    async def test_none_engine_falls_back_to_config_default(self, monkeypatch):
-        from src.core.config import config
-        original = config.transcription.default_engine
-        try:
-            config.transcription.default_engine = "funasr"
-            mgr = TaskManager()
-            req = make_request(engine=None)
-            task = await mgr.create_task(req, task_id="t2")
-            assert task.engine == "funasr"
-        finally:
-            config.transcription.default_engine = original
+    async def test_none_engine_falls_back_to_config_default(self, server_engine_funasr):
+        mgr = TaskManager()
+        req = make_request(engine=None)
+        task = await mgr.create_task(req, task_id="t2")
+        assert task.engine == "funasr"
 
     @pytest.mark.asyncio
-    async def test_empty_string_engine_falls_back_to_config_default(self):
-        from src.core.config import config
-        original = config.transcription.default_engine
-        try:
-            config.transcription.default_engine = "funasr"
-            mgr = TaskManager()
-            req = make_request(engine="")
-            task = await mgr.create_task(req, task_id="t3")
-            assert task.engine == "funasr"
-        finally:
-            config.transcription.default_engine = original
+    async def test_empty_string_engine_falls_back_to_config_default(self, server_engine_funasr):
+        mgr = TaskManager()
+        req = make_request(engine="")
+        task = await mgr.create_task(req, task_id="t3")
+        assert task.engine == "funasr"
 
     @pytest.mark.asyncio
-    async def test_default_engine_change_takes_effect_for_new_task(self):
-        from src.core.config import config
-        original = config.transcription.default_engine
-        try:
-            config.transcription.default_engine = "qwen3"
-            mgr = TaskManager()
-            req = make_request(engine=None)
-            task = await mgr.create_task(req, task_id="t4")
-            assert task.engine == "qwen3"
-        finally:
-            config.transcription.default_engine = original
+    async def test_default_engine_change_takes_effect_for_new_task(self, server_engine_qwen3):
+        mgr = TaskManager()
+        req = make_request(engine=None)
+        task = await mgr.create_task(req, task_id="t4")
+        assert task.engine == "qwen3"
+
+
+class TestCreateTaskRejectsMismatch:
+    """跨引擎请求在 create_task 早 reject, 不浪费 cache lookup / 任务排队"""
+
+    @pytest.mark.asyncio
+    async def test_request_qwen3_when_server_funasr_rejects(self, server_engine_funasr):
+        mgr = TaskManager()
+        req = make_request(engine="qwen3")
+        with pytest.raises(ValueError) as exc:
+            await mgr.create_task(req, task_id="tm1")
+        msg = str(exc.value)
+        assert "funasr" in msg
+        assert "qwen3" in msg
+
+    @pytest.mark.asyncio
+    async def test_request_funasr_when_server_qwen3_rejects(self, server_engine_qwen3):
+        mgr = TaskManager()
+        req = make_request(engine="funasr")
+        with pytest.raises(ValueError) as exc:
+            await mgr.create_task(req, task_id="tm2")
+        msg = str(exc.value)
+        assert "funasr" in msg
+        assert "qwen3" in msg
+
+    @pytest.mark.asyncio
+    async def test_mismatch_does_not_create_task(self, server_engine_funasr):
+        """reject 后 mgr.tasks 里不应残留任务(避免内存泄漏 + 状态污染)"""
+        mgr = TaskManager()
+        req = make_request(engine="qwen3")
+        with pytest.raises(ValueError):
+            await mgr.create_task(req, task_id="tm3")
+        assert "tm3" not in mgr.tasks
 
 
 class TestSubmitTaskCacheLookupEngineAware:
     @pytest.mark.asyncio
-    async def test_cache_lookup_includes_engine(self, tmp_path):
+    async def test_cache_lookup_includes_engine(self, server_engine_qwen3, tmp_path):
         """submit_task 触发 cache lookup 时必须传 engine"""
         mgr = TaskManager()
         req = make_request(engine="qwen3", file_hash="h1")

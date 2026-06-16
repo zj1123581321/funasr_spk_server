@@ -18,9 +18,9 @@ setup_logger()
 
 from src.core.database import db_manager
 from src.core.task_manager import task_manager
-# 使用FunASR转录器
-from src.core.funasr_transcriber import get_transcriber
-logger.info("使用FunASR转录器")
+# PR3: 引擎选择通过 dispatch 完成, 主进程不再硬编码 FunASR
+from src.core.transcriber_dispatch import resolve_transcriber
+logger.info(f"使用 ASR 引擎: {config.transcription.default_engine}")
 from src.api.websocket_handler import ws_handler
 from src.utils.notification import send_custom_notification
 from src.utils.platform_utils import log_platform_info, check_system_requirements
@@ -41,10 +41,13 @@ class FunASRServer:
             # 初始化数据库
             await db_manager.init_db()
             
-            # 初始化转录器
-            logger.info("初始化FunASR模型...")
-            transcriber = get_transcriber()
-            await transcriber.initialize()
+            # 初始化转录器 (PR3: 根据 default_engine 选择, FunASR / Qwen3 走同一套 dispatch)
+            engine_name = config.transcription.default_engine
+            logger.info(f"初始化 {engine_name} 引擎...")
+            transcriber = resolve_transcriber(None)  # None → 走 default_engine
+            if hasattr(transcriber, "initialize"):
+                await transcriber.initialize()
+            logger.success(f"{engine_name} 引擎初始化完成")
             
             # 启动任务管理器
             await task_manager.start()

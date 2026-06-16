@@ -9,7 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from src.core.config import config
 from src.core.database import db_manager
-from src.models.schemas import TranscriptionTask, TaskStatus, FileUploadRequest, TranscriptionResult
+from src.models.schemas import (
+    FileUploadRequest,
+    TaskStatus,
+    TranscribeOptions,
+    TranscriptionResult,
+    TranscriptionTask,
+)
 
 
 class TaskManager:
@@ -56,13 +62,26 @@ class TaskManager:
         logger.info("任务管理器已停止")
     
     async def create_task(self, request: FileUploadRequest, task_id: str = None) -> TranscriptionTask:
-        """创建新任务"""
+        """创建新任务
+
+        Raises:
+            ValueError: request.engine 非空且与 server 配置不匹配(全局唯一引擎模式).
+                       错误信息同时含 server engine + requested engine, 客户端可据此调整.
+        """
         # 生成或使用提供的任务ID
         if task_id is None:
             task_id = str(uuid.uuid4())
 
-        # PR1: 解析 ASR 引擎名 —— request 未指定时回退 default_engine
-        engine = (request.engine or "").strip() or config.transcription.default_engine
+        # PR2: 全局唯一引擎 — request.engine 非空时必须等于 server engine, 否则 reject
+        server_engine = config.transcription.default_engine
+        requested = (request.engine or "").strip()
+        if requested and requested != server_engine:
+            raise ValueError(
+                f"Server configured with engine={server_engine!r}, "
+                f"cannot accept engine={requested!r}. "
+                f"Please omit the engine field or set it to {server_engine!r}."
+            )
+        engine = requested or server_engine
 
         # 创建任务对象
         task = TranscriptionTask(
@@ -74,6 +93,7 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
+            options=TranscribeOptions(language=request.language, diarize=request.diarize),
         )
 
         # 保存任务
@@ -96,19 +116,26 @@ class TaskManager:
         # 更新文件路径
         task.file_path = file_path
         
-        # 检查缓存（PR1: cache key 含 engine，避免不同引擎结果互相覆盖）
+        # 检查缓存（cache key 含 engine; word_align / diarize 状态折进 engine tag,
+        # 折维逻辑收拢在 database.cache_params_for, D4）
         if not task.force_refresh:
+            from src.core.database import cache_params_for
+            cache_engine, allow_cross = cache_params_for(task)
             cached_result = await db_manager.get_cached_result(
-                task.file_hash, task.output_format, engine=task.engine
+                task.file_hash, task.output_format,
+                engine=cache_engine, allow_cross_engine=allow_cross,
+                options=task.options,
             )
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
                 task.status = TaskStatus.COMPLETED
-                
+
+                cache_projected = False
                 if task.output_format == "srt":
                     # SRT格式缓存结果
                     if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
                         task.srt_content = cached_result["content"]
+                        cache_projected = bool(cached_result.get("projected"))
                         # 创建简化的结果对象
                         from src.models.schemas import TranscriptionResult
                         task.result = TranscriptionResult(
@@ -124,7 +151,15 @@ class TaskManager:
                 else:
                     # JSON格式缓存结果
                     task.result = cached_result
-                
+                    cache_projected = bool((cached_result.metadata or {}).get("projected"))
+
+                # E2: effective options 回显 (serve 层组装, 不随缓存存取)
+                if task.result is not None:
+                    from src.core.result_projection import build_result_metadata
+                    task.result.metadata = build_result_metadata(
+                        engine=task.engine, options=task.options, projected=cache_projected,
+                    )
+
                 task.completed_at = datetime.now()
                 
                 # 通知完成
@@ -246,39 +281,73 @@ class TaskManager:
                 audio_path=task.file_path,
                 task_id=task_id,
                 progress_callback=progress_callback,
-                output_format=task.output_format
+                output_format=task.output_format,
+                options=task.options,
             )
             
             # 更新任务结果
-            task.status = TaskStatus.COMPLETED
+            # 注: status=COMPLETED 在 task.result 组装完成后才翻转 (见下), 否则
+            # save_result 的 await 窗口里轮询方会看到 COMPLETED 但 result=None.
+            # 缓存写入 tag 与查询同 key (折维收拢在 database.cache_params_for, D4)
+            from src.core.database import cache_params_for
+            cache_engine_tag = cache_params_for(task)[0]
+            fresh_projected = False  # fresh 出口是否做了投影 (funasr 照算路径)
             if task.output_format == "srt":
                 # SRT格式结果
-                task.srt_content = result["content"]
-                
                 # 创建转录结果对象用于缓存
+                # T-B: SRT 模式也存真 segments — qwen3 raw_result 无 sentence_info,
+                # 缓存命中重建 SRT 必须走 segments 路径; 空 segments 会让命中返回空 content.
                 from src.models.schemas import TranscriptionResult
+                srt_segments = result.get("segments") or []
                 transcription_result = TranscriptionResult(
                     task_id=task_id,
                     file_name=result["file_name"],
                     file_hash=result["file_hash"],
                     duration=result["duration"],
-                    segments=[],  # SRT格式不存储片段信息
-                    speakers=[],  # SRT格式不存储说话人列表
+                    segments=srt_segments,
+                    speakers=sorted(set(s.speaker for s in srt_segments if s.speaker)),
                     processing_time=result["processing_time"],
                     error=None
                 )
-                task.result = transcription_result
 
-                # 保存到缓存（PR1: 缓存 key 含 engine，避免与其他引擎结果冲突）
-                await db_manager.save_result(transcription_result, result["raw_result"], engine=task.engine)
+                # 保存到缓存（先于投影: 缓存永远存引擎真算结果, 投影是请求级出口行为）
+                await db_manager.save_result(transcription_result, result["raw_result"], engine=cache_engine_tag)
+
+                # fresh 结果出口投影 (D3 双出口之二): funasr 照算带 speaker,
+                # diarize=false 请求需投影抹 speaker + SRT 重渲染无前缀.
+                # qwen3 原生 nospk 输出 (speakers 已空) 不重渲染, 保留引擎 content.
+                if not task.options.diarize and transcription_result.speakers:
+                    from src.core.result_projection import (
+                        project_result_nospk,
+                        segments_to_srt_text,
+                    )
+                    transcription_result = project_result_nospk(transcription_result)
+                    task.srt_content = segments_to_srt_text(transcription_result.segments)
+                    fresh_projected = True
+                else:
+                    task.srt_content = result["content"]
+                task.result = transcription_result
             else:
                 # JSON格式结果
                 transcription_result, raw_result = result
+
+                # 保存到缓存（先于投影, 同上）
+                await db_manager.save_result(transcription_result, raw_result, engine=cache_engine_tag)
+
+                # fresh 结果出口投影 (funasr 照算路径; qwen3 原生 nospk 幂等跳过)
+                if not task.options.diarize and transcription_result.speakers:
+                    from src.core.result_projection import project_result_nospk
+                    transcription_result = project_result_nospk(transcription_result)
+                    fresh_projected = True
                 task.result = transcription_result
 
-                # 保存到缓存（PR1: 缓存 key 含 engine）
-                await db_manager.save_result(transcription_result, raw_result, engine=task.engine)
-            
+            # E2: effective options 回显 (serve 层组装, 缓存写入已在前完成不被污染)
+            from src.core.result_projection import build_result_metadata
+            task.result.metadata = build_result_metadata(
+                engine=task.engine, options=task.options, projected=fresh_projected,
+            )
+
+            task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
             task.progress = 100
             
@@ -301,7 +370,11 @@ class TaskManager:
                 else:
                     logger.debug(f"保留文件，还有其他任务使用: {task.file_path}")
             
-            logger.info(f"任务完成: {task_id}")
+            # 可观测性: per-task diarize 生效值 + 投影标记 (stats 三维度之一)
+            logger.info(
+                f"任务完成: {task_id} (engine={task.engine}, "
+                f"diarize={task.options.diarize}, projected={fresh_projected})"
+            )
             
         except Exception as e:
             error_msg = str(e)
@@ -381,7 +454,9 @@ class TaskManager:
                     "format": "srt",
                     "content": task.srt_content,
                     "file_name": task.file_name,
-                    "file_hash": task.file_hash
+                    "file_hash": task.file_hash,
+                    # E2: SRT 响应没有 TranscriptionResult 载体, metadata 挂 payload 顶层
+                    "metadata": task.result.metadata if task.result else None,
                 }
             else:
                 result_data = task.result.dict() if task.result else None

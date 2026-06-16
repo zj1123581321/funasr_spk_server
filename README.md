@@ -14,8 +14,14 @@
 - ✅ 原始结果保存，支持格式转换
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
-- ✅ **ASR 引擎可插拔架构**（PR1 落地）：upload request 可指定 engine，当前支持 FunASR，Qwen3 占位待 spike 验证
-- 🍎 **macOS（Apple Silicon）专属**：依赖 MPS GPU 加速，详见 [docs/部署.md](docs/部署.md)
+- ✅ **双 ASR 引擎可选**(全局唯一引擎模式, PR2 落地):
+  - `funasr`: Paraformer-zh + cam++ 说话人识别(生产默认, 高准确率, MPS 加速, multi-process pool N=2)
+  - `qwen3`: Qwen3-ASR 1.7B GGUF + sherpa-onnx speaker diarization(RTF 0.118, 自适应聚类, multi-process pool N=3, PR3 落地)
+    - **多人场景支持** (PR4 落地, 2026-05-16): cluster centroid merge + short-segment guard 后处理
+    - 验证: PoC eval_set 1/2/3+/4/6 speaker 全场景 detected speakers 与真值 ±1
+    - 默认全开, 可用 `FUNASR_QWEN3_CLUSTER_MERGE_ENABLED=false` / `FUNASR_QWEN3_SHORT_GUARD_ENABLED=false` 关闭
+    - **真生产路径 e2e 兜底** (`tests/integration/test_qwen3_server_websocket_e2e.py`): 真 subprocess server + websocket client + 真模型 + 真 cache (1255x 加速验证 + N=2 并发不串台), `FUNASR_RUN_INTEGRATION=1` 启用
+- 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
 
@@ -61,17 +67,23 @@
    - 文件上传和验证
    - 格式转换和清理
 
-6. **Transcriber Dispatch** (`src/core/transcriber_dispatch.py`) — PR1 新增
-   - 根据 task.engine 路由到对应转录器（funasr / qwen3）
-   - 30 行薄函数，未来 PR2 触发后会演进为完整 ASREngine 抽象 + factory
-   - 详见 `docs/开发/重构计划-ASR引擎抽象.md`
+6. **Transcriber Dispatch** (`src/core/transcriber_dispatch.py`)
+   - **全局唯一引擎模式**: 服务器启动时由 `transcription.default_engine` 决定唯一引擎
+   - upload_request.engine 字段严格 validate, 跨引擎请求立即 reject(不入队)
+   - 引擎注册表式扩展, 见 `CLAUDE.md` ASR 引擎章节
+
+7. **Qwen3-Diarize Transcriber** (`src/core/qwen3_transcriber.py`) — PR2 落地
+   - GGUF/ONNX 混合 ASR(vendor: `src/core/vendor/qwen_asr_gguf/`)
+   - sherpa-onnx Speaker Diarization(pyannote-segmentation-3.0 + NeMo TitaNet)
+   - ASR + Diarize 真并行(asyncio.gather), 单任务 wall RTF 0.118 实测
+   - 模型权重落地脚本: `scripts/download_qwen3_models.sh`
 
 ## 快速开始
 
 ### 环境要求
 
 - macOS 13+ (Apple Silicon)
-- Python 3.11.9
+- Python 3.12 (CapsWriter/qwen_asr_gguf 引擎要求, FunASR 也已验证兼容)
 - FFmpeg (`brew install ffmpeg`)
 - 8GB+ 内存（推荐 16GB）
 
@@ -85,7 +97,7 @@ cd funasr_spk_server
 
 2. 创建虚拟环境（macOS）
 ```bash
-python3.11 -m venv venv
+python3.12 -m venv venv  # 或 uv venv venv --python 3.12
 source venv/bin/activate
 ```
 
@@ -94,11 +106,21 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. 配置环境变量
-复制 `.env.example` 为 `.env` 并编辑：
+4. (可选)切到 Qwen3 引擎: 下载模型权重
+```bash
+# 自动模式: 优先从本地 prod 镜像 + spike sherpa 镜像复制, 否则从 GitHub/HuggingFace 下载
+bash scripts/download_qwen3_models.sh
+# 仅 --verify 校验文件就绪
+bash scripts/download_qwen3_models.sh --verify
+```
+落地后, 在 `.env` 或 `config.json` 设 `FUNASR_DEFAULT_ENGINE=qwen3` 启用 Qwen3 引擎.
+默认仍是 FunASR.
+
+5. 配置环境变量
+复制 `.env.example` 为 `.env` 并编辑:
 ```bash
 cp .env.example .env
-# 编辑 .env 文件，配置必需的环境变量
+# 编辑 .env 文件, 配置必需的环境变量
 ```
 
 **必需配置项：**
@@ -114,7 +136,7 @@ cp .env.example .env
 
 详细配置说明见 `.env.example` 文件注释。
 
-5. 启动服务器（前台开发模式）
+6. 启动服务器(前台开发模式)
 ```bash
 python run_server.py
 ```
@@ -142,14 +164,30 @@ python tests/manual/server/test_concurrent_transcription.py [客户端数量]
 PR1 引入真正可跑的 pytest 套件：
 
 ```bash
-# 默认 unit + integration（integration 在无 env 时自动 skip）
+# 默认 unit + integration(integration 在无 env 时自动 skip)
 venv/bin/python -m pytest
 
-# 跑端到端 parity 测试（需要真实加载 FunASR 模型 ~2GB）
+# 跑端到端真实模型测试(FunASR parity + Qwen3 e2e, 需加载 ~2GB FunASR + ~2GB Qwen3 模型)
 FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/
 ```
 
-详见 `tests/conftest.py` 和 `tests/integration/test_parity_funasr_semantic.py`。
+详见:
+- `tests/conftest.py` — 共享 fixture
+- `tests/integration/test_parity_funasr_semantic.py` — FunASR semantic parity
+- `tests/integration/test_qwen3_diarize_e2e.py` — Qwen3 端到端(RTF 0.118 实测)
+
+### 引擎切换与性能对照
+
+| 引擎 | 配置 | RTF (60s 双人音频) | 并发模型 | 优点 | 备注 |
+|------|------|---------------------|----------|------|------|
+| `funasr` | `FUNASR_DEFAULT_ENGINE=funasr` | ~0.1 (MPS) | multi-process pool N=2 (`max_concurrent_tasks`) | 中文高准确率, cam++ 说话人 | 生产默认 |
+| `qwen3`  | `FUNASR_DEFAULT_ENGINE=qwen3` + `download_qwen3_models.sh` | **0.118** (M1 Max) | multi-process pool N=3 (`qwen3_pool_size`, PR3) | Qwen3-ASR 1.7B 准确率夯爆, 自适应聚类 | 需要 ~2.1GB 模型 + Metal GPU; 任务目录 `temp/tasks_qwen3/` 与 FunASR 物理隔离 |
+
+两套池架构相同(`FileBasedProcessPool`), 但 task 目录 + entry 脚本独立, 同机器 FunASR daemon 和 Qwen3 测试可并存. 详见 [docs/部署.md 第五节](docs/部署.md).
+
+服务器**启动时**根据 `FUNASR_DEFAULT_ENGINE` 锁定一个引擎, 全程不切换. upload_request.engine 字段:
+- 不传 / 空 / 等于 server → 通过
+- 不同 → 立即 reject(返回 `upload_error`, 错误信息含 server engine + requested engine)
 
 ### WebSocket API
 
@@ -529,13 +567,14 @@ python tests/server/test_concurrent_transcription.py 8
 
 ## 开发扩展
 
-### 加新的 ASR 引擎（PR1 后推荐路径）
+### 加新的 ASR 引擎
 
-1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂
+详细步骤见 `CLAUDE.md` ASR 引擎章节的"加新引擎的步骤"。简述:
+
+1. 在 `src/core/` 加 `<engine>_transcriber.py`，提供 `get_<engine>_transcriber()` 单例工厂（或 pool wrapper，参考 `qwen3_pool_transcriber.py`）
 2. 在 `src/core/transcriber_dispatch.py` 的 `resolve_transcriber()` 加 `if name == "<engine>"` 分支
 3. 加 unit test 到 `tests/unit/test_transcriber_dispatch.py`
-4. 跑 parity 确认 FunASR 路径无回归
-5. 如确认要长期共存，参考 `docs/开发/重构计划-ASR引擎抽象.md` 第 8 节决定是否触发 PR2
+4. 跑 parity 确认 FunASR + Qwen3 既有路径无回归
 
 ### 自定义输出格式支持
 

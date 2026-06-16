@@ -192,18 +192,27 @@ class WebSocketHandler:
             self.task_connections[task.task_id].add(connection_id)
             
             # 检查缓存（如果不强制刷新）
-            # PR1: cache key 含 engine（用 task.engine，已经由 task_manager 解析过）
+            # cache key 含 engine; word_align / diarize 折维收拢在 cache_params_for (D4)
             if not request.force_refresh:
-                from src.core.database import db_manager
+                from src.core.database import db_manager, cache_params_for
+                _ce, _allow = cache_params_for(task)
                 cached_result = await db_manager.get_cached_result(
-                    request.file_hash, output_format, engine=task.engine
+                    request.file_hash, output_format, engine=_ce, allow_cross_engine=_allow,
+                    options=task.options,
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
-                    
+
+                    # E2: 早返回出口同样组装 effective options 回显
+                    from src.core.result_projection import build_result_metadata
+
                     # 根据输出格式准备结果
                     if output_format == "srt":
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                            _proj = bool(cached_result.pop("projected", False))
+                            cached_result["metadata"] = build_result_metadata(
+                                engine=task.engine, options=task.options, projected=_proj,
+                            )
                             result_data = cached_result
                         else:
                             # 如果缓存中没有SRT格式，跳过缓存
@@ -211,6 +220,10 @@ class WebSocketHandler:
                             result_data = None
                     else:
                         # JSON格式
+                        _proj = bool((cached_result.metadata or {}).get("projected"))
+                        cached_result.metadata = build_result_metadata(
+                            engine=task.engine, options=task.options, projected=_proj,
+                        )
                         result_data = cached_result.dict() if cached_result else None
                     
                     if result_data:
@@ -451,6 +464,10 @@ class WebSocketHandler:
                 "connection_id": connection_id,
                 # PR1: 记录引擎选择，最终化时回填到 FileUploadRequest
                 "engine": data.get("engine"),
+                # 词级时间戳: 记录 per-request 语言，最终化时回填
+                "language": data.get("language"),
+                # diarize 开关: 记录 per-request 值，最终化时回填（缺省 True 向后兼容）
+                "diarize": data.get("diarize", True),
             }
             
             self.upload_sessions[task_id] = session
@@ -562,24 +579,44 @@ class WebSocketHandler:
                 return
             
             # 检查缓存（如果不强制刷新）
-            # PR1: cache key 含 engine（session 中已记录，无则回退 default_engine）
+            # cache key 含 engine（session 中已记录，无则回退 default_engine）;
+            # word_align / diarize 折维收拢在 cache_params (D4, 此处无 task 对象走低层入口)
             if not session["force_refresh"]:
-                from src.core.database import db_manager
+                from src.core.database import db_manager, cache_params
                 from src.core.config import config as _config
+                from src.models.schemas import TranscribeOptions
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
+                _session_options = TranscribeOptions(
+                    language=session.get("language"),
+                    diarize=session.get("diarize", True),
+                )
+                _ce, _allow = cache_params(_engine_for_cache, _session_options)
                 cached_result = await db_manager.get_cached_result(
-                    session["file_hash"], session["output_format"], engine=_engine_for_cache
+                    session["file_hash"], session["output_format"], engine=_ce, allow_cross_engine=_allow,
+                    options=_session_options,
                 )
                 if cached_result:
                     logger.info(f"使用缓存结果（分片上传阶段）: {task_id}")
-                    
+
+                    # E2: 早返回出口组装 effective options 回显 (session 回填值已在
+                    # _session_options 收拢, 优先级 request > session 回填 > config)
+                    from src.core.result_projection import build_result_metadata
+
                     # 根据输出格式准备结果
                     if session["output_format"] == "srt":
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
+                            _proj = bool(cached_result.pop("projected", False))
+                            cached_result["metadata"] = build_result_metadata(
+                                engine=_engine_for_cache, options=_session_options, projected=_proj,
+                            )
                             result_data = cached_result
                         else:
                             result_data = None
                     else:
+                        _proj = bool((cached_result.metadata or {}).get("projected"))
+                        cached_result.metadata = build_result_metadata(
+                            engine=_engine_for_cache, options=_session_options, projected=_proj,
+                        )
                         result_data = cached_result.dict() if cached_result else None
                     
                     if result_data:
@@ -612,6 +649,8 @@ class WebSocketHandler:
                 force_refresh=session["force_refresh"],
                 output_format=session["output_format"],
                 engine=session.get("engine"),
+                language=session.get("language"),
+                diarize=session.get("diarize", True),
             )
             
             # 创建任务

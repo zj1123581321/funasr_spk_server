@@ -1,0 +1,19 @@
+{
+  "tag": "verify_phase3_autoreleasepool_n2",
+  "mode": "n2",
+  "num_threads": 4,
+  "provider": "cpu",
+  "onnx_provider": "COREML_ANE_FULL",
+  "coreml_asr_patch": false,
+  "wall_total": 83.64435410499573,
+  "tasks": {
+    "1spk-16min": {
+      "error": "no json",
+      "rc": -11
+    },
+    "4spk-44min": {
+      "error": "no json",
+      "rc": -11
+    }
+  }
+}

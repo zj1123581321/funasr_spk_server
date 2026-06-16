@@ -1,9 +1,17 @@
 """
-PR1 — transcriber_dispatch 路由测试
+transcriber_dispatch 路由测试 (PR2: 全局唯一引擎模式)
 
-resolve_transcriber 是 PR1 阶段的薄 dispatch 函数（不是 EngineRouter 类）。
-意图：让 task.engine 名能选到正确的 transcriber 单例。
-PR2 阶段会演进为完整的 ASREngine 抽象 + factory。
+策略变化(相对 PR1):
+- PR1: dispatch 按 per-request engine 选 transcriber, 任意引擎都可被请求
+- PR2: 服务器启动时由 config.transcription.default_engine 决定**全局唯一引擎**,
+  upload_request.engine 字段只能与之相同或留空, 跨引擎请求 reject
+
+接口约束:
+    resolve_transcriber(requested_engine)
+        - None / "" → 走 config 单例
+        - 等于 config → 走 config 单例
+        - 不等 → ValueError "Server configured with X, cannot accept Y"
+        - config 引擎名未知 → ValueError "未知 ASR 引擎"
 """
 from unittest.mock import patch, MagicMock
 
@@ -12,74 +20,131 @@ import pytest
 from src.core.transcriber_dispatch import resolve_transcriber
 
 
-class TestResolveTranscriber:
-    def test_funasr_returns_funasr_transcriber(self):
-        """engine='funasr' → 返回 FunASR 单例（即现有 get_transcriber()）"""
-        with patch("src.core.funasr_transcriber.get_transcriber") as mock_get:
-            mock_transcriber = MagicMock(name="funasr_instance")
-            mock_get.return_value = mock_transcriber
-            result = resolve_transcriber("funasr")
-            assert result is mock_transcriber
-            mock_get.assert_called_once()
+# ==================== fixture: 临时切 default_engine ====================
 
-    def test_empty_string_falls_back_to_default(self):
-        """空字符串视为未指定 → 走 config.default_engine（默认 funasr）"""
-        with patch("src.core.funasr_transcriber.get_transcriber") as mock_get:
-            mock_transcriber = MagicMock()
-            mock_get.return_value = mock_transcriber
-            result = resolve_transcriber("")
-            assert result is mock_transcriber
+@pytest.fixture
+def server_engine_funasr():
+    from src.core.config import config
+    original = config.transcription.default_engine
+    config.transcription.default_engine = "funasr"
+    yield "funasr"
+    config.transcription.default_engine = original
 
-    def test_none_falls_back_to_default(self):
-        """None 视为未指定 → 走 config.default_engine"""
+
+@pytest.fixture
+def server_engine_qwen3():
+    from src.core.config import config
+    original = config.transcription.default_engine
+    config.transcription.default_engine = "qwen3"
+    yield "qwen3"
+    config.transcription.default_engine = original
+
+
+# ==================== 默认引擎走通 ====================
+
+class TestResolveTranscriberFollowsConfig:
+    """server engine 由 config 决定, requested engine 留空 / 相同 → 通过"""
+
+    def test_none_falls_back_to_funasr_when_config_funasr(self, server_engine_funasr):
         with patch("src.core.funasr_transcriber.get_transcriber") as mock_get:
-            mock_transcriber = MagicMock()
-            mock_get.return_value = mock_transcriber
+            mock_get.return_value = MagicMock(name="funasr_instance")
             result = resolve_transcriber(None)
-            assert result is mock_transcriber
+            assert result is mock_get.return_value
 
-    def test_unknown_engine_raises_value_error(self):
-        with pytest.raises(ValueError) as exc_info:
-            resolve_transcriber("nonexistent_engine_xyz")
-        assert "nonexistent_engine_xyz" in str(exc_info.value)
+    def test_empty_string_falls_back_to_config(self, server_engine_funasr):
+        with patch("src.core.funasr_transcriber.get_transcriber") as mock_get:
+            mock_get.return_value = MagicMock()
+            result = resolve_transcriber("")
+            assert result is mock_get.return_value
 
-    def test_qwen3_returns_qwen3_transcriber(self):
-        """PR1 阶段 Qwen3 是占位，但 dispatch 应能解析到它"""
-        with patch("src.core.qwen3_transcriber.get_qwen3_transcriber") as mock_get:
-            mock_transcriber = MagicMock(name="qwen3_instance")
-            mock_get.return_value = mock_transcriber
+    def test_funasr_matches_config_funasr(self, server_engine_funasr):
+        with patch("src.core.funasr_transcriber.get_transcriber") as mock_get:
+            mock_get.return_value = MagicMock()
+            result = resolve_transcriber("funasr")
+            assert result is mock_get.return_value
+
+    def test_qwen3_matches_config_qwen3(self, server_engine_qwen3):
+        """PR3: qwen3 走 pool wrapper, 不再调 Qwen3DiarizeTranscriber 单例"""
+        with patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as mock_get:
+            mock_get.return_value = MagicMock(name="qwen3_pool_instance")
             result = resolve_transcriber("qwen3")
-            assert result is mock_transcriber
+            assert result is mock_get.return_value
 
-    def test_default_engine_respects_config(self, monkeypatch):
-        """当 engine 为 None 时应从 config 读 default_engine"""
+    def test_none_falls_back_to_qwen3_when_config_qwen3(self, server_engine_qwen3):
+        with patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as mock_get:
+            mock_get.return_value = MagicMock()
+            result = resolve_transcriber(None)
+            assert result is mock_get.return_value
+
+    def test_qwen3_dispatch_returns_pool_wrapper_not_diarize_singleton(
+        self, server_engine_qwen3
+    ):
+        """PR3 显式契约: 主进程 qwen3 dispatch 必须返回 pool wrapper, 不再持有 libllama context"""
+        # 旧路径不应被调
+        with patch(
+            "src.core.qwen3_transcriber.get_qwen3_transcriber"
+        ) as old_get, patch(
+            "src.core.qwen3_pool_transcriber.get_qwen3_pool_transcriber"
+        ) as new_get:
+            new_get.return_value = MagicMock(name="qwen3_pool_instance")
+            resolve_transcriber("qwen3")
+            assert new_get.called, "应走 pool wrapper 工厂"
+            assert not old_get.called, "主进程 dispatch 不应再调 Qwen3DiarizeTranscriber 单例"
+
+
+# ==================== Mismatch reject ====================
+
+class TestResolveTranscriberRejectsMismatch:
+    """跨引擎请求必须 reject, 错误信息要明确告知 server 配的是哪个 / client 传了哪个"""
+
+    def test_request_qwen3_when_server_funasr_rejects(self, server_engine_funasr):
+        with pytest.raises(ValueError) as exc:
+            resolve_transcriber("qwen3")
+        msg = str(exc.value)
+        # 错误信息应同时含 server engine + requested engine, 方便客户端定位
+        assert "funasr" in msg
+        assert "qwen3" in msg
+
+    def test_request_funasr_when_server_qwen3_rejects(self, server_engine_qwen3):
+        with pytest.raises(ValueError) as exc:
+            resolve_transcriber("funasr")
+        msg = str(exc.value)
+        assert "funasr" in msg
+        assert "qwen3" in msg
+
+
+# ==================== 未知 engine ====================
+
+class TestResolveTranscriberUnknownEngine:
+    def test_unknown_requested_rejects(self, server_engine_funasr):
+        with pytest.raises(ValueError) as exc:
+            resolve_transcriber("magic_engine_xyz")
+        msg = str(exc.value)
+        assert "magic_engine_xyz" in msg
+
+    def test_unknown_config_engine_raises(self):
+        """如果 config 配了不支持的引擎名, 即便不传 requested 也应抛"""
         from src.core.config import config
-        # 临时把 default_engine 切到 qwen3
         original = config.transcription.default_engine
         try:
-            config.transcription.default_engine = "qwen3"
-            with patch("src.core.qwen3_transcriber.get_qwen3_transcriber") as mock_get:
-                mock_transcriber = MagicMock()
-                mock_get.return_value = mock_transcriber
-                result = resolve_transcriber(None)
-                assert result is mock_transcriber
+            config.transcription.default_engine = "definitely_not_a_real_engine"
+            with pytest.raises(ValueError) as exc:
+                resolve_transcriber(None)
+            assert "definitely_not_a_real_engine" in str(exc.value)
         finally:
             config.transcription.default_engine = original
 
 
-class TestQwen3TranscriberPlaceholder:
-    """Qwen3 transcriber 在 PR1 是占位，spike 后才落地"""
+# ==================== qwen3_transcriber 模块健壮性 ====================
+
+class TestQwen3TranscriberModule:
+    """qwen3_transcriber 模块基本健壮性 — 真实接口实现在 test_qwen3_transcriber.py 验"""
 
     def test_qwen3_module_importable(self):
-        """模块必须能 import（即便实现是占位）"""
         from src.core import qwen3_transcriber
         assert hasattr(qwen3_transcriber, "get_qwen3_transcriber")
-
-    def test_qwen3_transcribe_raises_not_implemented(self):
-        """transcribe 调用应明确抛 NotImplementedError，标注 PR1 阶段未启用"""
-        from src.core.qwen3_transcriber import get_qwen3_transcriber
-        t = get_qwen3_transcriber()
-        with pytest.raises(NotImplementedError) as exc:
-            # 同步调用最浅层断言 — 不必走 async
-            t.transcribe_sync_stub()
-        assert "PR1" in str(exc.value) or "spike" in str(exc.value).lower()
+        assert hasattr(qwen3_transcriber, "Qwen3DiarizeTranscriber")

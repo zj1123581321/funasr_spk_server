@@ -16,13 +16,31 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class WordTimestamp(BaseModel):
+    """词级时间戳(MMS-300M CTC-FA 对齐输出, 绝对秒)
+
+    增量挂进 TranscriptionSegment.words, 不替换段边界. 见
+    docs/开发/2026-06-09-qwen3-词级时间戳-PoC计划.md.
+    """
+    text: str = Field(..., description="词文本")
+    start: float = Field(..., description="开始时间（秒，绝对）")
+    end: float = Field(..., description="结束时间（秒，绝对）")
+    confidence: Optional[float] = Field(None, description="对齐置信度（可空）")
+
+    model_config = {"protected_namespaces": ()}
+
+
 class TranscriptionSegment(BaseModel):
     """转录片段"""
     start_time: float = Field(..., description="开始时间（秒）")
     end_time: float = Field(..., description="结束时间（秒）")
     text: str = Field(..., description="转录文本")
-    speaker: str = Field(..., description="说话人标识")
-    
+    # Optional (D8): null = 本次请求未做说话人区分 (diarize=false), 与"真只有一人
+    # (Speaker1)"语义可区分. 内部 Segment(speaker:int) 永不为 None, null 只在出口转换层出现.
+    speaker: Optional[str] = Field(None, description="说话人标识；diarize=false 时为 null（未区分）")
+    # 词级时间戳(可选): word_align 开启且对齐成功时挂上, 否则 None(向后兼容).
+    words: Optional[List[WordTimestamp]] = Field(None, description="词级时间戳列表")
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -37,7 +55,29 @@ class TranscriptionResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     processing_time: float = Field(..., description="处理时长（秒）")
     error: Optional[str] = Field(None, description="错误信息")
-    
+    # E2 effective options 回显: serve 层组装 (engine/diarize/word_align/language/
+    # projected), **不随缓存内容存取** — projected 是请求级属性, save_result 写库时
+    # exclude 本字段, 防止缓存污染 (T-D #9).
+    metadata: Optional[Dict[str, Any]] = Field(None, description="effective options 回显（serve 层组装，不入库）")
+
+    model_config = {"protected_namespaces": ()}
+
+
+class TranscribeOptions(BaseModel):
+    """per-request 转录选项（E3 收拢）
+
+    language（后续 diarize）收进一个结构, 整体穿透:
+    schema → websocket_handler（含分片 session 回填）→ task_manager → 两套 pool
+    → worker → transcribe.
+
+    跨 file-based pool 进程边界时用 model_dump() 序列化成 dict 写任务文件,
+    worker 端读 dict 并对缺失字段用本模型默认值兜底（老任务文件兼容）.
+    """
+    language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+    # diarize 开关（设计定案 D2）: 对外契约是 diarize=false ⇒ 响应不含说话人区分;
+    # 各引擎自行决定达成方式（qwen3 真跳过 diarize+speaker 后处理省算力, funasr 出口投影）
+    diarize: bool = Field(default=True, description="是否输出说话人区分；False 时 segments.speaker=null、SRT 无 SpeakerN: 前缀")
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -60,6 +100,8 @@ class TranscriptionTask(BaseModel):
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     srt_content: Optional[str] = Field(None, description="SRT格式内容")
     engine: str = Field(default="funasr", description="ASR 引擎名（由 task_manager 根据 request.engine 或 default_engine 解析后填入）")
+    # per-request 选项嵌套结构（D1）: 平铺 language 已删, options 是唯一 source of truth
+    options: TranscribeOptions = Field(default_factory=TranscribeOptions, description="per-request 转录选项（language 等），整体穿透到 transcribe")
 
     model_config = {"protected_namespaces": ()}
 
@@ -98,6 +140,10 @@ class FileUploadRequest(BaseModel):
     force_refresh: bool = Field(default=False, description="强制刷新缓存")
     output_format: str = Field(default="json", description="输出格式: json 或 srt")
     engine: Optional[str] = Field(default=None, description="ASR 引擎名（None 表示走 config.transcription.default_engine）")
+    language: Optional[str] = Field(default=None, description="识别语言 ISO 码（chi/eng/jpn/kor…），驱动 word_align 词级时间戳语言；None 走 config 兜底")
+    # diarize=false ⇒ 响应不含说话人区分（JSON speaker=null + SRT 无前缀, D8）.
+    # 默认 true 完全向后兼容; 老 server Pydantic 忽略未知字段（部署顺序: server 先升级）.
+    diarize: bool = Field(default=True, description="是否输出说话人区分（默认 True 向后兼容）")
 
     model_config = {"protected_namespaces": ()}
 

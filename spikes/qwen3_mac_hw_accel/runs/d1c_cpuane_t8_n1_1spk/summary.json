@@ -1,0 +1,15 @@
+{
+  "tag": "d1c_cpuane_t8_n1_1spk",
+  "mode": "n1",
+  "num_threads": 8,
+  "provider": "cpu",
+  "onnx_provider": "COREML",
+  "coreml_asr_patch": true,
+  "wall_total": 2.25154185295105,
+  "tasks": {
+    "1spk-16min": {
+      "error": "no json",
+      "rc": 1
+    }
+  }
+}

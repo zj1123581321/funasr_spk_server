@@ -1,0 +1,11 @@
+venv/
+# Symlinks 指向机器特定 production 路径,不能跨机器同步
+models/production_models
+src/vendor/
+# sherpa 模型大且可重新下载
+models/sherpa/
+# 跑出来的实测数据
+output/
+*.pyc
+__pycache__/
+.DS_Store

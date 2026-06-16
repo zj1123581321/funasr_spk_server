@@ -89,6 +89,16 @@ class TestFreshSchemaHasEngineColumn:
         assert found, f"未找到 (file_hash, engine) UNIQUE 索引: {unique_indexes}"
 
 
+@pytest.fixture
+def disable_cross_engine():
+    """临时关闭 cross-engine 缓存共享(strict 模式)"""
+    from src.core.config import config
+    original = config.transcription.cache_cross_engine
+    config.transcription.cache_cross_engine = False
+    yield
+    config.transcription.cache_cross_engine = original
+
+
 class TestSaveAndGetWithEngine:
     @pytest.mark.asyncio
     async def test_save_with_engine_then_get_same_engine_hits(self, tmp_db_path: str):
@@ -101,14 +111,90 @@ class TestSaveAndGetWithEngine:
         assert cached.file_hash == result.file_hash
 
     @pytest.mark.asyncio
-    async def test_save_with_engine_then_get_different_engine_misses(self, tmp_db_path: str):
-        """同一 file_hash 在 funasr 引擎下有缓存，查 qwen3 引擎应 miss"""
+    async def test_save_with_engine_then_get_different_engine_misses_in_strict_mode(
+        self, tmp_db_path: str, disable_cross_engine
+    ):
+        """strict 模式(cache_cross_engine=False): 不同引擎不应命中"""
         db = DatabaseManager(db_path=tmp_db_path)
         await db.init_db()
         result = make_result()
         await db.save_result(result, raw_result=None, engine="funasr")
         cached = await db.get_cached_result(result.file_hash, engine="qwen3")
-        assert cached is None, "不同引擎不应命中"
+        assert cached is None, "strict 模式下不同引擎不应命中"
+
+    @pytest.mark.asyncio
+    async def test_save_with_engine_then_get_different_engine_hits_by_default(
+        self, tmp_db_path: str
+    ):
+        """默认 cache_cross_engine=True: 不同引擎应跨引擎命中(JSON 模式)"""
+        db = DatabaseManager(db_path=tmp_db_path)
+        await db.init_db()
+        result = make_result()
+        await db.save_result(result, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result(result.file_hash, engine="qwen3")
+        assert cached is not None, "默认 cross-engine 模式下应命中"
+        assert cached.file_hash == result.file_hash
+        # 跨引擎命中: segments 内容来自 funasr, 但客户端拿到的依然是合规 TranscriptionResult
+        assert len(cached.segments) >= 1
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_srt_hit_built_from_segments(self, tmp_db_path: str):
+        """跨引擎 SRT 命中: 从 TranscriptionResult.segments 重建 SRT,
+        不依赖原引擎的 raw_result 结构(因为引擎之间 raw_result 格式不同)"""
+        db = DatabaseManager(db_path=tmp_db_path)
+        await db.init_db()
+        # 模拟 funasr 缓存(raw_result 是 sentence_info 格式, 跨引擎不能用)
+        result = TranscriptionResult(
+            task_id="t",
+            file_name="a.wav",
+            file_hash="cross",
+            duration=5.0,
+            segments=[
+                TranscriptionSegment(start_time=0.0, end_time=2.5, text="你好", speaker="Speaker1"),
+                TranscriptionSegment(start_time=2.5, end_time=5.0, text="世界", speaker="Speaker2"),
+            ],
+            speakers=["Speaker1", "Speaker2"],
+            processing_time=0.5,
+        )
+        funasr_raw = {"sentence_info": [{"start": 0, "end": 2500, "text": "你好", "spk": 0}]}
+        await db.save_result(result, raw_result=funasr_raw, engine="funasr")
+
+        # 现在用 qwen3 引擎查 SRT — 跨引擎命中, 应从 segments 重建
+        cached = await db.get_cached_result("cross", output_format="srt", engine="qwen3")
+        assert cached is not None
+        assert isinstance(cached, dict)
+        assert cached["format"] == "srt"
+        # SRT content 与 FunASR 字节级对齐: Speaker{n}:文本 (无空格)
+        assert "1\n00:00:00,000 --> 00:00:02,500\nSpeaker1:你好" in cached["content"]
+        assert "2\n00:00:02,500 --> 00:00:05,000\nSpeaker2:世界" in cached["content"]
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_prefers_exact_match_first(self, tmp_db_path: str):
+        """同 file_hash 下若已有精确 engine 匹配, 优先返该条, 不回退跨引擎"""
+        db = DatabaseManager(db_path=tmp_db_path)
+        await db.init_db()
+        result_funasr = make_result(file_hash="precise", task_id="from_funasr")
+        result_qwen3 = make_result(file_hash="precise", task_id="from_qwen3")
+        await db.save_result(result_funasr, raw_result=None, engine="funasr")
+        await db.save_result(result_qwen3, raw_result=None, engine="qwen3")
+
+        cached = await db.get_cached_result("precise", engine="qwen3")
+        assert cached is not None
+        # 验证拿到的是 qwen3 那条, 不是 funasr 那条
+        assert cached.task_id == "from_qwen3", \
+            f"应优先返精确 engine 匹配, 实际: {cached.task_id}"
+
+    @pytest.mark.asyncio
+    async def test_cross_engine_explicit_disabled_param_overrides_config(self, tmp_db_path: str):
+        """allow_cross_engine=False 参数覆盖 config 默认(供 caller 显式禁用)"""
+        db = DatabaseManager(db_path=tmp_db_path)
+        await db.init_db()
+        result = make_result()
+        await db.save_result(result, raw_result=None, engine="funasr")
+        cached = await db.get_cached_result(
+            result.file_hash, engine="qwen3", allow_cross_engine=False
+        )
+        assert cached is None, "allow_cross_engine=False 时不应跨引擎命中"
 
     @pytest.mark.asyncio
     async def test_two_engines_coexist_for_same_file(self, tmp_db_path: str):

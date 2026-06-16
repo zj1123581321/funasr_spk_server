@@ -49,6 +49,30 @@ sequenceDiagram
 - Server 处理请求: `websocket_handler.py:142-213` (_handle_upload_request)
 - Server 创建任务: `task_manager.py:55-76` (create_task)
 
+#### 2.1 ASR 引擎选择 (`engine` 字段)
+
+`upload_request` 可携带可选字段 `engine`,取值 `"funasr"` 或 `"qwen3"`:
+
+```json
+{
+  "type": "upload_request",
+  "data": {
+    "file_name": "x.wav",
+    "file_hash": "sha256:...",
+    "file_size": 1234567,
+    "engine": "qwen3"           // 可选, 缺省走 server 默认
+  }
+}
+```
+
+**优先级**: `request.engine` > `config.transcription.default_engine` (env `FUNASR_DEFAULT_ENGINE`) > `"funasr"`。
+
+**缓存隔离**: 缓存 key 已按 `(file_hash, engine)` 联合区分 — 同一份文件在不同引擎下的转录结果**互不命中**,可并存。
+
+**引擎能力**:
+- `funasr`: 生产稳定路径, MPS GPU 加速, 支持说话人识别
+- `qwen3`: 通过多 worker pool 接入 (`src/core/qwen3_pool_transcriber.py`), 长音频质量优, Mac 上 frontend 走 ANE 加速; 详见 `CLAUDE.md` ASR 引擎章节
+
 ### 3. 文件上传阶段
 
 ```mermaid

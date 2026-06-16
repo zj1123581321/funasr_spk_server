@@ -1,5 +1,10 @@
 # FunASR音频转文本服务器兼容性开发文档
 
+> **适用范围**: 本文档描述 **FunASR 生产引擎路径** 的协议和实现细节,用于开发兼容客户端。
+> 项目当前是**多引擎架构**, 除 FunASR 外, Qwen3 引擎已通过多 worker pool 接入生产(`src/core/qwen3_pool_transcriber.py`),
+> 协议层通过 `upload_request.engine` 字段路由 — 详见 `docs/开发/Server-Client 交互协议.md` §2.1 + `CLAUDE.md` ASR 引擎章节。
+> 引擎选择对客户端透明,本文档描述的字段/流程对两种引擎都适用。
+
 ## 项目概述
 
 本文档为您分析了现有FunASR音频转文本服务器项目的完整技术架构和实现细节，以便您开发完全兼容的新服务器。该项目是一个基于FunASR的音视频转录服务器，支持说话人识别、时间戳标注，提供JSON和SRT两种输出格式。
