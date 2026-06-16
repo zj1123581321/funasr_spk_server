@@ -3,6 +3,7 @@
 """
 import asyncio
 import uuid
+from collections import OrderedDict
 from typing import Dict, Optional, List
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,8 @@ _TERMINAL_STATUSES = frozenset({
 _COLD_START_TASK_SECONDS = 90.0
 # EMA 平滑系数（新样本权重）。0.3 = 适度跟随近期，抗长音频离群点污染。
 _EMA_ALPHA = 0.3
+# 已清理 task_id 的追踪上界（用于轮询区分 expired vs not_found）。
+_EVICTED_TRACK_MAX = 10000
 
 
 class QueueFullError(Exception):
@@ -62,6 +65,8 @@ class TaskManager:
         self._processing_seconds_ema: Optional[float] = None
         # 后台维护循环（内存清理 + 看门狗）句柄
         self._maintenance_task: Optional[asyncio.Task] = None
+        # 已被内存清理的 task_id（有界 LRU）：让轮询能区分 expired(清过) vs not_found(从未有)
+        self._evicted_task_ids: "OrderedDict[str, None]" = OrderedDict()
     
     async def start(self):
         """启动任务管理器"""
@@ -305,6 +310,16 @@ class TaskManager:
 
     # ===== 内存清理（TTL + size-cap）+ 看门狗 =====
 
+    def _mark_evicted(self, task_id: str):
+        """记录被清理的 task_id（有界 LRU），供轮询区分 expired/not_found。"""
+        self._evicted_task_ids[task_id] = None
+        while len(self._evicted_task_ids) > _EVICTED_TRACK_MAX:
+            self._evicted_task_ids.popitem(last=False)
+
+    def was_evicted(self, task_id: str) -> bool:
+        """该 task_id 是否曾被内存清理（轮询返回 expired 而非 not_found）。"""
+        return task_id in self._evicted_task_ids
+
     def _evict_terminal_tasks(self) -> int:
         """清理 self.tasks 中的终态任务（TTL + size-cap 双保险），非终态永不清。
 
@@ -327,6 +342,7 @@ class TaskManager:
             task = self.tasks[tid]
             if task.status in _TERMINAL_STATUSES and _terminal_age(task) > ttl:
                 del self.tasks[tid]
+                self._mark_evicted(tid)
                 evicted += 1
 
         # 2) size-cap：仍超上限则挤最老终态（非终态不计入挤出对象）
@@ -341,6 +357,7 @@ class TaskManager:
             overflow = len(self.tasks) - cap
             for tid, _ in terminal[:overflow]:
                 del self.tasks[tid]
+                self._mark_evicted(tid)
                 evicted += 1
 
         if evicted:

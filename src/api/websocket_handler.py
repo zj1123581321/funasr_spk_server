@@ -15,6 +15,7 @@ import base64
 import hashlib
 import tempfile
 import os
+import time
 import uuid
 
 
@@ -127,7 +128,16 @@ class WebSocketHandler:
         elif msg_type == "upload_chunk":
             # 分片文件上传
             await self._handle_chunk_upload(websocket, connection_id, msg_data)
-            
+
+        elif msg_type == "finalize_upload":
+            # 显式重试 finalize（高负载止血：queue_full 后客户端不重传大文件，仅重发此消息）
+            task_id = msg_data.get("task_id")
+            if task_id:
+                await self._handle_finalize_upload(websocket, task_id)
+            else:
+                await self._send_error(websocket, "missing_task_id", "缺少task_id参数")
+
+
         elif msg_type == "task_status":
             # 查询任务状态
             task_id = msg_data.get("task_id")
@@ -283,32 +293,48 @@ class WebSocketHandler:
                 return
             
             # 保存文件
-            from src.utils.file_utils import save_uploaded_file
+            from src.utils.file_utils import save_uploaded_file, delete_file
             file_path, _ = await save_uploaded_file(file_data, task.file_name)
-            
+
             # 提交任务到队列，获取排队信息
-            queue_info = await task_manager.submit_task(task_id, file_path)
-            
+            from src.core.task_manager import QueueFullError
+            try:
+                queue_info = await task_manager.submit_task(task_id, file_path)
+            except QueueFullError as qe:
+                # 准入控制拒绝：清理已落地文件（非分片无 session 可复用，整包重传），
+                # self.tasks 回滚已在 task_manager 完成。客户端据 retry_after 退避重传。
+                await delete_file(file_path)
+                logger.warning(f"单文件任务入队被拒(queue_full): {task_id}, retry_after={qe.retry_after}s")
+                await self._send_message(websocket, "queue_full", {
+                    "task_id": task_id,
+                    "retry_after": qe.retry_after,
+                    "queue_size": qe.queue_size,
+                    "max_queue_size": qe.max_queue_size,
+                    "error": "queue_full",
+                    "message": str(qe),
+                })
+                return
+
             # 发送响应，包含排队信息
             response_data = {
                 "task_id": task_id,
                 "message": "文件上传成功，开始处理"
             }
-            
+
             # 如果启用了排队状态通知且任务在排队
             if config.transcription.queue_status_enabled and queue_info:
                 if queue_info.get("queued", False):
                     response_data.update({
                         "queue_position": queue_info["position"],
-                        "estimated_wait_minutes": queue_info["estimated_wait"],
+                        "estimated_wait_seconds": queue_info["estimated_wait"],
                         "message": f"文件上传成功，排队位置: {queue_info['position']}"
                     })
                     # 发送排队状态
                     await self._send_message(websocket, "task_queued", response_data)
                     return
-            
+
             await self._send_message(websocket, "upload_complete", response_data)
-            
+
         except Exception as e:
             logger.error(f"处理文件数据失败: {e}")
             await self._send_error(websocket, "upload_data_error", str(e))
@@ -318,9 +344,17 @@ class WebSocketHandler:
         try:
             from src.core.task_manager import task_manager
             task = task_manager.get_task(task_id)
-            
+
             if not task:
-                await self._send_error(websocket, "task_not_found", "任务不存在")
+                # 区分 expired(曾存在被内存清理) vs not_found(从未存在)，
+                # 让客户端能据此走缓存兜底 / 报错（codex: size-cap 挤掉结果别返回含糊 not_found）
+                if task_manager.was_evicted(task_id):
+                    await self._send_error(
+                        websocket, "task_expired",
+                        "任务结果已过期清理，请用 file_hash 重新提交（命中缓存秒回）",
+                    )
+                else:
+                    await self._send_error(websocket, "task_not_found", "任务不存在")
                 return
             
             response = TaskStatusResponse(
@@ -443,9 +477,19 @@ class WebSocketHandler:
     async def _handle_chunked_upload_request(self, websocket: WebSocketServerProtocol, connection_id: str, data: dict):
         """处理分片上传请求"""
         try:
+            # 先清遗弃 session（机会式 sweep），再做硬数量上限准入控制，
+            # 防恶意/坏客户端把 temp 文件堆满磁盘（codex: 保留 session 的磁盘压力面）
+            self._sweep_upload_sessions()
+            if len(self.upload_sessions) >= config.transcription.upload_session_max_count:
+                await self._send_error(
+                    websocket, "too_many_sessions",
+                    f"并发上传会话已达上限({config.transcription.upload_session_max_count})，请稍后重试",
+                )
+                return
+
             # 生成任务ID
             task_id = str(uuid.uuid4())
-            
+
             # 创建临时文件存储分片
             temp_file = tempfile.NamedTemporaryFile(delete=False)
             
@@ -473,6 +517,12 @@ class WebSocketHandler:
                 # word_align 开关: 记录 per-request 原始值（None=未指定），最终化时回填。
                 # codex #2: 早返回缓存路径 (_finalize 内 create_task 之前) 须用此值解析 effective。
                 "word_align": data.get("word_align"),
+                # 高负载止血: session 状态机 + TTL 时间戳
+                # state: uploading → (收齐) ready → (提交成功) submitted；queue_full 时回到 ready 供重试
+                "state": "uploading",
+                "created_at": time.time(),
+                # finalize 落地的最终文件路径（queue_full 重试时复用，避免重复落盘）
+                "finalized_file_path": None,
             }
             
             self.upload_sessions[task_id] = session
@@ -641,15 +691,16 @@ class WebSocketHandler:
                         })
                         return
             
-            # 移动文件到最终位置
+            # 移动文件到最终位置（queue_full 重试时复用已落地文件，不重复落盘）
             from src.utils.file_utils import save_uploaded_file
-            
-            # 读取临时文件内容
-            with open(session["temp_file_path"], "rb") as f:
-                file_data = f.read()
-            
-            file_path, _ = await save_uploaded_file(file_data, session["file_name"])
-            
+
+            file_path = session.get("finalized_file_path")
+            if not (file_path and os.path.exists(file_path)):
+                with open(session["temp_file_path"], "rb") as f:
+                    file_data = f.read()
+                file_path, _ = await save_uploaded_file(file_data, session["file_name"])
+                session["finalized_file_path"] = file_path
+
             # 创建任务请求对象
             # PR1: 分片上传完成时把 session 中记录的 engine 回填到 request
             from src.models.schemas import FileUploadRequest
@@ -664,41 +715,93 @@ class WebSocketHandler:
                 diarize=session.get("diarize", True),
                 word_align=session.get("word_align"),
             )
-            
-            # 创建任务
-            from src.core.task_manager import task_manager
+
+            # 创建任务 + 提交队列
+            from src.core.task_manager import task_manager, QueueFullError
             task = await task_manager.create_task(request, task_id=task_id)
-            
-            # 提交任务到队列
-            queue_info = await task_manager.submit_task(task_id, file_path)
-            
-            # 清理上传会话
-            await self._cleanup_upload_session(task_id)
-            
+
+            session["state"] = "finalizing"
+            try:
+                queue_info = await task_manager.submit_task(task_id, file_path)
+            except QueueFullError as qe:
+                # 准入控制拒绝：保留 session + 已落地文件，客户端据 retry_after 退避后
+                # 发 finalize_upload 重试（不重传大文件）。self.tasks 回滚已在 task_manager 完成。
+                session["state"] = "ready"
+                logger.warning(f"分片任务入队被拒(queue_full): {task_id}, retry_after={qe.retry_after}s")
+                await self._send_message(websocket, "queue_full", {
+                    "task_id": task_id,
+                    "retry_after": qe.retry_after,
+                    "queue_size": qe.queue_size,
+                    "max_queue_size": qe.max_queue_size,
+                    # 兼容: 老客户端能识别的 error 形态 + 结构化字段（codex: 新消息类型别被旧客户端忽略）
+                    "error": "queue_full",
+                    "message": str(qe),
+                })
+                return
+
+            # 提交成功：标记 submitted，清理 session（temp 删，finalized 文件交给 task 接管不删）
+            session["state"] = "submitted"
+            await self._cleanup_upload_session(task_id, delete_finalized=False)
+
             # 发送上传完成消息
             response_data = {
                 "task_id": task_id,
                 "message": "分片文件上传成功，开始处理"
             }
-            
+
             # 如果启用了排队状态通知且任务在排队
             if config.transcription.queue_status_enabled and queue_info:
                 if queue_info.get("queued", False):
                     response_data.update({
                         "queue_position": queue_info["position"],
-                        "estimated_wait_minutes": queue_info["estimated_wait"],
+                        "estimated_wait_seconds": queue_info["estimated_wait"],
                         "message": f"分片文件上传成功，排队位置: {queue_info['position']}"
                     })
                     await self._send_message(websocket, "task_queued", response_data)
                     return
-            
+
             await self._send_message(websocket, "upload_complete", response_data)
-            
+
             logger.info(f"分片上传完成: {task_id}, 文件: {session['file_name']}")
-            
+
         except Exception as e:
             logger.error(f"完成分片上传失败: {e}")
+            # 错误分级(codex): 提交成功后(submitted)绝不删最终文件——任务要用它；
+            # 提交前的真错误 → 清 session(含 temp + 已落地文件)，防泄漏。
+            submitted = self.upload_sessions.get(task_id, {}).get("state") == "submitted"
+            if not submitted:
+                await self._cleanup_upload_session(task_id, delete_finalized=True)
             await self._send_error(websocket, "finalize_error", str(e))
+
+    async def _handle_finalize_upload(self, websocket: WebSocketServerProtocol, task_id: str):
+        """显式重试 finalize（queue_full 后客户端重发，避免重传大文件）。
+
+        - session 还在 → 走重试 finalize（复用已落地文件）
+        - session 已清但 task 已提交 → 幂等返回当前状态，不重复入队（codex: 防 double-submit）
+        - 都没有 → 会话不存在/已过期
+        """
+        if task_id in self.upload_sessions:
+            await self._finalize_chunked_upload(websocket, task_id)
+            return
+        from src.core.task_manager import task_manager
+        if task_manager.get_task(task_id):
+            await self._send_task_status(websocket, task_id)
+        else:
+            await self._send_error(websocket, "session_not_found", "上传会话不存在或已过期")
+
+    def _sweep_upload_sessions(self):
+        """清理超 TTL 的遗弃上传 session（含 temp + 已落地文件），防磁盘泄漏。
+
+        机会式调用（新建 session 时），无需独立后台循环；配合硬数量上限做准入控制。
+        """
+        ttl = config.transcription.upload_session_ttl_seconds
+        now = time.time()
+        for task_id in list(self.upload_sessions.keys()):
+            sess = self.upload_sessions[task_id]
+            if now - sess.get("created_at", now) > ttl:
+                self._remove_session_files(sess, delete_finalized=True)
+                del self.upload_sessions[task_id]
+                logger.info(f"清理遗弃上传会话(TTL): {task_id}")
     
     def _calculate_file_hash(self, file_path: str, chunk_size: int = 8192) -> str:
         """高效计算文件哈希"""
@@ -709,21 +812,33 @@ class WebSocketHandler:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     
-    async def _cleanup_upload_session(self, task_id: str):
-        """清理上传会话"""
+    def _remove_session_files(self, session: dict, delete_finalized: bool = True):
+        """删除 session 关联的磁盘文件。
+
+        delete_finalized=False 时保留已落地的最终文件（提交成功后由 task 接管其生命周期，
+        不能删，否则任务拿不到文件）。
+        """
+        keys = ["temp_file_path"]
+        if delete_finalized:
+            keys.append("finalized_file_path")
+        for key in keys:
+            path = session.get(key)
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.debug(f"清理文件({key}): {path}")
+                except Exception as e:
+                    logger.error(f"清理文件失败({key}): {e}")
+
+    async def _cleanup_upload_session(self, task_id: str, delete_finalized: bool = True):
+        """清理上传会话（含磁盘文件）。
+
+        delete_finalized: 提交成功路径传 False（最终文件交给 task），
+        其余（真错误/遗弃 sweep）传 True 全清防泄漏。
+        """
         if task_id in self.upload_sessions:
             session = self.upload_sessions[task_id]
-            
-            # 删除临时文件
-            temp_file_path = session.get("temp_file_path")
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.remove(temp_file_path)
-                    logger.debug(f"清理临时文件: {temp_file_path}")
-                except Exception as e:
-                    logger.error(f"清理临时文件失败: {e}")
-            
-            # 删除会话
+            self._remove_session_files(session, delete_finalized=delete_finalized)
             del self.upload_sessions[task_id]
             logger.debug(f"清理上传会话: {task_id}")
 
