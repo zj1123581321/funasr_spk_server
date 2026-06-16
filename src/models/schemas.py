@@ -195,6 +195,39 @@ class TaskStatusResponse(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class TaskStatusBatchItem(BaseModel):
+    """批量状态查询的逐 id 项（异步轮询契约 TODOS #20）。
+
+    一项对应一个被查询的 task_id，与单查 TaskStatusResponse 的关键差异：
+    - COMPLETED 内联结果：JSON 走 result，**SRT 走 srt_content**
+      （codex #11：TaskStatusResponse.result=TranscriptionResult 装不下 SRT 文本）。
+    - 终态全集：completed/failed/timed_out/cancelled 都返终态（含 error），
+      让客户端据此停轮询（codex #10：只盯 completed 会让失败任务无限轮询）。
+    - PENDING/PROCESSING → result/srt_content/error 全 None（小帧）。
+    - expired/not_found：status=None + error 标 "task_expired"/"task_not_found"
+      （不整批失败；与单查 _send_task_status 的 expired vs not_found 语义对齐）。
+    """
+    task_id: str = Field(..., description="任务ID")
+    status: Optional[TaskStatus] = Field(None, description="任务状态；expired/not_found 时为 None")
+    progress: float = Field(default=0.0, description="进度（0-100）")
+    result: Optional[TranscriptionResult] = Field(None, description="JSON 转录结果（仅 COMPLETED 且 output_format=json）")
+    srt_content: Optional[str] = Field(None, description="SRT 文本（仅 COMPLETED 且 output_format=srt）")
+    error: Optional[str] = Field(None, description="错误信息 / task_expired / task_not_found")
+
+    model_config = {"protected_namespaces": ()}
+
+
+class TaskStatusBatchResponse(BaseModel):
+    """批量状态查询响应（异步轮询契约 TODOS #20）。
+
+    防 N+1 拉取风暴 + TTL race：客户端单条 task_status_batch 一次性拿全集状态，
+    完成项 result 随响应内联，不再逐 id 单查。task_ids 上限 50（服务端截断 + warn）。
+    """
+    items: List[TaskStatusBatchItem] = Field(..., description="逐 id 状态项")
+
+    model_config = {"protected_namespaces": ()}
+
+
 class ErrorResponse(BaseModel):
     """错误响应"""
     error: str = Field(..., description="错误类型")
