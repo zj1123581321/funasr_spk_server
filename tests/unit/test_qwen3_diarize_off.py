@@ -206,7 +206,7 @@ async def test_word_align_still_runs_with_diarize_off(tmp_path):
          patch("src.core.qwen3_transcriber.calculate_file_hash", new=AsyncMock(return_value="h")):
         result, raw = await tx.transcribe(
             audio_path=str(audio), task_id="t", output_format="json",
-            options=TranscribeOptions(language="chi", diarize=False),
+            options=TranscribeOptions(language="chi", diarize=False, word_align=True),
         )
     assert not mock_diar.called
     all_words = [w for s in result.segments if s.words for w in s.words]

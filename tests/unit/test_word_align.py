@@ -173,6 +173,102 @@ def test_align_chunks_one_window_fails_still_returns_others(monkeypatch):
     assert "trellis OOM" in stats["failures"][0]["reason"]
 
 
+# ==================== is_resource_error 分类 (CUDA 资源错误穿透, 逐窗错误吞) ====================
+
+
+def test_is_resource_error_matches_bfcarena():
+    exc = RuntimeError("BFCArena::AllocateRawInternal Failed to allocate memory for requested buffer of size 34504704")
+    assert word_align.is_resource_error(exc) is True
+
+
+def test_is_resource_error_matches_cublas():
+    exc = RuntimeError("CUBLAS failure 3: the resource allocation failed; expr=cublasCreate(&cublas_handle_)")
+    assert word_align.is_resource_error(exc) is True
+
+
+def test_is_resource_error_ignores_trellis_oom():
+    """逐窗 trellis OOM 是单窗口问题 (跳过该窗即可恢复), 不是 CUDA session 级资源错误,
+    不应被分类为 resource error (否则会误穿透触发 poison)."""
+    exc = RuntimeError("trellis OOM")
+    assert word_align.is_resource_error(exc) is False
+
+
+def test_align_chunks_propagates_resource_error(monkeypatch):
+    """决策 A (codex #6): CUDA 资源错误 (BFCArena/CUBLAS) 须穿透出 align_chunks,
+    不被逐窗 catch 吞成 failed_window — 否则上层 CPU fallback/poison 永远触发不了."""
+    import numpy as np
+
+    def fake_align_window(audio, text, **kw):
+        raise RuntimeError("CUBLAS failure 3: the resource allocation failed")
+
+    monkeypatch.setattr(word_align, "align_window", fake_align_window)
+    chunks = [_Chunk("甲", 0.0, 10.0)]
+    audio = np.zeros(10 * 16000, dtype=np.float32)
+    with pytest.raises(RuntimeError, match="CUBLAS"):
+        word_align.align_chunks(
+            audio, chunks, session=MagicMock(), tokenizer=MagicMock(),
+            language="chi", batch_size=1,
+        )
+
+
+# ==================== WordAligner cuda/cpu batch 选择 ====================
+
+
+def test_word_aligner_cuda_uses_cuda_batch(monkeypatch):
+    """provider 解析成 CUDA 时取 cuda_batch_size, 否则取 batch_size (CPU/默认)."""
+    captured = {}
+    monkeypatch.setattr(word_align, "build_alignment_session", lambda mp, pv: MagicMock())
+    monkeypatch.setattr(word_align, "_build_tokenizer", lambda: MagicMock())
+
+    def fake_align_chunks(audio, chunks, **kw):
+        captured["batch_size"] = kw.get("batch_size")
+        return ([], {"total_windows": 0, "failed_windows": 0, "total_words": 0, "failures": []})
+
+    monkeypatch.setattr(word_align, "align_chunks", fake_align_chunks)
+
+    cuda_aligner = word_align.WordAligner(
+        model_path="/tmp/x.onnx", provider="cuda", batch_size=16, cuda_batch_size=1
+    )
+    assert cuda_aligner.is_cuda is True
+    assert cuda_aligner.effective_provider == "cuda"
+    cuda_aligner.align_chunks(None, [])
+    assert captured["batch_size"] == 1  # CUDA → cuda_batch_size
+
+
+def test_word_aligner_cpu_uses_default_batch(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(word_align, "build_alignment_session", lambda mp, pv: MagicMock())
+    monkeypatch.setattr(word_align, "_build_tokenizer", lambda: MagicMock())
+
+    def fake_align_chunks(audio, chunks, **kw):
+        captured["batch_size"] = kw.get("batch_size")
+        return ([], {"total_windows": 0, "failed_windows": 0, "total_words": 0, "failures": []})
+
+    monkeypatch.setattr(word_align, "align_chunks", fake_align_chunks)
+
+    cpu_aligner = word_align.WordAligner(
+        model_path="/tmp/x.onnx", provider="cpu", batch_size=16, cuda_batch_size=1
+    )
+    assert cpu_aligner.is_cuda is False
+    assert cpu_aligner.effective_provider == "cpu"
+    cpu_aligner.align_chunks(None, [])
+    assert captured["batch_size"] == 16  # CPU → batch_size
+
+
+def test_word_aligner_close_disposes_session(monkeypatch):
+    monkeypatch.setattr(word_align, "build_alignment_session", lambda mp, pv: MagicMock())
+    monkeypatch.setattr(word_align, "_build_tokenizer", lambda: MagicMock())
+    monkeypatch.setattr(
+        word_align, "align_chunks",
+        lambda *a, **k: ([], {"total_windows": 0, "failed_windows": 0, "total_words": 0, "failures": []}),
+    )
+    aligner = word_align.WordAligner(model_path="/tmp/x.onnx", provider="cuda")
+    aligner.align_chunks(None, [])
+    assert aligner._session is not None
+    aligner.close()
+    assert aligner._session is None
+
+
 # ==================== WordAligner 单例 ====================
 
 

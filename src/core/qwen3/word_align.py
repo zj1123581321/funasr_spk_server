@@ -29,6 +29,31 @@ from loguru import logger
 # MMS sample rate 固定 16kHz, 跟 ASR/diarize 同采样率.
 _SR = 16000
 
+# CUDA session 级资源错误标记 (决策 A, codex #6): 这些错误意味着整个 CUDA word_align
+# session 不可用 (显存分配失败 / CUBLAS handle 创建失败), 须穿透出 align_chunks 触发
+# 上层 poison + CPU fallback. 注意: 不含 "trellis OOM" 这类单窗口可恢复错误 (跳过该窗即可),
+# 否则会误穿透. 取自 PoC 实测错误日志 (2026-06-16-Qwen3-word-align显存PoC与落地计划.md).
+_RESOURCE_ERROR_MARKERS = (
+    "BFCArena",      # ORT CUDA allocator: Failed to allocate memory for requested buffer
+    "CUBLAS",        # CUBLAS failure N: the resource allocation failed
+    "cublas",        # cublasCreate(&cublas_handle_)
+    "cudaMalloc",
+    "CUDA failure",
+    "cudaErrorMemoryAllocation",
+    "out of memory",  # 通用 CUDA OOM (注: 与 "trellis OOM" 区分 — 后者无此整串)
+)
+
+
+def is_resource_error(exc: BaseException) -> bool:
+    """判断异常是否为 CUDA session 级资源错误 (须穿透触发 poison + CPU fallback).
+
+    决策 A (codex #6): align_chunks 逐窗 catch 会把 CUDA OOM 吞成 failed_window, 让上层
+    fallback 永远触发不了. 用本函数区分: 资源类错误穿透, 普通逐窗错误 (文本怪 / 单窗
+    trellis OOM) 仍逐窗跳过.
+    """
+    msg = f"{type(exc).__name__}: {exc}"
+    return any(marker in msg for marker in _RESOURCE_ERROR_MARKERS)
+
 
 def resolve_word_align_providers(provider: str, runtime: Any = None) -> List[str]:
     """把 config 的 word_align_provider 解析成 onnxruntime providers 列表.
@@ -171,6 +196,10 @@ def align_chunks(
                 batch_size=batch_size,
             )
         except Exception as exc:  # 逐 window fallback, 不阻塞整段
+            # 决策 A (codex #6): CUDA session 级资源错误 (BFCArena/CUBLAS) 穿透出去,
+            # 触发上层 poison + CPU fallback; 普通错误 (文本怪/单窗 trellis OOM) 逐窗跳过.
+            if is_resource_error(exc):
+                raise
             failures.append({"index": idx, "reason": f"{type(exc).__name__}: {exc}"})
             continue
         for w in win_words:
@@ -205,20 +234,52 @@ class WordAligner:
         provider: str = "auto",
         language: str = "chi",
         batch_size: int = 16,
+        cuda_batch_size: int = 1,
         runtime: Any = None,
     ):
         self.model_path = model_path
         self.providers = resolve_word_align_providers(provider, runtime=runtime)
         self.language = language
+        # batch 选择 (显存落地 2026-06-16): provider 解析成 CUDA 时取 cuda_batch_size
+        # (3060 batch>=2 撞 BFCArena OOM), 否则 batch_size (CPU/默认 16).
         self.batch_size = batch_size
+        self.cuda_batch_size = cuda_batch_size
+        self.effective_batch_size = cuda_batch_size if self.is_cuda else batch_size
         self._session = None
         self._tokenizer = None
+
+    @property
+    def is_cuda(self) -> bool:
+        """primary provider 是否解析成 CUDA EP (决定 batch 选择 + 是否可 poison)."""
+        return any("CUDA" in p for p in self.providers)
+
+    @property
+    def effective_provider(self) -> str:
+        """解析后的 provider 简名 (cuda/cpu/...), 给日志 + metadata 回显."""
+        head = self.providers[0] if self.providers else "CPUExecutionProvider"
+        if "CUDA" in head:
+            return "cuda"
+        if "CPU" in head:
+            return "cpu"
+        return head
 
     def _ensure(self):
         if self._session is None:
             self._session = build_alignment_session(self.model_path, self.providers)
             self._tokenizer = _build_tokenizer()
         return self._session, self._tokenizer
+
+    def close(self):
+        """释放 ONNX session (poison 时尝试回收 CUDA 显存, 决策 4A).
+
+        ⚠️ ORT BFCArena 高水位未必真把显存还给 driver (文档存疑), 调用方须打
+        nvidia-smi delta 观测实际效果, 不当保证. 真正可靠释放只有进程退出 (TODO #18 sidecar).
+        """
+        self._session = None
+        self._tokenizer = None
+        import gc
+
+        gc.collect()
 
     def align_chunks(
         self, audio_16k, chunks, language: Optional[str] = None
@@ -231,5 +292,5 @@ class WordAligner:
             session=session,
             tokenizer=tokenizer,
             language=language or self.language,
-            batch_size=self.batch_size,
+            batch_size=self.effective_batch_size,
         )

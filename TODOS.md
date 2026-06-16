@@ -122,6 +122,25 @@
 - **触发条件**：出现纯文字稿的 funasr 部署需求
 - 优先级：P3（条件触发）
 
+### 17. VRAM preflight 显存探针
+- 来源：`/plan-eng-review` + `codex` 外部声音（2026-06-16，word_align 显存落地评审）
+- **What**：跑 CUDA word_align 前用 NVML/nvidia-smi 量显卡剩余显存，不够则不加载 CUDA aligner、直接走 CPU；记录每次请求前后 VRAM delta
+- **Why**：word_align 落地 PR 靠「catch OOM 后转 CPU」事后补救，preflight 是事前预防
+- **Cons / 为何延期**：引入 NVML/nvidia-smi 依赖（创新额度）；阈值要二次标定（保守起点：未加载要求 free ≥4.5GB，已加载要求 ≥1.5-2GB，非最终标准）
+- **⚠️ codex 推迟风险提醒**：pool_size=1 的序列化只挡内部并发 CUDA 会话，挡不住同卡 CapsWriter 占用波动 / ORT BFCArena 残留 / 显存碎片 / 用户调高 pool_size。第一个请求仍是「试错探针」，OOM 可能在 fallback 前就把 CUDA session 弄坏
+- **触发条件**：`qwen3_pool_size` 调到 >1，或同卡显存竞争变频繁，或观测到 OOM thrash
+- **依赖**：word_align per-request + CPU fallback + poison PR（2026-06-16）落地
+- 优先级：P2
+
+### 18. 独立 word_align sidecar 进程
+- 来源：`/plan-eng-review` + `codex` 外部声音（2026-06-16，word_align 显存落地评审）
+- **What**：把 word_align 从主 ASR 服务拆成独立进程，按需启动 CUDA session、空闲 TTL 自动退出释放 VRAM；主服务通过队列/RPC 调用，不可用时 CPU fallback 或返回无词；加生命周期日志 + 健康检查
+- **Why**：落地 PR 的 poison + dispose 只能「尝试」要回显存，ORT BFCArena 高水位未必真还（文档存疑）。**唯一可靠的显存释放是进程退出**——sidecar 让偶发的词级时间戳请求不再污染主 ASR 服务的长期显存基线
+- **Cons / 为何延期**：跨进程协议 + 生命周期管理 + 健康检查，工程量最大；主服务多一个故障面
+- **触发条件**：word_align 成为高频常驻需求，或 dispose 实测证明显存确实还不回来、卡住同卡 CapsWriter 成为真实痛点
+- **依赖**：word_align per-request PR（2026-06-16）+ TODO #17（preflight）
+- 优先级：P3
+
 ---
 
 ## 已完成（PR1）

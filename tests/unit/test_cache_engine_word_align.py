@@ -10,7 +10,10 @@ word_align 加 segment.words 是契约变化: 开启后的结果跟未开启的�
 """
 from __future__ import annotations
 
-from src.core.database import compute_cache_engine, cache_lookup_params
+import pytest
+
+from src.core.database import compute_cache_engine, cache_lookup_params, cache_params
+from src.models.schemas import TranscribeOptions
 
 
 class TestComputeCacheEngine:
@@ -45,6 +48,140 @@ class TestComputeCacheEngine:
             )
             == "funasr"
         )
+
+    # ---- 决策 2A: SRT 强制降 +wa (word_align JSON-only, SRT 行无词) ----
+
+    def test_srt_drops_wa_tag(self):
+        """SRT + word_align=true: 该行实际无词 (word_align JSON-only), tag 降回纯 qwen3,
+        避免被未来 JSON +wa 请求误命中 (无词却以为对齐完成)."""
+        assert (
+            compute_cache_engine(
+                "qwen3", word_align_enabled=True, language="eng",
+                word_align_language="chi", output_format="srt",
+            )
+            == "qwen3"
+        )
+
+    def test_json_keeps_wa_tag(self):
+        assert (
+            compute_cache_engine(
+                "qwen3", word_align_enabled=True, language="eng",
+                word_align_language="chi", output_format="json",
+            )
+            == "qwen3+wa:eng"
+        )
+
+    def test_srt_wa_plus_nospk_keeps_only_nospk(self):
+        """SRT + word_align=true + diarize=false → +wa 降, 仅保留 +nospk."""
+        assert (
+            compute_cache_engine(
+                "qwen3", word_align_enabled=True, language="eng",
+                word_align_language="chi", diarize=False, output_format="srt",
+            )
+            == "qwen3+nospk"
+        )
+
+    def test_default_output_format_is_json_backcompat(self):
+        """不传 output_format 默认 json (向后兼容老调用)."""
+        assert (
+            compute_cache_engine(
+                "qwen3", word_align_enabled=True, language="eng", word_align_language="chi"
+            )
+            == "qwen3+wa:eng"
+        )
+
+
+class TestCacheParamsReadsOptions:
+    """决策 1A: cache_params 读 options.word_align (非全局 config)."""
+
+    def test_cache_params_uses_options_word_align_on(self):
+        opts = TranscribeOptions(language="eng", word_align=True)
+        engine, allow_cross = cache_params("qwen3", opts)
+        assert engine == "qwen3+wa:eng"
+        assert allow_cross is False
+
+    def test_cache_params_uses_options_word_align_off(self):
+        opts = TranscribeOptions(language="eng", word_align=False)
+        engine, allow_cross = cache_params("qwen3", opts)
+        assert engine == "qwen3"
+        assert allow_cross is None
+
+    def test_cache_params_srt_drops_wa(self):
+        opts = TranscribeOptions(language="eng", word_align=True)
+        engine, _ = cache_params("qwen3", opts, output_format="srt")
+        assert engine == "qwen3"
+
+
+class TestCrossEngineExcludesFoldedRows:
+    """决策 C (codex #4): 跨引擎 file_hash 回退只命中裸 engine 行, 排除 +wa/+nospk 折维行.
+
+    反向污染: base qwen3 (word_align=false) 请求 allow_cross=None 跟随 config.cache_cross_engine,
+    开启时若回退命中 qwen3+wa 行 → 没要词却返回带词. 修法: 回退查询排除带 '+' 的折维 tag.
+    """
+
+    @pytest.mark.asyncio
+    async def test_base_request_does_not_cross_hit_wa_row(self, tmp_path):
+        from src.core.database import DatabaseManager
+        from src.core.config import config
+        from src.models.schemas import TranscriptionResult, TranscriptionSegment, WordTimestamp
+
+        db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+        await db.init_db()
+
+        original = config.transcription.cache_cross_engine
+        config.transcription.cache_cross_engine = True
+        try:
+            # 只存一行带词的 +wa 折维行
+            wa_result = TranscriptionResult(
+                task_id="t", file_name="a.wav", file_hash="hX", duration=1.0,
+                segments=[TranscriptionSegment(
+                    start_time=0, end_time=1, text="hi", speaker="Speaker1",
+                    words=[WordTimestamp(text="hi", start=0.0, end=0.5)],
+                )],
+                speakers=["Speaker1"], processing_time=0.1,
+            )
+            await db.save_result(wa_result, raw_result={"engine": "qwen3"}, engine="qwen3+wa:chi")
+
+            # base qwen3 (无 wa) 请求, 允许跨引擎. 折维行须被排除 → miss (None)
+            hit = await db.get_cached_result(
+                "hX", "json", engine="qwen3", allow_cross_engine=True,
+                options=TranscribeOptions(word_align=False),
+            )
+            assert hit is None, "base 请求不应跨引擎命中 +wa 折维行 (反向污染)"
+        finally:
+            config.transcription.cache_cross_engine = original
+
+
+class TestCacheSaveEngineDecisionB:
+    """决策 B (codex #5): 请求 word_align 但实际无词 (对齐全失败) → 写入降 +wa, 存 base tag,
+    避免无词结果 exact-hit 永久毒化该文件的 +wa 缓存."""
+
+    def _task(self, word_align, diarize=True, language="chi", output_format="json"):
+        from src.models.schemas import TranscriptionTask, TranscribeOptions
+        return TranscriptionTask(
+            task_id="t", file_name="a.wav", file_path="", file_size=1, file_hash="h",
+            engine="qwen3", output_format=output_format,
+            options=TranscribeOptions(language=language, diarize=diarize, word_align=word_align),
+        )
+
+    def test_has_words_keeps_wa_tag(self):
+        from src.core.database import cache_save_engine_for
+        assert cache_save_engine_for(self._task(word_align=True), has_words=True) == "qwen3+wa:chi"
+
+    def test_no_words_demotes_wa_tag(self):
+        from src.core.database import cache_save_engine_for
+        # 请求 +wa 但无词 → 降回 base qwen3 (不毒化)
+        assert cache_save_engine_for(self._task(word_align=True), has_words=False) == "qwen3"
+
+    def test_no_words_keeps_other_dims(self):
+        from src.core.database import cache_save_engine_for
+        # diarize=false + 无词 → 只降 +wa, 保留 +nospk
+        tag = cache_save_engine_for(self._task(word_align=True, diarize=False), has_words=False)
+        assert tag == "qwen3+nospk"
+
+    def test_non_wa_request_unaffected(self):
+        from src.core.database import cache_save_engine_for
+        assert cache_save_engine_for(self._task(word_align=False), has_words=False) == "qwen3"
 
 
 class TestCacheLookupParams:

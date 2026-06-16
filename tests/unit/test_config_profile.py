@@ -78,8 +78,9 @@ class TestProfileDefaults:
         assert cfg.transcription.default_engine == "qwen3"
         assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "cuda"
-        # CUDA word_align 仅 +1% RTF, profile 默认开词级时间戳
-        assert cfg.qwen3.word_align_enabled is True
+        # P0 (2026-06-16 显存落地评审): word_align 改 per-request 默认关, profile 不再强开.
+        # 全局兜底显式 False (codex #13: 否则 per-request 默认不是真 OFF). 想全局开走 env.
+        assert cfg.qwen3.word_align_enabled is False
 
     def test_cuda_dev_profile(self, monkeypatch, tmp_path):
         monkeypatch.setenv("FUNASR_PROFILE", "cuda_dev")
@@ -89,6 +90,13 @@ class TestProfileDefaults:
         assert cfg.transcription.qwen3_pool_size == 1
         assert cfg.qwen3.asr_encoder_provider == "cuda"
         assert cfg.logging.level == "DEBUG"
+        assert cfg.qwen3.word_align_enabled is False
+
+    def test_cuda_profile_env_can_still_force_global_word_align(self, monkeypatch, tmp_path):
+        """旧全局开路径不断: P0 后 profile 不强开, 但 env 仍能全局默认 ON (兜底层)."""
+        monkeypatch.setenv("FUNASR_PROFILE", "cuda_dev")
+        monkeypatch.setenv("FUNASR_QWEN3_WORD_ALIGN_ENABLED", "true")
+        cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.qwen3.word_align_enabled is True
 
 

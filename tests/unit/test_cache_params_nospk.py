@@ -133,15 +133,18 @@ def wa_on():
 
 
 class TestCacheParamsFor:
-    def _task(self, engine="qwen3", language=None, diarize=True):
+    def _task(self, engine="qwen3", language=None, diarize=True, word_align=False):
         return TranscriptionTask(
             task_id="t", file_name="a.wav", file_path="", file_size=1,
             file_hash="h", engine=engine,
-            options=TranscribeOptions(language=language, diarize=diarize),
+            options=TranscribeOptions(language=language, diarize=diarize, word_align=word_align),
         )
 
-    def test_reads_config_word_align(self, wa_on):
-        tag, allow_cross = cache_params_for(self._task(language="eng", diarize=False))
+    def test_reads_options_word_align(self):
+        """决策 1A: cache_params_for 折维读 options.word_align (effective 值), 非全局 config."""
+        tag, allow_cross = cache_params_for(
+            self._task(language="eng", diarize=False, word_align=True)
+        )
         assert tag == "qwen3+wa:eng+nospk"
         assert allow_cross is False
 

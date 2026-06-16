@@ -133,7 +133,7 @@ class TestTranscribeJsonMode:
         call_kwargs = custom_pool.generate_with_pool.call_args.kwargs
         assert call_kwargs.get("extra_task_fields") == {
             "output_format": "json",
-            "options": {"language": None, "diarize": True},
+            "options": {"language": None, "diarize": True, "word_align": False},
         }
 
 
@@ -169,7 +169,7 @@ class TestTranscribeSrtMode:
         call_kwargs = custom_pool.generate_with_pool.call_args.kwargs
         assert call_kwargs.get("extra_task_fields") == {
             "output_format": "srt",
-            "options": {"language": None, "diarize": True},
+            "options": {"language": None, "diarize": True, "word_align": False},
         }
 
 

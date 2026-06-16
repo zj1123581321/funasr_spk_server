@@ -15,6 +15,7 @@ from src.models.schemas import (
     TranscribeOptions,
     TranscriptionResult,
     TranscriptionTask,
+    resolve_word_align,
 )
 
 
@@ -93,7 +94,13 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
-            options=TranscribeOptions(language=request.language, diarize=request.diarize),
+            options=TranscribeOptions(
+                language=request.language,
+                diarize=request.diarize,
+                # 决策 1A: effective word_align 在此解析一次（请求 > config 兜底），
+                # 写进 options.word_align，下游 transcribe/cache/metadata 全读它。
+                word_align=resolve_word_align(request.word_align, config.qwen3.word_align_enabled),
+            ),
         )
 
         # 保存任务
@@ -157,7 +164,8 @@ class TaskManager:
                 if task.result is not None:
                     from src.core.result_projection import build_result_metadata
                     task.result.metadata = build_result_metadata(
-                        engine=task.engine, options=task.options, projected=cache_projected,
+                        engine=task.engine, options=task.options,
+                        output_format=task.output_format, projected=cache_projected,
                     )
 
                 task.completed_at = datetime.now()
@@ -292,6 +300,8 @@ class TaskManager:
             from src.core.database import cache_params_for
             cache_engine_tag = cache_params_for(task)[0]
             fresh_projected = False  # fresh 出口是否做了投影 (funasr 照算路径)
+            has_words = None         # JSON 出口词级时间戳是否实际挂上 (驱动 metadata delivered)
+            word_align_error_msg = None  # word_align 失败原因 (回显 metadata.word_align_error)
             if task.output_format == "srt":
                 # SRT格式结果
                 # 创建转录结果对象用于缓存
@@ -331,8 +341,16 @@ class TaskManager:
                 # JSON格式结果
                 transcription_result, raw_result = result
 
+                # 决策 B (codex #5): 请求 word_align 但 segments 实际无词 (CUDA+CPU 都失败) →
+                # 写入降 +wa tag, 不毒化该文件 +wa 缓存. has_words 也驱动 metadata delivered.
+                has_words = any(getattr(s, "words", None) for s in transcription_result.segments)
+                from src.core.database import cache_save_engine_for
+                save_tag = cache_save_engine_for(task, has_words)
+
                 # 保存到缓存（先于投影, 同上）
-                await db_manager.save_result(transcription_result, raw_result, engine=cache_engine_tag)
+                await db_manager.save_result(transcription_result, raw_result, engine=save_tag)
+                # word_align 失败原因 (fresh 出口回显 metadata.word_align_error, codex #11)
+                word_align_error_msg = (raw_result.get("word_align") or {}).get("error")
 
                 # fresh 结果出口投影 (funasr 照算路径; qwen3 原生 nospk 幂等跳过)
                 if not task.options.diarize and transcription_result.speakers:
@@ -341,10 +359,15 @@ class TaskManager:
                     fresh_projected = True
                 task.result = transcription_result
 
-            # E2: effective options 回显 (serve 层组装, 缓存写入已在前完成不被污染)
+            # E2: effective options 回显 (serve 层组装, 缓存写入已在前完成不被污染).
+            # JSON 出口传 has_words + word_align_error → metadata.word_align 反映实际交付 (codex #12);
+            # SRT 出口 word_align 恒 False (output_format 透传, 决策 2A).
             from src.core.result_projection import build_result_metadata
             task.result.metadata = build_result_metadata(
-                engine=task.engine, options=task.options, projected=fresh_projected,
+                engine=task.engine, options=task.options, output_format=task.output_format,
+                projected=fresh_projected,
+                has_words=(has_words if task.output_format != "srt" else None),
+                word_align_error=(word_align_error_msg if task.output_format != "srt" else None),
             )
 
             task.status = TaskStatus.COMPLETED

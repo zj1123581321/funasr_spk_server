@@ -77,8 +77,27 @@ class TranscribeOptions(BaseModel):
     # diarize 开关（设计定案 D2）: 对外契约是 diarize=false ⇒ 响应不含说话人区分;
     # 各引擎自行决定达成方式（qwen3 真跳过 diarize+speaker 后处理省算力, funasr 出口投影）
     diarize: bool = Field(default=True, description="是否输出说话人区分；False 时 segments.speaker=null、SRT 无 SpeakerN: 前缀")
+    # word_align 开关（2026-06-16 显存落地，决策 1A）: 已解析的 effective 值（确定 bool，非 Optional）。
+    # 优先级链（请求 > config 兜底）在构造 options 前由 resolve_word_align 算一次，下游
+    # transcribe/cache/metadata 全读此字段，不再各自读 config。JSON-only（SRT 不挂词，见 cache 2A）。
+    word_align: bool = Field(default=False, description="是否输出词级时间戳（segment.words）；已解析的 effective 值")
 
     model_config = {"protected_namespaces": ()}
+
+
+def resolve_word_align(request_value: Optional[bool], config_default: bool) -> bool:
+    """effective word_align 优先级单一事实源（决策 1A）。
+
+    请求级 word_align 是 Optional[bool]：非 None 表示客户端显式指定（True/False 都压过
+    config），None 表示未指定 → 跟随 server config 兜底。**所有构造 TranscribeOptions 的点
+    （task_manager.create_task / handler 分片 session）都调本函数**，保证优先级规则不在多处 drift。
+
+    ⚠️ 这里只解析"请求想不想要词"，不掺 output_format / 失败状态：
+    - SRT 强制降级在 cache 层（compute_cache_engine AND output_format=='json'，决策 2A）
+    - 对齐失败的 delivered=false 在 metadata 层（build_result_metadata）
+    职责分离，本函数保持纯粹。
+    """
+    return request_value if request_value is not None else config_default
 
 
 class TranscriptionTask(BaseModel):
@@ -144,6 +163,10 @@ class FileUploadRequest(BaseModel):
     # diarize=false ⇒ 响应不含说话人区分（JSON speaker=null + SRT 无前缀, D8）.
     # 默认 true 完全向后兼容; 老 server Pydantic 忽略未知字段（部署顺序: server 先升级）.
     diarize: bool = Field(default=True, description="是否输出说话人区分（默认 True 向后兼容）")
+    # word_align 请求级开关（2026-06-16 显存落地）: Optional[bool], None=未指定（跟随 config 兜底），
+    # True/False=显式. 默认 None → 老客户端不传此字段行为零变化（resolve_word_align 走 config，
+    # 默认关）. 老 server Pydantic 忽略未知字段（部署顺序: server 先升级、客户端后启用）.
+    word_align: Optional[bool] = Field(default=None, description="是否输出词级时间戳；None=跟随 server 默认（默认关）")
 
     model_config = {"protected_namespaces": ()}
 
