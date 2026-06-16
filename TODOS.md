@@ -130,16 +130,18 @@
 - **⚠️ codex 推迟风险提醒**：pool_size=1 的序列化只挡内部并发 CUDA 会话，挡不住同卡 CapsWriter 占用波动 / ORT BFCArena 残留 / 显存碎片 / 用户调高 pool_size。第一个请求仍是「试错探针」，OOM 可能在 fallback 前就把 CUDA session 弄坏
 - **触发条件**：`qwen3_pool_size` 调到 >1，或同卡显存竞争变频繁，或观测到 OOM thrash
 - **依赖**：word_align per-request + CPU fallback + poison PR（2026-06-16）落地
-- 优先级：P2
+- **课题关系**：#17 与 #18 同属「word_align 显存安全」课题，**一次设计、分两次发**——本条是 **Lane 1**（小、低风险、先发），探针 `free_vram_mib()` 是 #18 sidecar 路由器复用的**共享原语**（非一次性前置）。设计/落地交接见 `docs/开发/gpu加速/2026-06-16-TODOS17-18-word-align-显存安全-交接.md`
+- 优先级：P2（Lane 1 先行）
 
 ### 18. 独立 word_align sidecar 进程
 - 来源：`/plan-eng-review` + `codex` 外部声音（2026-06-16，word_align 显存落地评审）
 - **What**：把 word_align 从主 ASR 服务拆成独立进程，按需启动 CUDA session、空闲 TTL 自动退出释放 VRAM；主服务通过队列/RPC 调用，不可用时 CPU fallback 或返回无词；加生命周期日志 + 健康检查
-- **Why**：落地 PR 的 poison + dispose 只能「尝试」要回显存，ORT BFCArena 高水位未必真还（文档存疑）。**唯一可靠的显存释放是进程退出**——sidecar 让偶发的词级时间戳请求不再污染主 ASR 服务的长期显存基线
+- **Why**：落地 PR 的 poison + dispose 只能「尝试」要回显存，ORT BFCArena 高水位未必真还（2026-06-16 3060 实测确认：同尺寸任务显存阶梯爬升封顶 ~7844MiB，只有重启进程才回落）。**唯一可靠的显存释放是进程退出**——sidecar 让偶发的词级时间戳请求不再污染主 ASR 服务的长期显存基线
 - **Cons / 为何延期**：跨进程协议 + 生命周期管理 + 健康检查，工程量最大；主服务多一个故障面
-- **触发条件**：word_align 成为高频常驻需求，或 dispose 实测证明显存确实还不回来、卡住同卡 CapsWriter 成为真实痛点
-- **依赖**：word_align per-request PR（2026-06-16）+ TODO #17（preflight）
-- 优先级：P3
+- **触发条件**：Lane 1（#17）上线后用真机数据复评——若 preflight + CPU 降级后 OOM 基本绝迹可继续延后；若仍常撞顶 / word_align 高频常驻则做
+- **依赖**：word_align per-request PR（2026-06-16）+ **同课题 Lane 1（#17）的探针落地后复用**
+- **课题关系**：同「word_align 显存安全」课题的 **Lane 2**（大、结构性、后发），复用 #17 探针。交接文档同上
+- 优先级：P3（Lane 2，#17 之后）
 
 ---
 
