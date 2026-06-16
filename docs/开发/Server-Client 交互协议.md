@@ -247,6 +247,50 @@ if should_retry and task.retry_count < config.transcription.retry_times:
 }
 ```
 
+### 1.5 异步轮询契约（TODOS #20，2026-06-16 服务端落地）
+
+**背景**：pool=1（真实并发=1）时深队列后段任务 `k×T` 才完成，客户端同步堵 `recv()` 的 300s 窗注定等不到 → 误判超时。根治办法是**客户端收 ack 后改轮询，不堵等**。
+
+**服务端零上传协议改动**：入队后服务端**今天就**回 `task_queued`/`upload_complete`（带 `task_id`/`queue_position`/`estimated_wait_seconds`）。客户端在此 ack 后转入轮询循环即可，服务端无需知情——**无 `wait` 开关、无 `task_accepted` 新消息**。
+
+**新增消息 `task_status_batch`（批量查询，防 N+1 拉取风暴 + TTL race）**：
+
+请求（`task_ids` 上限 50，超出服务端截断 + warn）：
+```json
+{ "type": "task_status_batch", "data": { "task_ids": ["id1", "id2", ...] } }
+```
+
+响应（逐 id 项）：
+```json
+{
+  "type": "task_status_batch",
+  "data": {
+    "items": [
+      { "task_id": "id1", "status": "processing", "progress": 42.0, "result": null, "srt_content": null, "error": null },
+      { "task_id": "id2", "status": "completed", "progress": 100.0, "result": { /* TranscriptionResult */ } },
+      { "task_id": "id3", "status": "completed", "srt_content": "1\n00:00:..." },
+      { "task_id": "id4", "status": "failed", "error": "..." },
+      { "task_id": "id5", "status": null, "error": "task_expired" },
+      { "task_id": "id6", "status": null, "error": "task_not_found" }
+    ]
+  }
+}
+```
+
+逐 id 语义：
+- **COMPLETED**：JSON 内联 `result`，**SRT 内联 `srt_content`**（`result` 装不下 SRT 文本）。
+- **终态全集** `completed/failed/timed_out/cancelled` 都带终态 + `error`，客户端据此**停轮询**（不能只认 completed，否则失败任务无限轮询）。
+- **PENDING/PROCESSING** → `result/srt_content/error` 全 null（小帧）。
+- **poll-miss**：`status=null` + `error="task_expired"`（曾存在被内存清理）或 `"task_not_found"`（从未存在）；客户端凭 `file_hash` 重投（命中 DB 缓存秒回；分片重启需重传）。
+
+**客户端硬约束**：批量场景**必须**用单条 `task_status_batch`（禁 per-task 各自轮询）；用 ack 的 `estimated_wait` 定首延、间隔退避（如 5~10s）；完成项 result 随 batch 内联拿到，不再单查。
+
+**关键代码位置**：
+- 路由 + 批量 handler：`websocket_handler.py:_handle_task_status_batch` + `_build_task_status_batch_item`（**同步组装、中间不 await**，钉 `task_manager.py` COMPLETED 翻转原子性，避免返回 completed+null）
+- schema：`schemas.py:TaskStatusBatchResponse` / `TaskStatusBatchItem`
+
+详见 `docs/开发/2026-06-16-异步轮询契约-设计定案与落地计划.md`。
+
 ### 2. 动态负载均衡
 
 - 支持运行时调整并发任务数

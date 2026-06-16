@@ -282,6 +282,9 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 
 定案: `docs/开发/2026-06-16-高负载队列机制-止血修复计划.md`。背景: 批量提交 100+ 任务报 `任务队列已满` + 客户端 `接收消息超时(300s)`。根因三叠加(队列硬拒+泛化错误 / `self.tasks` 内存无限增长 / 客户端同步死等×pool=1 深队列)。本轮走**止血(决策 C)**,异步轮询契约推迟(TODOS #20)。
 
+## 异步轮询契约 task_status_batch(TODOS #20，2026-06-16 服务端落地)
+定案: `docs/开发/2026-06-16-异步轮询契约-设计定案与落地计划.md`。根治 `接收消息超时(300s)` 的客户端侧根因——pool=1 深队列后段任务注定等不到 300s 窗。**服务端上传协议零改动**(无 `wait` 开关/无 `task_accepted`): 入队即回 `task_queued`/`upload_complete`(带 position),客户端在此 ack 后**改轮询而非堵 recv()**。服务端唯一真新代码 = **`task_status_batch`**(批量查询防 N+1 拉取风暴 + TTL race): `websocket_handler.py:_handle_task_status_batch` + `_build_task_status_batch_item`(**同步组装不 await**,钉 COMPLETED 翻转原子性避免 completed+null), schema `schemas.py:TaskStatusBatchResponse/TaskStatusBatchItem`。逐 id 语义: COMPLETED-JSON 走 `result` / COMPLETED-SRT 走 `srt_content`; 终态全集 completed/failed/timed_out/cancelled 带 error(client 据此停轮); poll-miss `status=null`+`error=task_expired/task_not_found`(凭 file_hash 重投)。`task_ids` 上限 50 截断+warn。**T1-T4 服务端已落地(746 unit + 3 parity 绿), T5 客户端×2 独立代码库待切**。部署: 服务端已先上(对老客户端透明), 客户端逐个切。in-flight 去重拆独立 PR(TODOS #22)。
+
 ## 队列 = 准入控制,不是缓冲池
 `TaskManager.task_queue` 是 `asyncio.Queue(maxsize=max_queue_size)`。**真实并发 = qwen3_pool_size(默认 1)**,2 个 task_manager worker 阻塞在池上。队列满 = 准入控制拒绝,抛 **`QueueFullError`**(`src/core/task_manager.py`,携 `retry_after`/`queue_size`/`max_queue_size`),websocket 层映射成 **`queue_full`** 消息(429 语义 + 兼容 error 字段),客户端退避重投。`config.json` `max_queue_size` 默认压到 20(超时窗可消化,避免"被接受却必超时"的假承诺),`FUNASR_MAX_QUEUE_SIZE` 可调。
 
