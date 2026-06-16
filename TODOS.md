@@ -154,7 +154,12 @@
 - **依赖**：#17（VRAM preflight 探针 + 阈值 config 字段）落地
 - 优先级：P3（#17 之后，数据驱动）
 
-### 20. 批量上传路径改异步轮询契约（根治 300s 超时）
+### 20. 批量上传路径改异步轮询契约（根治 300s 超时）— 🟡 服务端已落地，待客户端切换
+- **✅ 服务端落地（2026-06-16，已 push main）**：T1-T4 完成，746 unit + 3 FunASR parity 全绿。
+  - `task_status_batch` 批量查询：`schemas.py:TaskStatusBatchResponse/TaskStatusBatchItem` + `websocket_handler.py:_handle_task_status_batch` / `_build_task_status_batch_item`（同步组装不 await 钉 COMPLETED 原子性；JSON 走 result / SRT 走 srt_content；终态全集带 error；上限 50 截断+warn；poll-miss `status=null`+`task_expired`/`task_not_found`）。
+  - 上传协议**零改动**（无 wait 开关 / 无 task_accepted），入队照旧回 `task_queued`/`upload_complete`(带 position)。
+  - 文档同步：`Server-Client 交互协议.md`（服务端规格）+ `docs/使用/客户端交互指南.md`（客户端迁移节）+ `CLAUDE.md`。
+- **⏳ 剩余 = T5 客户端×2（独立代码库，本仓库外）**：停 300s 堵等 → 收 ack 后批量 `task_status_batch` 轮询；终态全集停轮；poll-miss 凭 file_hash 重投。验收：批量 100 任务实测不超时。部署顺序：服务端已先上（对老客户端透明），客户端逐个切。
 - 来源：`/plan-eng-review`（2026-06-16，高负载队列机制审查；本轮选 C「先止血，异步契约下一步」）
 - **What**：把批量/分片上传的「finalize 即同步等 `task_complete`」改成「finalize 立刻返回 `task_id` → 客户端轮询 `task_status` 拿进度/结果」。服务端 `task_status` 查询接口**已存在**（`websocket_handler.py:131/316` → `_send_task_status` → `task_manager.get_task`），主要是客户端契约 + 部署协调
 - **Why**：`接收消息超时(300秒)` 的**真正根因**是客户端单 ws 同步死等。qwen3 pool=1，真实并发≈1，队列深处任务等待 ≈ 位置×单任务时长 >> 300s，**必然超时**。本轮止血（内存/资源泄漏修复 + 队列满可重试信号）只让「队列已满」变优雅、让内存不爆，**修不掉这个超时**——客户端只要还站着死等，深队列就还超时。轮询在本项目长音频路径**已被证明可行**（CUDA box 上 ws 长音频断连后改的就是轮询），不是空想
@@ -172,7 +177,7 @@
 - **Why**：双客户端撞同一文件时，pool=1 上白跑一个槽（第二次命中第一次缓存或幂等覆写，无正确性 bug，仅浪费算力）。
 - **落地（避坑版，codex #2-6）**：**自愈 index**（`(file_hash,折维tag,output_format)→task_id`，命中后校验 `self.tasks[tid]` 仍在且非终态，脏条目当 miss + 删——杀掉「6+ 终态点漏删」整类 bug）；锁内原子查-插（防 race）；**只含已入队任务**（不含 upload_request 阶段未上传占位，避占位死等）；命中折叠要**迁移连接映射**到 canonical + ack 回 canonical task_id（client 改轮询它）。
 - **Cons / 为何独立**：真实耦合跨 task_manager/websocket_handler 两层 + 6+ 终态落地点，blast radius 比「超时根治」大；去重 bug（轮询死 task_id）比它解决的「白跑一个槽」更糟，不与超时根治绑发。
-- **依赖**：本轮薄轮询 + batch 落地。
+- **依赖**：本轮薄轮询 + batch 落地 → ✅ 已满足（#20 服务端 2026-06-16 落地），可随时接手。
 - 优先级：P2
 
 ### 21. per-连接/客户端并发限流（防单客户端霸占 pool=1 队列）
