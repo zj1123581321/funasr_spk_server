@@ -4,6 +4,7 @@ FunASR转录服务器主程序
 import asyncio
 import signal
 import sys
+import time
 from pathlib import Path
 import websockets
 from loguru import logger
@@ -22,6 +23,7 @@ from src.core.task_manager import task_manager
 from src.core.transcriber_dispatch import resolve_transcriber
 logger.info(f"使用 ASR 引擎: {config.transcription.default_engine}")
 from src.api.websocket_handler import ws_handler
+from src.api.http_endpoints import HttpEndpoints
 from src.utils.notification import send_custom_notification
 from src.utils.platform_utils import log_platform_info, check_system_requirements
 
@@ -51,12 +53,23 @@ class FunASRServer:
             
             # 启动任务管理器
             await task_manager.start()
-            
+
+            # 可观测性仪表盘 (P1): /health + /metrics 走 websockets 同端口 process_request 钩子
+            # (零新依赖, 不多开端口). started_at 给 uptime 指标.
+            observability_endpoints = HttpEndpoints(
+                task_manager=task_manager,
+                db_manager=db_manager,
+                config=config,
+                started_at=time.monotonic(),
+            )
+
             # 启动WebSocket服务器（优化大文件传输配置）
             self.server = await websockets.serve(
                 ws_handler.handle_connection,
                 config.server.host,
                 config.server.port,
+                # 同端口 HTTP 端点: GET /health|/metrics 返 HTTP, 其它走 ws 升级
+                process_request=observability_endpoints.process_request,
                 max_size=config.server.max_file_size_mb * 1024 * 1024,
                 max_queue=config.server.max_connections,
                 ping_interval=60,   # 增加到60秒发送一次 ping（避免大文件传输时超时）
