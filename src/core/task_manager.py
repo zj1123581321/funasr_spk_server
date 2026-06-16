@@ -552,7 +552,12 @@ class TaskManager:
                 # 保存到缓存（先于投影, 同上）
                 await db_manager.save_result(transcription_result, raw_result, engine=save_tag)
                 # word_align 失败原因 (fresh 出口回显 metadata.word_align_error, codex #11)
-                word_align_error_msg = (raw_result.get("word_align") or {}).get("error")
+                # funasr 的 raw_result 是 model.generate() 原始 list (非 dict), word_align 是
+                # qwen3 专属字段 → 仅 dict 形态才取, 否则 None (修生产事故: 'list' object has no attribute 'get')
+                word_align_error_msg = (
+                    (raw_result.get("word_align") or {}).get("error")
+                    if isinstance(raw_result, dict) else None
+                )
 
                 # fresh 结果出口投影 (funasr 照算路径; qwen3 原生 nospk 幂等跳过)
                 if not task.options.diarize and transcription_result.speakers:
