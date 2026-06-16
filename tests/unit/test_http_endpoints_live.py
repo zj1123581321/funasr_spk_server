@@ -79,8 +79,11 @@ async def test_live_health_metrics_and_ws_upgrade():
             assert "text/html" in r3.headers.get("content-type", "")
             assert "FunASR 服务状态" in r3.text
 
-        # 真 ws 升级仍通 (process_request 对非端点路径返 None)
+        # 真 ws 升级仍通 — /ws 与**根路径 /** 都要通 (根路径回归: 生产事故 2026-06-17,
+        # / 被 HTML 状态页劫持导致客户端无法连接; 现 Upgrade 头放行修复)
         async with websockets.connect(f"ws://127.0.0.1:{port}/ws") as ws:
+            assert await ws.recv() == "hi"
+        async with websockets.connect(f"ws://127.0.0.1:{port}/") as ws:
             assert await ws.recv() == "hi"
     finally:
         server.close()

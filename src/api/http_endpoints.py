@@ -186,6 +186,13 @@ class HttpEndpoints:
         if not obs.metrics_enabled:
             return None  # 端点总开关关 → 退回纯 ws
 
+        # ⚠️ ws 握手请求 (Upgrade: websocket) 一律放行 (返 None), 不被 HTTP 端点劫持。
+        # 否则客户端连 ws://host:port/ (根路径) 会被 HTML 状态页拦成 HTTP 200 → 握手失败
+        # "无法连接到服务器" (生产事故 2026-06-17)。不管什么路径, 有 Upgrade 头就是 ws。
+        upgrade = _header_get(request_headers, "Upgrade")
+        if upgrade and upgrade.strip().lower() == "websocket":
+            return None
+
         route = urlsplit(path).path
         if route == "/":
             # 极简状态页: 静态 HTML/JS, 不嵌 secret. token 由用户在 URL ?token= 提供,

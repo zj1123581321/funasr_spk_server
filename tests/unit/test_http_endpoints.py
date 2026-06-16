@@ -227,5 +227,45 @@ class TestStatusPage:
         assert await ep.process_request("/", {}) is None
 
 
+class TestWebSocketUpgradePassthrough:
+    """回归 (生产事故 2026-06-17): ws 握手请求绝不能被 HTTP 端点劫持。
+
+    客户端连 ws://host:port/ (根路径) 时带 `Upgrade: websocket` 头。process_request
+    必须放行 (返 None) 让 ws 升级, 否则根路径被 HTML 状态页拦截 → 握手返 HTTP 200 →
+    客户端"无法连接到服务器"。不管什么路径, 有 Upgrade 头就是 ws, 一律放行。
+    """
+
+    @pytest.mark.asyncio
+    async def test_ws_upgrade_at_root_passes_through(self):
+        ep = _make_endpoints()
+        # 根路径 + Upgrade 头 = ws 握手 → 必须 None (放行), 不能返 HTML
+        assert await ep.process_request("/", {"Upgrade": "websocket"}) is None
+
+    @pytest.mark.asyncio
+    async def test_ws_upgrade_at_health_path_passes_through(self):
+        ep = _make_endpoints()
+        assert await ep.process_request("/health", {"Upgrade": "websocket"}) is None
+
+    @pytest.mark.asyncio
+    async def test_ws_upgrade_case_insensitive(self):
+        ep = _make_endpoints()
+        assert await ep.process_request("/", {"Upgrade": "WebSocket"}) is None
+
+    @pytest.mark.asyncio
+    async def test_plain_http_root_still_returns_html(self):
+        # 无 Upgrade 头 = 普通 HTTP GET → 仍返 HTML 状态页
+        ep = _make_endpoints()
+        resp = await ep.process_request("/", {})
+        assert resp is not None
+        assert int(resp[0]) == 200
+        assert b"<!DOCTYPE html" in resp[2] or b"<!doctype html" in resp[2]
+
+    @pytest.mark.asyncio
+    async def test_plain_http_health_still_works(self):
+        ep = _make_endpoints()
+        resp = await ep.process_request("/health", {})
+        assert resp is not None and int(resp[0]) == 200
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
