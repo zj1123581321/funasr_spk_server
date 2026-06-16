@@ -468,6 +468,9 @@ class WebSocketHandler:
                 "language": data.get("language"),
                 # diarize 开关: 记录 per-request 值，最终化时回填（缺省 True 向后兼容）
                 "diarize": data.get("diarize", True),
+                # word_align 开关: 记录 per-request 原始值（None=未指定），最终化时回填。
+                # codex #2: 早返回缓存路径 (_finalize 内 create_task 之前) 须用此值解析 effective。
+                "word_align": data.get("word_align"),
             }
             
             self.upload_sessions[task_id] = session
@@ -584,11 +587,15 @@ class WebSocketHandler:
             if not session["force_refresh"]:
                 from src.core.database import db_manager, cache_params
                 from src.core.config import config as _config
-                from src.models.schemas import TranscribeOptions
+                from src.models.schemas import TranscribeOptions, resolve_word_align
                 _engine_for_cache = session.get("engine") or _config.transcription.default_engine
                 _session_options = TranscribeOptions(
                     language=session.get("language"),
                     diarize=session.get("diarize", True),
+                    # 决策 1A: 早返回缓存路径同样解析 effective word_align（请求 > config 兜底）
+                    word_align=resolve_word_align(
+                        session.get("word_align"), _config.qwen3.word_align_enabled
+                    ),
                 )
                 _ce, _allow = cache_params(_engine_for_cache, _session_options)
                 cached_result = await db_manager.get_cached_result(
@@ -651,6 +658,7 @@ class WebSocketHandler:
                 engine=session.get("engine"),
                 language=session.get("language"),
                 diarize=session.get("diarize", True),
+                word_align=session.get("word_align"),
             )
             
             # 创建任务

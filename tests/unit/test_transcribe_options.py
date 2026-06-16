@@ -19,6 +19,94 @@ from src.models.schemas import FileUploadRequest, TranscribeOptions, Transcripti
 def test_transcribe_options_defaults():
     opts = TranscribeOptions()
     assert opts.language is None
+    # word_align 解析后的确定 bool, 默认关 (与 config 兜底默认 False 一致)
+    assert opts.word_align is False
+
+
+# ==================== word_align per-request (2026-06-16 显存落地) ====================
+
+
+def test_file_upload_request_word_align_defaults_none():
+    """请求级 word_align 是 Optional[bool], 不传=None (区分'未指定'与'显式关'),
+    老客户端不带此字段行为零变化."""
+    req = FileUploadRequest(file_name="a.wav", file_size=1, file_hash="h")
+    assert req.word_align is None
+
+
+def test_resolve_word_align_precedence():
+    """优先级单一事实源 (决策 1A): 请求值非 None 胜出, 否则 config 兜底."""
+    from src.models.schemas import resolve_word_align
+
+    # 请求未指定 → 跟随 config 兜底
+    assert resolve_word_align(None, config_default=False) is False
+    assert resolve_word_align(None, config_default=True) is True
+    # 请求显式 → 压过 config (显式关也压过 config 开)
+    assert resolve_word_align(True, config_default=False) is True
+    assert resolve_word_align(False, config_default=True) is False
+
+
+def test_old_task_file_without_word_align_defaults_false():
+    """REGRESSION: file-based pool 老 .task 文件无 word_align 字段, 反序列化走默认 False, 不崩."""
+    # 老协议: options dict 无 word_align
+    assert TranscribeOptions(**{"language": "eng"}).word_align is False
+    # 更老协议: 平铺 language 构造 (worker 兜底路径)
+    assert TranscribeOptions(language="eng").word_align is False
+
+
+def test_options_serializes_word_align_via_model_dump():
+    opts = TranscribeOptions(word_align=True)
+    d = opts.model_dump()
+    assert d["word_align"] is True
+    assert TranscribeOptions(**d).word_align is True
+
+
+# ==================== create_task 解析 effective word_align ====================
+
+
+@pytest.mark.asyncio
+async def test_create_task_resolves_word_align_explicit_true():
+    from src.core.task_manager import TaskManager
+
+    tm = TaskManager()
+    req = FileUploadRequest(
+        file_name="a.wav", file_size=1, file_hash="h-wa1", word_align=True
+    )
+    task = await tm.create_task(req, task_id="t-wa1")
+    assert task.options.word_align is True
+
+
+@pytest.mark.asyncio
+async def test_create_task_resolves_word_align_none_follows_config():
+    from src.core.task_manager import TaskManager
+    from src.core.config import config
+
+    tm = TaskManager()
+    req = FileUploadRequest(file_name="a.wav", file_size=1, file_hash="h-wa2")
+    original = config.qwen3.word_align_enabled
+    config.qwen3.word_align_enabled = True
+    try:
+        task = await tm.create_task(req, task_id="t-wa2")
+        assert task.options.word_align is True
+    finally:
+        config.qwen3.word_align_enabled = original
+
+
+@pytest.mark.asyncio
+async def test_create_task_explicit_false_overrides_config_on():
+    from src.core.task_manager import TaskManager
+    from src.core.config import config
+
+    tm = TaskManager()
+    req = FileUploadRequest(
+        file_name="a.wav", file_size=1, file_hash="h-wa3", word_align=False
+    )
+    original = config.qwen3.word_align_enabled
+    config.qwen3.word_align_enabled = True
+    try:
+        task = await tm.create_task(req, task_id="t-wa3")
+        assert task.options.word_align is False
+    finally:
+        config.qwen3.word_align_enabled = original
 
 
 def test_transcription_task_has_nested_options_default():

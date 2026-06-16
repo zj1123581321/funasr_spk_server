@@ -50,10 +50,12 @@ def test_transcribe_options_diarize_default_true():
 def test_transcribe_options_model_dump_roundtrip():
     opts = TranscribeOptions(language="eng", diarize=False)
     d = opts.model_dump()
-    assert d == {"language": "eng", "diarize": False}
+    # word_align (2026-06-16) 进 options, model_dump 默认 False
+    assert d == {"language": "eng", "diarize": False, "word_align": False}
     restored = TranscribeOptions(**d)
     assert restored.diarize is False
     assert restored.language == "eng"
+    assert restored.word_align is False
 
 
 # ==================== 部署假设: 老 server 忽略未知 diarize ====================
@@ -171,6 +173,64 @@ async def test_chunked_finalize_builds_request_with_diarize(fake_ws, tmp_path):
     assert req.language == "eng"
 
 
+# ==================== word_align 分片 session 穿透 (2026-06-16 显存落地, codex #2) ====================
+
+
+@pytest.mark.asyncio
+async def test_chunked_session_captures_word_align(fake_ws):
+    from src.api.websocket_handler import WebSocketHandler
+
+    handler = WebSocketHandler()
+    data = {
+        "file_name": "x.wav", "file_size": 10000, "file_hash": "h-wa",
+        "total_chunks": 1, "word_align": True,
+    }
+    await handler._handle_chunked_upload_request(fake_ws, "conn-1", data)
+    session = next(iter(handler.upload_sessions.values()))
+    assert session.get("word_align") is True
+
+
+@pytest.mark.asyncio
+async def test_chunked_finalize_builds_request_with_word_align(fake_ws, tmp_path):
+    """codex #2: 分片 finalize 把 session 记录的 word_align 回填进 FileUploadRequest,
+    保证早返回缓存路径 (在 create_task 之前) 用的是请求级 word_align."""
+    from src.api.websocket_handler import WebSocketHandler
+
+    handler = WebSocketHandler()
+    temp_file = tmp_path / "chunks.bin"
+    temp_file.write_bytes(b"\x00" * 8)
+    session = {
+        "task_id": "t-finwa", "file_name": "x.wav", "file_size": 8,
+        "file_hash": "match", "chunk_size": 8, "total_chunks": 1,
+        "received_chunks": 1, "temp_file_path": str(temp_file),
+        "chunks_received": {0}, "output_format": "json",
+        "force_refresh": True,  # 跳过缓存查询路径
+        "connection_id": "conn-1", "engine": None,
+        "language": "eng", "diarize": True, "word_align": True,
+    }
+    handler.upload_sessions["t-finwa"] = session
+
+    captured = {}
+
+    async def fake_create_task(request, task_id=None):
+        captured["request"] = request
+        return TranscriptionTask(
+            task_id=task_id, file_name=request.file_name, file_path="",
+            file_size=request.file_size, file_hash=request.file_hash,
+        )
+
+    with patch.object(handler, "_calculate_file_hash", return_value="match"), \
+         patch("src.utils.file_utils.save_uploaded_file",
+               new=AsyncMock(return_value=(str(tmp_path / "saved.wav"), None))), \
+         patch("src.core.task_manager.task_manager") as mock_tm:
+        mock_tm.create_task = AsyncMock(side_effect=fake_create_task)
+        mock_tm.submit_task = AsyncMock(return_value=None)
+        await handler._finalize_chunked_upload(fake_ws, "t-finwa")
+
+    req = captured["request"]
+    assert req.word_align is True
+
+
 # ==================== task_manager → transcriber 穿透 ====================
 
 
@@ -244,7 +304,7 @@ async def test_file_pool_serializes_options_into_task_fields():
     )
     fields = custom_pool.generate_with_pool.call_args.kwargs["extra_task_fields"]
     assert fields["output_format"] == "srt"
-    assert fields["options"] == {"language": "kor", "diarize": False}
+    assert fields["options"] == {"language": "kor", "diarize": False, "word_align": False}
     # options 必须是 JSON 可序列化 dict (写 .task 文件)
     json.dumps(fields)
 

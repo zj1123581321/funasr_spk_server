@@ -15,6 +15,7 @@ from src.models.schemas import (
     TranscribeOptions,
     TranscriptionResult,
     TranscriptionTask,
+    resolve_word_align,
 )
 
 
@@ -93,7 +94,13 @@ class TaskManager:
             force_refresh=request.force_refresh,
             output_format=request.output_format,
             engine=engine,
-            options=TranscribeOptions(language=request.language, diarize=request.diarize),
+            options=TranscribeOptions(
+                language=request.language,
+                diarize=request.diarize,
+                # 决策 1A: effective word_align 在此解析一次（请求 > config 兜底），
+                # 写进 options.word_align，下游 transcribe/cache/metadata 全读它。
+                word_align=resolve_word_align(request.word_align, config.qwen3.word_align_enabled),
+            ),
         )
 
         # 保存任务
