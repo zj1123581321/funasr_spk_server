@@ -322,6 +322,7 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 
 - **`/health`**(JSON, 裸放): A3-final **liveness only**(维护循环活 + `is_running`)。**不**把模型加载当 gate——模型 eager 加载(`main.py:47-49`)，model_warm 几乎恒真。冷启动盲区(socket 在模型加载后才绑)记 TODOS #23。
 - **`/metrics`**(Prometheus 文本): A5 安全——只出聚合计数；`server.host=0.0.0.0` + `metrics_token` 未设 → 拒绝(防全网段暴露)；响应不回显 token。query token 走 `urlsplit`(codex #2)。VRAM 探针 off-loop + TTL(codex #11，`free_vram_mib` 同步 subprocess 禁直调事件循环)。
+- **`/`**(HTML 状态页): 静态 HTML/JS(`_STATUS_HTML`)，浏览器打开即仪表盘，JS fetch /health+/metrics 渲染 + 3s 自刷。**不嵌 secret**——token 由用户 URL `?token=` 提供，页面读 `location.search` 传给 /metrics fetch(localhost 无 token 直开 `/`)。
 - **指标源**: `task_manager.get_metrics_snapshot()`。**单调计数器**(A1/codex #14)`tasks_terminal_total{status}`/`errors_total{kind}` 在**全部终态化点**(缓存命中/完成/失败/取消/看门狗)累加，**不扫 self.tasks**(TTL 淘汰会让 Prometheus rate 静默回退)。瞬时 gauge(queue/inflight/pending/cache)读现态。
 - **config**: `ObservabilityConfig`(`metrics_enabled`/`metrics_token`) + env `FUNASR_METRICS_ENABLED`/`FUNASR_METRICS_TOKEN`。
 - **测试便利**: `scripts/run_checks.sh [--parity|--all]`（改 FunASR 路径后跑 `--parity`）。

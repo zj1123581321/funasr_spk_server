@@ -187,6 +187,11 @@ class HttpEndpoints:
             return None  # 端点总开关关 → 退回纯 ws
 
         route = urlsplit(path).path
+        if route == "/":
+            # 极简状态页: 静态 HTML/JS, 不嵌 secret. token 由用户在 URL ?token= 提供,
+            # 页面 JS 读自己的 location.search 去 fetch /metrics (localhost 无 token 直开 /).
+            return _html_response(200, _STATUS_HTML)
+
         if route == "/health":
             code, body = evaluate_health(
                 is_running=getattr(self._tm, "is_running", False),
@@ -245,6 +250,7 @@ class HttpEndpoints:
 
 _JSON_HEADERS = [("Content-Type", "application/json; charset=utf-8")]
 _TEXT_HEADERS = [("Content-Type", "text/plain; version=0.0.4; charset=utf-8")]
+_HTML_HEADERS = [("Content-Type", "text/html; charset=utf-8")]
 
 
 def _json_response(code: int, body: dict):
@@ -254,6 +260,10 @@ def _json_response(code: int, body: dict):
 
 def _text_response(code: int, text: str):
     return (http.HTTPStatus(code), _TEXT_HEADERS, text.encode("utf-8"))
+
+
+def _html_response(code: int, html: str):
+    return (http.HTTPStatus(code), _HTML_HEADERS, html.encode("utf-8"))
 
 
 def _header_get(request_headers, name: str) -> Optional[str]:
@@ -267,3 +277,118 @@ def _header_get(request_headers, name: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+# ==================== 极简状态页 (静态 HTML/JS) ====================
+# 一页够用: fetch /health + /metrics 渲染成人读表格, 每 3s 自刷. 零外部依赖.
+# token: 页面读自己 URL 的 ?token= 传给 /metrics fetch (不嵌服务端 HTML, codex A5).
+# localhost 无 token 直开 /; 0.0.0.0 设了 token 则开 /?token=xxx.
+_STATUS_HTML = """<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FunASR 服务状态</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 24px; background:#0f1115; color:#d7dbe0; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color:#8a93a0; font-size:12px; margin-bottom:16px; }
+  .banner { display:inline-block; padding:8px 16px; border-radius:8px; font-weight:700; font-size:16px; margin-bottom:16px; }
+  .ok { background:#13361f; color:#46d17e; border:1px solid #1f6b3c; }
+  .bad { background:#3a1618; color:#ff6b72; border:1px solid #7a2a2e; }
+  table { border-collapse:collapse; margin:8px 0 20px; min-width:340px; }
+  th,td { text-align:left; padding:6px 14px 6px 0; font-size:14px; }
+  td.v { font-variant-numeric:tabular-nums; font-weight:600; color:#fff; }
+  h2 { font-size:13px; color:#8a93a0; text-transform:uppercase; letter-spacing:.05em; margin:18px 0 4px; }
+  .err { color:#ff6b72; }
+</style>
+</head>
+<body>
+  <h1>FunASR 服务状态</h1>
+  <div class="sub">每 3 秒自动刷新 · 数据源 /health + /metrics</div>
+  <div id="banner" class="banner">加载中…</div>
+  <div id="content"></div>
+<script>
+const TOKEN = new URLSearchParams(location.search).get('token');
+const qs = TOKEN ? ('?token=' + encodeURIComponent(TOKEN)) : '';
+
+function parseMetrics(text) {
+  const flat = {}, labeled = {};
+  for (const line of text.split('\\n')) {
+    if (!line || line[0] === '#') continue;
+    const m = line.match(/^([a-z0-9_]+)(\\{[^}]*\\})?\\s+(.+)$/i);
+    if (!m) continue;
+    const [, name, labels, val] = m;
+    if (labels) { (labeled[name] = labeled[name] || []).push([labels, val]); }
+    else { flat[name] = val; }
+  }
+  return { flat, labeled };
+}
+
+function row(k, v) { return '<tr><td>' + k + '</td><td class="v">' + v + '</td></tr>'; }
+
+function render(health, metricsText, metricsErr) {
+  const banner = document.getElementById('banner');
+  if (health && health.status === 'healthy') {
+    banner.className = 'banner ok'; banner.textContent = '● HEALTHY';
+  } else {
+    banner.className = 'banner bad';
+    banner.textContent = '● ' + (health ? String(health.status).toUpperCase() : 'UNREACHABLE');
+  }
+  let html = '';
+  if (health && health.checks) {
+    html += '<h2>健康检查</h2><table>';
+    for (const [k, v] of Object.entries(health.checks)) html += row(k, v ? '✓' : '✗');
+    html += '</table>';
+  }
+  if (metricsErr) {
+    html += '<h2>指标</h2><p class="err">/metrics 读取失败: ' + metricsErr +
+            '（host=0.0.0.0 需在网址加 ?token=你的token）</p>';
+  } else if (metricsText) {
+    const { flat, labeled } = parseMetrics(metricsText);
+    const g = (n) => flat['funasr_' + n] !== undefined ? flat['funasr_' + n] : '—';
+    html += '<h2>队列 / 并发</h2><table>'
+      + row('队列深度', g('queue_size') + ' / ' + g('queue_max'))
+      + row('在途 (inflight)', g('tasks_inflight'))
+      + row('等待 (pending)', g('tasks_pending'))
+      + row('驻留任务', g('tasks_in_memory'))
+      + row('并发度', g('pool_size'))
+      + row('单任务 EMA(秒)', g('task_seconds_ema'))
+      + '</table>';
+    const eng = (labeled['funasr_engine_info'] || []).map(([l]) => (l.match(/engine="([^"]*)"/) || [])[1]).join(',');
+    let cacheRows = '';
+    ['cache_total_cached','cache_hits','cache_misses','cache_projected_serves','vram_free_mib','uptime_seconds'].forEach(n => {
+      if (flat['funasr_' + n] !== undefined) cacheRows += row(n.replace('cache_',''), flat['funasr_' + n]);
+    });
+    html += '<h2>引擎 / 缓存</h2><table>' + row('引擎', eng || '—') + cacheRows + '</table>';
+    const term = labeled['funasr_tasks_terminal_total'] || [];
+    const errs = labeled['funasr_errors_total'] || [];
+    if (term.length) {
+      html += '<h2>终态累计 (单调)</h2><table>';
+      term.forEach(([l, v]) => html += row((l.match(/status="([^"]*)"/) || [])[1], v));
+      html += '</table>';
+    }
+    if (errs.length) {
+      html += '<h2>错误累计</h2><table>';
+      errs.forEach(([l, v]) => html += row((l.match(/kind="([^"]*)"/) || [])[1], v));
+      html += '</table>';
+    }
+  }
+  document.getElementById('content').innerHTML = html;
+}
+
+async function tick() {
+  let health = null, metricsText = null, metricsErr = null;
+  try { health = await (await fetch('/health')).json(); } catch (e) { health = null; }
+  try {
+    const r = await fetch('/metrics' + qs);
+    if (r.ok) metricsText = await r.text(); else metricsErr = 'HTTP ' + r.status;
+  } catch (e) { metricsErr = String(e); }
+  render(health, metricsText, metricsErr);
+}
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>
+"""

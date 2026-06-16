@@ -73,6 +73,12 @@ async def test_live_health_metrics_and_ws_upgrade():
             assert "funasr_queue_size" in r2.text
             assert 'funasr_tasks_terminal_total{status="completed"} 1' in r2.text
 
+            # / → 200 HTML 状态页
+            r3 = await client.get(f"http://127.0.0.1:{port}/")
+            assert r3.status_code == 200
+            assert "text/html" in r3.headers.get("content-type", "")
+            assert "FunASR 服务状态" in r3.text
+
         # 真 ws 升级仍通 (process_request 对非端点路径返 None)
         async with websockets.connect(f"ws://127.0.0.1:{port}/ws") as ws:
             assert await ws.recv() == "hi"

@@ -88,8 +88,10 @@ venv/bin/python run_server.py # 默认 funasr，监听 ws://0.0.0.0:8767
 ```bash
 curl http://<host>:<port>/health     # 存活探针: 200 healthy / 503 degraded (JSON)
 curl http://<host>:<port>/metrics    # Prometheus 文本: 队列深度/在途/错误率/缓存命中/EMA/VRAM
+# 浏览器打开 http://<host>:<port>/  →  极简状态页 (自带, 每 3s 自刷, 零外部依赖)
 ```
 
+- `/`（状态页）浏览器直接打开即可；绑 `0.0.0.0` 设了 token 时用 `http://host:端口/?token=xxx`。
 - `/health` 裸放（只是死活）；客户端可在打转录前预检。
 - `/metrics` 默认仅在显式绑 LAN/loopback 时裸放；`server.host=0.0.0.0` 时必须设 `FUNASR_METRICS_TOKEN`（否则拒绝，防全网段暴露），访问带 `?token=` 或 `Authorization`。
 - 总开关 `FUNASR_METRICS_ENABLED`（默认 on）。设计与指标清单见 [docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md](docs/开发/2026-06-16-可观测性仪表盘与测试加固-设计定案与落地计划.md)。

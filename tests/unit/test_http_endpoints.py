@@ -186,5 +186,46 @@ class TestProcessRequestRouting:
         assert await ep.process_request("/metrics", {}) is None
 
 
+class TestStatusPage:
+    """`/` 极简 HTML 状态页 (静态, JS fetch /health + /metrics 渲染)。"""
+
+    @pytest.mark.asyncio
+    async def test_root_returns_html_200(self):
+        ep = _make_endpoints()
+        resp = await ep.process_request("/", {})
+        assert resp is not None
+        status, headers, body = resp
+        assert int(status) == 200
+        assert any("text/html" in v for _, v in headers)
+        assert b"<!DOCTYPE html" in body or b"<!doctype html" in body
+
+    @pytest.mark.asyncio
+    async def test_root_html_references_endpoints(self):
+        ep = _make_endpoints()
+        _, _, body = await ep.process_request("/", {})
+        text = body.decode("utf-8")
+        assert "/health" in text
+        assert "/metrics" in text
+
+    @pytest.mark.asyncio
+    async def test_root_html_is_static_no_token_embedded(self):
+        # 页面是静态的, token 由用户在 URL ?token= 提供, 绝不嵌进服务端 HTML
+        ep = _make_endpoints(metrics_token="sup3rs3cr3t", host="0.0.0.0")
+        _, _, body = await ep.process_request("/?token=sup3rs3cr3t", {})
+        assert b"sup3rs3cr3t" not in body
+
+    @pytest.mark.asyncio
+    async def test_root_query_string_routes(self):
+        ep = _make_endpoints()
+        resp = await ep.process_request("/?token=x", {})
+        assert resp is not None
+        assert int(resp[0]) == 200
+
+    @pytest.mark.asyncio
+    async def test_root_disabled_returns_none(self):
+        ep = _make_endpoints(metrics_enabled=False)
+        assert await ep.process_request("/", {}) is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
