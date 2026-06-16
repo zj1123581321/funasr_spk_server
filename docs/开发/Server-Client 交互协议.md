@@ -241,7 +241,7 @@ if should_retry and task.retry_count < config.transcription.retry_times:
   "data": {
     "task_id": "xxx",
     "queue_position": 15,
-    "estimated_wait_minutes": 30,
+    "estimated_wait_seconds": 1350,
     "message": "文件上传成功，排队位置: 15"
   }
 }
@@ -389,7 +389,7 @@ class MultiProcessClient:
                 
                 # 处理排队响应
                 if result.get('queued'):
-                    print(f"任务排队: 位置 {result['queue_position']}, 预估等待 {result['estimated_wait']} 分钟")
+                    print(f"任务排队: 位置 {result['queue_position']}, 预估等待 {result['estimated_wait']} 秒")
                 
                 self.result_queue.put(result)
                 

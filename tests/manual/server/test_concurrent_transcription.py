@@ -115,7 +115,7 @@ class ConcurrentClient:
             "file_name": file_name,
             "queued": False,
             "queue_position": None,
-            "estimated_wait_minutes": None,
+            "estimated_wait_seconds": None,
             "queue_full_error": False,
             "cached": False,
             "success": True
@@ -204,11 +204,11 @@ class ConcurrentClient:
         # 检查是否收到排队通知
         if response["type"] == "task_queued":
             queue_data = response["data"]
-            logger.info(f"客户端 {self.client_id} 任务排队: {file_name} - 位置 {queue_data.get('queue_position')}, 预估等待 {queue_data.get('estimated_wait_minutes')} 分钟")
+            logger.info(f"客户端 {self.client_id} 任务排队: {file_name} - 位置 {queue_data.get('queue_position')}, 预估等待 {queue_data.get('estimated_wait_seconds')} 秒")
             result_data.update({
                 "queued": True,
                 "queue_position": queue_data.get("queue_position"),
-                "estimated_wait_minutes": queue_data.get("estimated_wait_minutes")
+                "estimated_wait_seconds": queue_data.get("estimated_wait_seconds")
             })
         elif response["type"] == "upload_complete":
             logger.info(f"客户端 {self.client_id} 文件上传完成，立即开始处理: {file_name}")
@@ -532,12 +532,12 @@ class ConcurrentTranscriptionTester:
             
             if queued_tasks:
                 positions = [r['queue_position'] for r in queued_tasks if r['queue_position']]
-                wait_times = [r['estimated_wait_minutes'] for r in queued_tasks if r['estimated_wait_minutes']]
+                wait_times = [r['estimated_wait_seconds'] for r in queued_tasks if r['estimated_wait_seconds']]
                 
                 if positions:
                     print(f"排队位置范围: {min(positions)} - {max(positions)}")
                 if wait_times:
-                    print(f"预估等待时间范围: {min(wait_times)} - {max(wait_times)} 分钟")
+                    print(f"预估等待时间范围: {min(wait_times)} - {max(wait_times)} 秒")
             
             # 验证排队通知功能
             if queued_tasks:

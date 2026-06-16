@@ -240,7 +240,7 @@
   "data": {
     "task_id": "任务ID",
     "queue_position": 3,
-    "estimated_wait_minutes": 6,
+    "estimated_wait_seconds": 360,
     "message": "任务排队中"
   }
 }

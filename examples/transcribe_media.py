@@ -410,8 +410,8 @@ class MediaTranscriber:
                 elif response["type"] == "task_queued":
                     # 任务排队中
                     queue_position = response["data"].get("queue_position", "N/A")
-                    estimated_wait = response["data"].get("estimated_wait_minutes", "N/A")
-                    logger.info(f"任务排队中，位置: {queue_position}，预计等待: {estimated_wait}分钟")
+                    estimated_wait = response["data"].get("estimated_wait_seconds", "N/A")
+                    logger.info(f"任务排队中，位置: {queue_position}，预计等待: {estimated_wait}秒")
                     continue
                 
                 elif response["type"] == "error":
