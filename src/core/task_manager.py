@@ -19,6 +19,24 @@ from src.models.schemas import (
 )
 
 
+class QueueFullError(Exception):
+    """任务队列已满（准入控制拒绝）。
+
+    替代泛化 Exception，携带结构化字段让上层（websocket_handler）映射成
+    可重试的 queue_full 信号（429 语义）：客户端据 retry_after 退避重投，
+    而不是当成致命错误。
+    """
+
+    def __init__(self, retry_after: int, queue_size: int, max_queue_size: int):
+        self.retry_after = retry_after          # 建议重试秒数（按队列位置 × 平均处理时长估）
+        self.queue_size = queue_size            # 当前队列深度
+        self.max_queue_size = max_queue_size    # 队列上限
+        super().__init__(
+            f"任务队列已满，最大容量: {max_queue_size}（当前 {queue_size}），"
+            f"建议 {retry_after}s 后重试"
+        )
+
+
 class TaskManager:
     """任务管理器"""
     

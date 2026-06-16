@@ -281,6 +281,25 @@ class TranscriptionConfig(BaseModel):
     # 可通过 FUNASR_QWEN3_POOL_SIZE 环境变量覆盖
     qwen3_pool_size: int = 3
 
+    # ===== 高负载队列健壮性（2026-06-16 止血，见 docs/开发/2026-06-16-高负载队列机制-止血修复计划.md）=====
+    # self.tasks 内存清理：终态任务（completed/failed/cancelled/timed_out）保留 TTL。
+    # 必须 ≥ 客户端轮询窗口，否则慢客户端轮询会 miss（返回 expired）。
+    # 可通过 FUNASR_TASK_RETENTION_TTL_SECONDS 覆盖。
+    task_retention_ttl_seconds: int = 3600
+    # self.tasks 硬数量上限（size-cap 兜底）：超限从最老终态任务挤，防突发期 TTL 未到先撑爆内存。
+    # 可通过 FUNASR_TASK_MAX_RETAINED 覆盖。
+    task_max_retained: int = 500
+    # 内存清理 + 看门狗的周期扫描间隔（秒）。
+    task_cleanup_interval_seconds: int = 60
+    # processing 看门狗：任务超此时长仍 PROCESSING → 强制 TIMED_OUT（明显卡死阈值，
+    # 防 ASR 卡死/worker 挂导致永不终态 → 永不被清 + 永占并发名额）。
+    # 可通过 FUNASR_TASK_MAX_PROCESSING_SECONDS 覆盖。
+    task_max_processing_seconds: int = 3600
+    # 分片上传 session：遗弃 session 的 TTL（秒），sweeper 清其 temp 文件防磁盘泄漏。
+    upload_session_ttl_seconds: int = 1800
+    # 并发 session 硬上限：超限拒新 session（防恶意/坏客户端堆满磁盘）。
+    upload_session_max_count: int = 200
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -525,6 +544,14 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "default_engine", "FUNASR_DEFAULT_ENGINE")
         cls._override_if_set(config_data["transcription"], "cache_cross_engine", "FUNASR_CACHE_CROSS_ENGINE", cls._parse_bool)
         cls._override_if_set(config_data["transcription"], "qwen3_pool_size", "FUNASR_QWEN3_POOL_SIZE", int)
+        # 高负载队列健壮性 env override（2026-06-16 止血）
+        cls._override_if_set(config_data["transcription"], "max_queue_size", "FUNASR_MAX_QUEUE_SIZE", int)
+        cls._override_if_set(config_data["transcription"], "task_retention_ttl_seconds", "FUNASR_TASK_RETENTION_TTL_SECONDS", int)
+        cls._override_if_set(config_data["transcription"], "task_max_retained", "FUNASR_TASK_MAX_RETAINED", int)
+        cls._override_if_set(config_data["transcription"], "task_cleanup_interval_seconds", "FUNASR_TASK_CLEANUP_INTERVAL_SECONDS", int)
+        cls._override_if_set(config_data["transcription"], "task_max_processing_seconds", "FUNASR_TASK_MAX_PROCESSING_SECONDS", int)
+        cls._override_if_set(config_data["transcription"], "upload_session_ttl_seconds", "FUNASR_UPLOAD_SESSION_TTL_SECONDS", int)
+        cls._override_if_set(config_data["transcription"], "upload_session_max_count", "FUNASR_UPLOAD_SESSION_MAX_COUNT", int)
 
         # ==================== Qwen3-Diarize 配置 ====================
         cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")

@@ -14,6 +14,9 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # 看门狗终态化：超 max_processing_seconds 仍卡在 PROCESSING 的任务被强制标记，
+    # 使其进入终态从而能被内存清理 + 释放并发名额（高负载队列止血，2026-06-16）
+    TIMED_OUT = "timed_out"
 
 
 class WordTimestamp(BaseModel):

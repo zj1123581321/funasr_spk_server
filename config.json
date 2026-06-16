@@ -78,12 +78,15 @@
     "max_concurrent_tasks": 2,
     "_comment_max_concurrent_tasks": "可通过环境变量覆盖: FUNASR_MAX_CONCURRENT_TASKS",
 
-    "max_queue_size": 100,
+    "max_queue_size": 20,
+    "_comment_max_queue_size": "队列上限=准入控制(2026-06-16 由 100 压到 20)。pool=1 时被接受进深队列的任务等待 ≈ 位置×单任务时长，远超客户端 300s 超时窗，会让'被接受'变成假承诺。压低到'超时窗可消化'让被接受=大概率做完，其余返回可重试 queue_full 信号。异步轮询(TODOS #20)上线后可经 FUNASR_MAX_QUEUE_SIZE 调大。",
 
     "concurrency_mode": "pool",
 
     "task_timeout_minutes": 30,
     "_comment_task_timeout_minutes": "可通过环境变量覆盖: FUNASR_TASK_TIMEOUT_MINUTES",
+
+    "_comment_queue_resilience": "高负载队列健壮性字段(默认见 config.py，可 env 覆盖): task_retention_ttl_seconds(终态任务保留TTL=轮询窗), task_max_retained(self.tasks硬上限), task_max_processing_seconds(看门狗卡死阈值), upload_session_ttl_seconds/upload_session_max_count(分片session防泄漏)。详见 docs/开发/2026-06-16-高负载队列机制-止血修复计划.md",
 
     "retry_times": 2,
     "cache_enabled": true,
