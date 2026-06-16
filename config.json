@@ -78,8 +78,8 @@
     "max_concurrent_tasks": 2,
     "_comment_max_concurrent_tasks": "可通过环境变量覆盖: FUNASR_MAX_CONCURRENT_TASKS",
 
-    "max_queue_size": 20,
-    "_comment_max_queue_size": "队列上限=准入控制(2026-06-16 由 100 压到 20)。pool=1 时被接受进深队列的任务等待 ≈ 位置×单任务时长，远超客户端 300s 超时窗，会让'被接受'变成假承诺。压低到'超时窗可消化'让被接受=大概率做完，其余返回可重试 queue_full 信号。异步轮询(TODOS #20)上线后可经 FUNASR_MAX_QUEUE_SIZE 调大。",
+    "max_queue_size": 150,
+    "_comment_max_queue_size": "队列上限=准入控制。设 150 让正常批量(偶尔 100+)不触发 queue_full——因现网客户端尚未优雅处理 queue_full 消息(它会当成 error)，先保证正常用法不撞墙。内存有 task_max_retained=500 兜底不怕大队列。注意：pool=1 + 客户端同步等待下，深队列任务仍会 300s 超时(被接受≈位置×单任务时长)，此为已知未尽问题，根治走异步轮询(TODOS #20)。可经 FUNASR_MAX_QUEUE_SIZE 调整。",
 
     "concurrency_mode": "pool",
 
