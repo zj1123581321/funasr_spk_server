@@ -124,9 +124,10 @@
 
 ### 17. VRAM preflight 显存探针
 - 来源：`/plan-eng-review` + `codex` 外部声音（2026-06-16，word_align 显存落地评审）
-- **What**：跑 CUDA word_align 前用 NVML/nvidia-smi 量显卡剩余显存，不够则不加载 CUDA aligner、直接走 CPU；记录每次请求前后 VRAM delta
+- **What**：跑 CUDA word_align 前量显卡剩余显存，不够则不加载 CUDA aligner、直接走 CPU；记录每次请求前后 VRAM delta
 - **Why**：word_align 落地 PR 靠「catch OOM 后转 CPU」事后补救，preflight 是事前预防
-- **Cons / 为何延期**：引入 NVML/nvidia-smi 依赖（创新额度）；阈值要二次标定（保守起点：未加载要求 free ≥4.5GB，已加载要求 ≥1.5-2GB，非最终标准）
+- **🔒 评审定案（2026-06-16 /plan-eng-review + codex）**：见 `docs/开发/gpu加速/2026-06-16-word-align显存安全-评审定案与落地计划.md`。锁定：探针 `free_vram_mib()` **只用 nvidia-smi，不引 NVML**（冷路径不值得新依赖，**偏离本条原写的「NVML 优先」**）；**尊重 `CUDA_VISIBLE_DEVICES`** 不读死第一行（codex #12）；阈值进 `Qwen3Config` config 字段（env 可覆盖）+ 保守默认 + 3060 标定；探针放独立模块 `src/core/gpu_mem.py` 给 Lane 1 + Lane 2 共用。**preflight 不替代 OOM fallback**（TOCTOU，codex #11）。
+- **Cons / 为何延期**：阈值要二次标定（保守起点：未加载要求 free ≥4.5GB，已加载要求 ≥1.5-2GB，非最终标准）
 - **⚠️ codex 推迟风险提醒**：pool_size=1 的序列化只挡内部并发 CUDA 会话，挡不住同卡 CapsWriter 占用波动 / ORT BFCArena 残留 / 显存碎片 / 用户调高 pool_size。第一个请求仍是「试错探针」，OOM 可能在 fallback 前就把 CUDA session 弄坏
 - **触发条件**：`qwen3_pool_size` 调到 >1，或同卡显存竞争变频繁，或观测到 OOM thrash
 - **依赖**：word_align per-request + CPU fallback + poison PR（2026-06-16）落地
@@ -135,13 +136,23 @@
 
 ### 18. 独立 word_align sidecar 进程
 - 来源：`/plan-eng-review` + `codex` 外部声音（2026-06-16，word_align 显存落地评审）
-- **What**：把 word_align 从主 ASR 服务拆成独立进程，按需启动 CUDA session、空闲 TTL 自动退出释放 VRAM；主服务通过队列/RPC 调用，不可用时 CPU fallback 或返回无词；加生命周期日志 + 健康检查
+- **What**：把 word_align 从主 ASR 服务拆成独立进程，按需启动 CUDA session、空闲 TTL 自动退出释放 VRAM；主服务调用，不可用时 CPU fallback 或返回无词；加生命周期日志 + 健康检查
 - **Why**：落地 PR 的 poison + dispose 只能「尝试」要回显存，ORT BFCArena 高水位未必真还（2026-06-16 3060 实测确认：同尺寸任务显存阶梯爬升封顶 ~7844MiB，只有重启进程才回落）。**唯一可靠的显存释放是进程退出**——sidecar 让偶发的词级时间戳请求不再污染主 ASR 服务的长期显存基线
+- **🔒 评审定案（2026-06-16 /plan-eng-review + codex 15 findings）**：见 `docs/开发/gpu加速/2026-06-16-word-align显存安全-评审定案与落地计划.md`。锁定：**长驻进程 + idle TTL 自杀 + Unix domain socket（stdlib，零新依赖）request/response**，传 audio_path + chunks JSON；**不复用 `FileBasedProcessPool` 类**（每任务即退 + auto-respawn + 启动前清文件 + 固定目录语义与长驻 idle-TTL 拧着，codex #1/#2/#3/#5/#10/#15）；sidecar **只做 CUDA**（CPU 兜底留主进程）；**进程全局单例**（pool>1 也单 session，codex #6）；超时**先杀 sidecar 再 CPU**杜绝双跑（codex #4）；OOM **杀/退休 sidecar 不永久 poison 主进程**（codex #8）；**瘦入口**只 import `qwen3/word_align.py`（codex #9）；Lane 2 后主进程 **硬切 CUDA aligner 路径**测试钉死（codex #7）；缓存 +wa 看 **has_words** 非 sidecar 成功（codex #14）；**仅 cuda runtime 启用**。
 - **Cons / 为何延期**：跨进程协议 + 生命周期管理 + 健康检查，工程量最大；主服务多一个故障面
 - **触发条件**：Lane 1（#17）上线后用真机数据复评——若 preflight + CPU 降级后 OOM 基本绝迹可继续延后；若仍常撞顶 / word_align 高频常驻则做
 - **依赖**：word_align per-request PR（2026-06-16）+ **同课题 Lane 1（#17）的探针落地后复用**
 - **课题关系**：同「word_align 显存安全」课题的 **Lane 2**（大、结构性、后发），复用 #17 探针。交接文档同上
 - 优先级：P3（Lane 2，#17 之后）
+
+### 19. word_align preflight duration/chunk-aware 动态阈值
+- 来源：`codex` 外部声音 #13（2026-06-16，#17/#18 显存安全评审）
+- **What**：preflight 阈值从「平的固定值」升级为「按本次请求音频时长/chunk 数动态算所需显存余量」再放行 CUDA word_align
+- **Why**：MMS CTC-FA session 显存随输入 shape 往上爬，同样「已加载」跑 60s 与 60min 峰值显存差很多。平阈值（已加载 free ≥1.5-2GB）挡得住短音频，挡不住长音频——长音频仍可能运行时 OOM（靠 fallback 接住）
+- **Cons / 为何延期**：要先标定「时长→显存峰值」曲线，复杂度不小；平阈值 + OOM fallback 已能兜底
+- **触发条件**：#17 上线后 3060 真机数据证明长音频确实常在 preflight 放行后 OOM
+- **依赖**：#17（VRAM preflight 探针 + 阈值 config 字段）落地
+- 优先级：P3（#17 之后，数据驱动）
 
 ---
 
