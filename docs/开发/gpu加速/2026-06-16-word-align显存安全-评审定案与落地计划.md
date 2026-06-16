@@ -8,6 +8,30 @@
 
 > 本文是评审**输出**：锁定的设计决策 + 测试覆盖 + 失败模式 + 落地顺序。实现照此执行，不再重议已锁项。
 
+## 实现状态（2026-06-16 落地）
+
+**Lane 1 (#17) + Lane 2 (#18) 代码 + 单测已落地**（严格 TDD，红→绿→commit）。剩 3060 真机 E2E（显存真释放 + 阈值标定）为最终手工验收。
+
+| 件 | 文件 | 单测 | 状态 |
+|---|---|---|---|
+| 探针 | `src/core/gpu_mem.py` | `test_gpu_mem.py`（14）| ✅ |
+| preflight gate | `qwen3_transcriber._word_align_segments` | `test_..._word_align_preflight.py`（5）| ✅ |
+| preflight config | `config.py` | `test_config_word_align_preflight.py`（4）| ✅ |
+| sidecar 协议+server | `qwen3/word_align_sidecar.py` | `test_word_align_sidecar_protocol.py`（9）| ✅ |
+| sidecar client | 同上 | `test_word_align_sidecar_client.py`（9）| ✅ |
+| sidecar 入口 | 同上 `run_sidecar` | `test_word_align_sidecar_entry.py`（3）| ✅ |
+| sidecar config | `config.py` | `test_config_word_align_sidecar.py`（6）| ✅ |
+| 集成路由+降级 | `qwen3_transcriber._word_align_via_sidecar` | `test_..._word_align_sidecar.py`（8）| ✅ |
+| audio_io 抽取 | `qwen3/audio_io.py` | `test_qwen3_diarize_audio_fallback.py`（2）| ✅ |
+
+全 unit 682 passed（6 失败为既有 `.env` 污染，与本课题无关）。
+
+**剩余（需 3060 真机，见 §4 [E2E 3060]）**：
+- [ ] sidecar idle TTL 到点退出后整卡显存回落主服务 idle 基线（#18 核心价值）。
+- [ ] word_align=true 经 sidecar 出词，与进程内 CUDA parity 一致。
+- [ ] preflight 阈值标定（记录加载前/后 free，改准默认值）。
+- [ ] sidecar 挂掉 → 降级 CPU/无词，主请求不挂（真机）。
+
 ---
 
 ## 0. 一句话
