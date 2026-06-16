@@ -154,12 +154,13 @@
 - **依赖**：#17（VRAM preflight 探针 + 阈值 config 字段）落地
 - 优先级：P3（#17 之后，数据驱动）
 
-### 20. 批量上传路径改异步轮询契约（根治 300s 超时）— 🟡 服务端已落地，待客户端切换
+### 20. 批量上传路径改异步轮询契约（根治 300s 超时）— ✅ 端到端完成（2026-06-16）
+- **✅ 客户端切换完成（2026-06-16）**：两个客户端（独立代码库）已从同步死等切到 `task_status_batch` 轮询，300s 超时端到端闭环。T5 完成。
 - **✅ 服务端落地（2026-06-16，已 push main）**：T1-T4 完成，746 unit + 3 FunASR parity 全绿。
   - `task_status_batch` 批量查询：`schemas.py:TaskStatusBatchResponse/TaskStatusBatchItem` + `websocket_handler.py:_handle_task_status_batch` / `_build_task_status_batch_item`（同步组装不 await 钉 COMPLETED 原子性；JSON 走 result / SRT 走 srt_content；终态全集带 error；上限 50 截断+warn；poll-miss `status=null`+`task_expired`/`task_not_found`）。
   - 上传协议**零改动**（无 wait 开关 / 无 task_accepted），入队照旧回 `task_queued`/`upload_complete`(带 position)。
   - 文档同步：`Server-Client 交互协议.md`（服务端规格）+ `docs/使用/客户端交互指南.md`（客户端迁移节）+ `CLAUDE.md`。
-- **⏳ 剩余 = T5 客户端×2（独立代码库，本仓库外）**：停 300s 堵等 → 收 ack 后批量 `task_status_batch` 轮询；终态全集停轮；poll-miss 凭 file_hash 重投。验收：批量 100 任务实测不超时。部署顺序：服务端已先上（对老客户端透明），客户端逐个切。
+- **✅ T5 客户端×2 已切（2026-06-16）**：停 300s 堵等 → 收 ack 后批量 `task_status_batch` 轮询；终态全集停轮；poll-miss 凭 file_hash 重投。
 - 来源：`/plan-eng-review`（2026-06-16，高负载队列机制审查；本轮选 C「先止血，异步契约下一步」）
 - **What**：把批量/分片上传的「finalize 即同步等 `task_complete`」改成「finalize 立刻返回 `task_id` → 客户端轮询 `task_status` 拿进度/结果」。服务端 `task_status` 查询接口**已存在**（`websocket_handler.py:131/316` → `_send_task_status` → `task_manager.get_task`），主要是客户端契约 + 部署协调
 - **Why**：`接收消息超时(300秒)` 的**真正根因**是客户端单 ws 同步死等。qwen3 pool=1，真实并发≈1，队列深处任务等待 ≈ 位置×单任务时长 >> 300s，**必然超时**。本轮止血（内存/资源泄漏修复 + 队列满可重试信号）只让「队列已满」变优雅、让内存不爆，**修不掉这个超时**——客户端只要还站着死等，深队列就还超时。轮询在本项目长音频路径**已被证明可行**（CUDA box 上 ws 长音频断连后改的就是轮询），不是空想
@@ -186,6 +187,16 @@
 - **Why**：真实并发=pool=1，队列是准入控制。现 `queue_full` 已提供背压（被拒退避重投），但无 per-连接配额——理论上单客户端可长期占满队列。
 - **Cons / 为何延期**：当前仅 2 个可信自控客户端，恶意/失控占用非现实威胁；加准入配额 + 公平调度有复杂度。
 - **触发条件**：接入不可信客户端 / 客户端数增多 / 实测出现互饿。
+- 优先级：P3
+
+### 23. 冷启动 /health 可观测性（启动序改造）
+- 来源：`codex` 外部声音 #5/#6（2026-06-16，可观测性仪表盘评审）
+- **What**：让 /health 在服务冷启动期（模型加载中/加载卡死/失败）也能应答，报 `starting`/`loading`/`degraded`。
+- **Why**：模型是 eager 加载（`src/main.py:47-49` `transcriber.initialize()` 在 `:56 websockets.serve()` 之前）。socket 在模型加载完之后才绑，所以 process_request 健康端点观测不到启动卡死/失败——最危险的冷启动期 /health 连答都答不了。
+- **怎么做**：在 `transcriber.initialize()` 之前先绑一个极简早期 HTTP health listener（独立于后面 late-bind 的 `websockets.serve`），启动完成后交接/关闭。
+- **Cons / 为何延期**：要动 `main.py` 启动序 + 多一个早期独立 listener，部分偏离"同端口 process_request"设计（可观测性仪表盘 D3）；冷启动卡死罕见，日志 + PM2 autorestart 已兜底进程级失败。
+- **触发条件**：观测到冷启动卡死/失败频繁，或需要外部探针在启动期就拿到状态。
+- **依赖**：可观测性仪表盘 PR（/health liveness）落地。
 - 优先级：P3
 
 ---
