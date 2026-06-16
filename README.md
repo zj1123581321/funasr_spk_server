@@ -231,6 +231,8 @@ const ws = new WebSocket('ws://localhost:8767');
 | `force_refresh` | bool | 否 | 强制刷新缓存（默认 false） |
 | `output_format` | string | 否 | `"json"`（默认） 或 `"srt"` |
 | `engine` | string | 否 | **PR1 新增**：ASR 引擎名。`"funasr"`（默认）或 `"qwen3"`（PR1 占位）。**省略 = 走 `FUNASR_DEFAULT_ENGINE`。**不带此字段的旧 client 行为零变化。 |
+| `diarize` | bool | 否 | 是否输出说话人区分（默认 `true`）。`false` 时 JSON `speaker=null`、SRT 无 `SpeakerN:` 前缀。 |
+| `word_align` | bool | 否 | **词级时间戳**（qwen3 引擎，JSON-only）。省略=跟随 server 默认（默认关）。`true` 时每个 `segment.words` 挂词级绝对秒时间戳。CUDA 显存不足会自动降级到 CPU；交付情况见响应 `metadata.word_align` / `word_align_error`。 |
 
 #### 4. 上传文件数据
 ```json
