@@ -3,7 +3,7 @@
 """
 import asyncio
 import uuid
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from typing import Dict, Optional, List
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -67,6 +67,11 @@ class TaskManager:
         self._maintenance_task: Optional[asyncio.Task] = None
         # 已被内存清理的 task_id（有界 LRU）：让轮询能区分 expired(清过) vs not_found(从未有)
         self._evicted_task_ids: "OrderedDict[str, None]" = OrderedDict()
+        # ===== 可观测性 (P1) 单调计数器 (A1/codex #14) =====
+        # 终态/错误计数必须是累加的单调 Counter，不能扫 self.tasks 现算——self.tasks
+        # 被 TTL 淘汰，扫描值是"当前驻留 gauge"，Prometheus rate() 会在任务被清后静默回退。
+        self._terminal_counter: "Counter[str]" = Counter()  # {status_value: 累计数}
+        self._error_counter: "Counter[str]" = Counter()     # {kind: 累计数}
     
     async def start(self):
         """启动任务管理器"""
@@ -213,7 +218,8 @@ class TaskManager:
                     )
 
                 task.completed_at = datetime.now()
-                
+                self._record_terminal(TaskStatus.COMPLETED)  # 终态化点 1: 缓存命中
+
                 # 通知完成
                 await self._notify_task_complete(task)
                 return None
@@ -227,6 +233,7 @@ class TaskManager:
                 # 必须回滚该插入，否则被拒的 PENDING 任务永不终态 → 永久内存泄漏。
                 self.tasks.pop(task_id, None)
                 logger.warning(f"队列已满拒绝任务并回滚: {task_id} (queue={queue_size}/{max_size})")
+                self.record_error("queue_full")
                 raise QueueFullError(
                     retry_after=self._compute_retry_after(),
                     queue_size=queue_size,
@@ -256,6 +263,7 @@ class TaskManager:
             except asyncio.QueueFull:
                 # 极少数竞态：锁内仍被塞满。同样回滚 self.tasks 插入。
                 self.tasks.pop(task_id, None)
+                self.record_error("queue_full")
                 raise QueueFullError(
                     retry_after=self._compute_retry_after(),
                     queue_size=self.task_queue.qsize(),
@@ -386,6 +394,8 @@ class TaskManager:
                 task.status = TaskStatus.TIMED_OUT
                 task.error = f"任务处理超时（>{limit}s），被看门狗强制终止"
                 task.completed_at = now
+                self._record_terminal(TaskStatus.TIMED_OUT)  # 终态化点 5: 看门狗
+                self.record_error("timeout")
                 n += 1
                 logger.warning(f"看门狗终态化卡死任务: {task.task_id}")
         return n
@@ -418,7 +428,8 @@ class TaskManager:
         task.status = TaskStatus.CANCELLED
         task.error = "用户取消"
         task.completed_at = datetime.now()
-        
+        self._record_terminal(TaskStatus.CANCELLED)  # 终态化点 4: 取消
+
         # 删除文件（如果配置了且没有其他任务使用）
         if config.transcription.delete_after_transcription and task.file_path:
             has_pending_tasks = any(
@@ -580,6 +591,7 @@ class TaskManager:
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
             task.progress = 100
+            self._record_terminal(TaskStatus.COMPLETED)  # 终态化点 2: 正常完成
 
             # 记录真实处理时长（wall）→ EMA，供 retry_after / estimated_wait 估算
             if task.started_at:
@@ -615,7 +627,9 @@ class TaskManager:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"任务处理失败 {task_id}: {error_msg}")
-            
+            # 错误计数（每次异常都记，含重试中的失败；与终态 FAILED 解耦）
+            self.record_error("engine_error")
+
             # 更新任务状态
             task.status = TaskStatus.FAILED
             task.error = error_msg
@@ -638,7 +652,8 @@ class TaskManager:
                 
                 await self.task_queue.put(task_id)
             else:
-                # 不重试或重试次数已达上限
+                # 不重试或重试次数已达上限 → 真终态 FAILED（终态化点 3）
+                self._record_terminal(TaskStatus.FAILED)
                 if not should_retry:
                     logger.warning(f"任务 {task_id} 遇到不可重试的错误: {error_msg}")
                 # 通知失败
@@ -822,6 +837,43 @@ class TaskManager:
         except Exception as e:
             logger.error(f"重置模型失败: {e}")
     
+    # ===== 可观测性 (P1) 计数器 + 指标快照 =====
+
+    def _record_terminal(self, status: "TaskStatus"):
+        """累加终态计数（单调，A1）。在每个终态化点调用，不扫 self.tasks。"""
+        key = status.value if hasattr(status, "value") else str(status)
+        self._terminal_counter[key] += 1
+
+    def record_error(self, kind: str):
+        """累加错误计数（单调，按 kind 分）。catch 点 / 软错误点调用。
+
+        kind 约定（codex #13 边界）：engine_error（转录异常）/ queue_full（准入拒绝）/
+        timeout（看门狗）/ 以及 websocket 层软错误（invalid_format / file_too_large /
+        bad_hash / task_not_found / auth_failed），由各调用点传入。
+        """
+        self._error_counter[kind] += 1
+
+    def get_metrics_snapshot(self) -> dict:
+        """指标快照：瞬时 gauge（读现态）+ 单调 counter（累计）+ EMA + 引擎信息。
+
+        /metrics 端点的唯一数据源（同步、不 await、不碰子进程，安全在事件循环里读）。
+        """
+        return {
+            # ---- 瞬时 gauge（读现态，self.tasks 只在主事件循环协程读写）----
+            "queue_size": self.task_queue.qsize(),
+            "max_queue_size": config.transcription.max_queue_size,
+            "pending": sum(1 for t in self.tasks.values() if t.status == TaskStatus.PENDING),
+            "processing": self.processing_tasks,
+            "tasks_in_memory": len(self.tasks),
+            # ---- 单调 counter（累计，活过 TTL 淘汰）----
+            "terminal_total": dict(self._terminal_counter),
+            "errors_total": dict(self._error_counter),
+            # ---- 估算 + 引擎 ----
+            "task_seconds_ema": self._estimate_task_seconds(),
+            "engine": config.transcription.default_engine,
+            "pool_size": self._effective_concurrency(),
+        }
+
     def get_stats(self) -> dict:
         """获取统计信息"""
         stats = {
