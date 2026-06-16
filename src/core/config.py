@@ -20,14 +20,18 @@ from dotenv import load_dotenv
 #   (fallback 虽不挂但词级时间戳静默丢失), 单实例稳定可预期
 # - 并发需求再用 FUNASR_QWEN3_POOL_SIZE env 按机器显存/内存显式开
 PROFILES: Dict[str, Dict[str, Any]] = {
+    # Mac 主力引擎 = funasr: 速度快, 大内存(如 64G)并发拉得开(用 FUNASR_MAX_CONCURRENT_TASKS
+    # 按内存调, 实测可 3 进程). qwen3-1.7B 准确度更高但 Mac 上提速需更强环境, 仅按需用
+    # FUNASR_DEFAULT_ENGINE=qwen3 临时切. qwen3 配置(pool/encoder)保留以便临时切换即用.
+    # CUDA profile 才默认 qwen3(高准确度 + GPU 算力补速度).
     "mac_prod": {
         "server": {"port": 8767},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "transcription": {"default_engine": "funasr", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
     },
     "mac_dev": {
         "server": {"port": 8867},
-        "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
+        "transcription": {"default_engine": "funasr", "qwen3_pool_size": 1},
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
         "logging": {"level": "DEBUG"},
     },

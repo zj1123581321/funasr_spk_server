@@ -16,11 +16,10 @@
 - ✅ 原始结果保存，支持格式转换
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
-- ✅ **双 ASR 引擎**（全局唯一引擎模式：部署时由 `transcription.default_engine` 选定，运行时唯一）:
-  - `qwen3`: Qwen3-ASR GGUF/ONNX + speaker diarization——**所有 prod/dev profile 的默认引擎**。runtime-aware：Mac 走 sherpa diarize backend，CUDA 走自建 ort_cuda backend；支持词级时间戳、多人聚类 + short-segment guard 后处理（默认全开，env 可关）。
-  - `funasr`: Paraformer-zh + cam++ 说话人识别，高准确率、MPS 加速——**裸 config（无 profile）时的兜底默认**。
+- ✅ **双 ASR 引擎，按硬件选**（全局唯一引擎模式：部署时由 profile / `FUNASR_DEFAULT_ENGINE` 选定，运行时唯一；详见下方[引擎切换与性能对照](#引擎切换与性能对照)）:
+  - `funasr`: Paraformer-zh + cam++ 说话人识别，**速度快、MPS 加速**——**Mac profile（`mac_prod`/`mac_dev`）默认引擎 + 裸 config 兜底**；大内存（如 64G）用 `FUNASR_MAX_CONCURRENT_TASKS` 拉并发（实测 3 进程）。
+  - `qwen3`: Qwen3-ASR 1.7B GGUF/ONNX + speaker diarization，**准确度更高**——**CUDA profile（`cuda_prod`/`cuda_dev`）默认引擎**。runtime-aware：Mac 走 sherpa diarize，CUDA 走自建 ort_cuda backend；支持词级时间戳、多人聚类后处理。3060 12G 显存只够 `qwen3_pool_size=1`。
   - **引擎选择优先级**：`upload_request.engine`（须等于 server 引擎，否则立即 reject 不入队）> `FUNASR_DEFAULT_ENGINE` env > profile 默认。
-  - **并发**：pool 默认 1（单 GPU 显存约束），按机器显存用 `FUNASR_QWEN3_POOL_SIZE` 调。
 - 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
@@ -113,8 +112,8 @@ bash scripts/download_qwen3_models.sh
 # 仅 --verify 校验文件就绪
 bash scripts/download_qwen3_models.sh --verify
 ```
-落地后, 在 `.env` / `config.json` 设 `FUNASR_DEFAULT_ENGINE=qwen3`, 或用 `FUNASR_PROFILE=mac_prod`(profile 默认即 qwen3)启用.
-> **裸启动(无 profile、无 env)兜底默认 FunASR**; 生产用 profile, 默认就是 qwen3.
+Mac 上临时切 qwen3(追准确度): `FUNASR_DEFAULT_ENGINE=qwen3 venv/bin/python run_server.py`(或写进 `.env`).
+> **引擎按硬件选**: Mac profile(`mac_prod`/`mac_dev`)默认 **funasr**(速度快、并发好); CUDA profile 默认 **qwen3**(准确度更高)。详见上方[引擎切换与性能对照](#引擎切换与性能对照)。
 
 5. 配置环境变量
 复制 `.env.example` 为 `.env` 并编辑:
@@ -178,10 +177,14 @@ FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/
 
 ### 引擎切换与性能对照
 
-| 引擎 | 配置 | RTF (60s 双人音频) | 并发模型 | 优点 | 备注 |
-|------|------|---------------------|----------|------|------|
-| `funasr` | `FUNASR_DEFAULT_ENGINE=funasr` | ~0.1 (MPS) | multi-process pool N=2 (`max_concurrent_tasks`) | 中文高准确率, cam++ 说话人 | 生产默认 |
-| `qwen3`  | `FUNASR_DEFAULT_ENGINE=qwen3` + `download_qwen3_models.sh` | **0.118** (M1 Max) | multi-process pool N=3 (`qwen3_pool_size`, PR3) | Qwen3-ASR 1.7B 准确率夯爆, 自适应聚类 | 需要 ~2.1GB 模型 + Metal GPU; 任务目录 `temp/tasks_qwen3/` 与 FunASR 物理隔离 |
+按**部署硬件**选引擎（部署时由 profile / `FUNASR_DEFAULT_ENGINE` 锁定，运行时全局唯一）:
+
+| 引擎 | 推荐硬件 | 准确度 | 速度 | 并发模型 | 默认所在 profile |
+|------|----------|--------|------|----------|------------------|
+| **`funasr`**<br>(Paraformer-zh + cam++) | **Mac（大内存如 64G）** | 高 | **快**（~0.1 RTF, MPS） | `max_concurrent_tasks` 多进程，内存越大并发越高（64G 实测 3 进程） | `mac_prod` / `mac_dev` + 裸 config 兜底 |
+| **`qwen3`**<br>(1.7B GGUF/ONNX + diarize) | **CUDA / 强 GPU** | **更高** | 中（~0.118 RTF M1 Max；提速需更强 GPU） | `qwen3_pool_size`（默认 1；RTX 3060 12G 显存上限 1 进程） | `cuda_prod` / `cuda_dev` |
+
+- 切引擎：`FUNASR_DEFAULT_ENGINE=funasr|qwen3`（qwen3 需先跑 `download_qwen3_models.sh` 拉 ~2.1GB 模型 + Metal/CUDA GPU）；任务目录 `temp/tasks_qwen3/` 与 FunASR 物理隔离。
 
 两套池架构相同(`FileBasedProcessPool`), 但 task 目录 + entry 脚本独立, 同机器 FunASR daemon 和 Qwen3 测试可并存. 详见 [docs/部署.md 第五节](docs/部署.md).
 
@@ -229,7 +232,7 @@ const ws = new WebSocket('ws://localhost:8767');
 | `file_hash` | string | 是 | 文件 MD5（用于缓存命中检查） |
 | `force_refresh` | bool | 否 | 强制刷新缓存（默认 false） |
 | `output_format` | string | 否 | `"json"`（默认） 或 `"srt"` |
-| `engine` | string | 否 | ASR 引擎名（`"funasr"` / `"qwen3"`）。**须等于 server 当前引擎，否则被 reject 不入队**。省略 = 走 server 引擎（**prod/dev profile 默认 `qwen3`**，裸 config 兜底 `funasr`）。不带此字段的旧 client 行为不变。 |
+| `engine` | string | 否 | ASR 引擎名（`"funasr"` / `"qwen3"`）。**须等于 server 当前引擎，否则被 reject 不入队**。省略 = 走 server 引擎（**Mac profile 默认 `funasr`，CUDA profile 默认 `qwen3`**，裸 config 兜底 `funasr`）。不带此字段的旧 client 行为不变。 |
 | `diarize` | bool | 否 | 是否输出说话人区分（默认 `true`）。`false` 时 JSON `speaker=null`、SRT 无 `SpeakerN:` 前缀。 |
 | `word_align` | bool | 否 | **词级时间戳**（qwen3 引擎，JSON-only）。省略=跟随 server 默认（默认关）。`true` 时每个 `segment.words` 挂词级绝对秒时间戳。CUDA 显存不足会自动降级到 CPU；交付情况见响应 `metadata.word_align` / `word_align_error`。 |
 | `language` | string | 否 | 识别语言 ISO 码（chi/eng/jpn/kor…），驱动 `word_align` 词级时间戳的语言；省略走 server 兜底。 |

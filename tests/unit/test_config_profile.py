@@ -56,8 +56,10 @@ class TestProfileDefaults:
         monkeypatch.setenv("FUNASR_PROFILE", "mac_prod")
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.server.port == 8767
-        assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 1
+        # Mac 生产主力引擎 = funasr(速度快、大内存并发友好); qwen3 在 Mac 仅按需用
+        # FUNASR_DEFAULT_ENGINE=qwen3 临时切. CUDA profile 才默认 qwen3.
+        assert cfg.transcription.default_engine == "funasr"
+        # qwen3 配置(pool/encoder)保留, 供 env 临时切 qwen3 时即用
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
         # Mac CPU word_align +17% RTF, profile 保持关 (字段默认 False)
         assert cfg.qwen3.word_align_enabled is False
@@ -66,8 +68,7 @@ class TestProfileDefaults:
         monkeypatch.setenv("FUNASR_PROFILE", "mac_dev")
         cfg = Config.load_from_file(_write_config(tmp_path, {}))
         assert cfg.server.port == 8867
-        assert cfg.transcription.default_engine == "qwen3"
-        assert cfg.transcription.qwen3_pool_size == 1
+        assert cfg.transcription.default_engine == "funasr"
         assert cfg.qwen3.asr_encoder_provider == "coreml_ane_full"
         assert cfg.logging.level == "DEBUG"
         assert cfg.qwen3.word_align_enabled is False

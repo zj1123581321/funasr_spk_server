@@ -152,10 +152,12 @@ defaults < config.json < FUNASR_PROFILE < FUNASR_* env
 
 | profile | port | engine | qwen3_pool | encoder | log |
 |---|---|---|---|---|---|
-| `mac_prod` | 8767 | qwen3 | 1 | coreml_ane_full | INFO |
-| `mac_dev` | 8867 | qwen3 | 1 | coreml_ane_full | DEBUG |
+| `mac_prod` | 8767 | **funasr** | 1 | coreml_ane_full | INFO |
+| `mac_dev` | 8867 | **funasr** | 1 | coreml_ane_full | DEBUG |
 | `cuda_prod` | (默认 8767) | qwen3 | 1 | cuda | INFO |
 | `cuda_dev` | 8867 | qwen3 | 1 | cuda | DEBUG |
+
+**引擎按硬件分**（2026-06-16 拍板）：**Mac → funasr**（速度快，大内存如 64G 并发拉得开，用 `FUNASR_MAX_CONCURRENT_TASKS` 调，实测可 3 进程）；**CUDA → qwen3**（准确度更高，GPU 算力补速度；3060 12G 显存只够 1 进程）。Mac 想用 qwen3（追准确度）走 `FUNASR_DEFAULT_ENGINE=qwen3` 临时切——mac profile 已保留 qwen3 的 encoder/pool 配置即用。
 
 pool 全 profile 默认 1（2026-06-10 拍板）：3060 12GB 实测 pool=2 + word_align 双 MMS CUDA session 撞显存 OOM（fallback 不挂但词级时间戳静默丢失）。并发需求用 `FUNASR_QWEN3_POOL_SIZE` env 按机器显存/内存显式开。
 
@@ -194,7 +196,9 @@ per-request `engine ≠ default_engine` 已被 `transcriber_dispatch.py:57` 拒,
 
 不同部署目标 × 不同引擎的常见组合, 推荐姿势:
 
-### A. Mac + Qwen3 (主路径)
+### A. Mac + FunASR (主路径, 速度快 / 并发好)
+
+mac_prod/mac_dev profile 默认就是 funasr, 直接起:
 
 ```bash
 # prod (PM2 守护)
@@ -204,7 +208,11 @@ FUNASR_PROFILE=mac_prod pm2 start ecosystem.config.cjs
 FUNASR_PROFILE=mac_dev venv/bin/python run_server.py
 ```
 
+大内存(如 64G)拉并发: 加 `FUNASR_MAX_CONCURRENT_TASKS=3`(实测可 3 进程).
+
 ### B. Linux CUDA + Qwen3 (远端 dev box / 未来 prod)
+
+cuda profile 默认 qwen3(准确度更高, GPU 算力补速度):
 
 ```bash
 export FUNASR_PROFILE=cuda_dev   # 或 cuda_prod
@@ -212,16 +220,18 @@ export FUNASR_PROFILE=cuda_dev   # 或 cuda_prod
 venv/bin/python run_server.py
 ```
 
-### C. Mac/Linux + FunASR (历史路径 / 回归对比)
+注: 3060 12G 显存只够 `qwen3_pool_size=1`.
 
-所有 profile 默认都是 qwen3 引擎, 想用 FunASR 走 env 覆盖:
+### C. Mac + Qwen3 (追准确度, 按需切)
+
+Mac 默认 funasr, 想用 qwen3 高准确度走 env 覆盖(mac profile 已留 qwen3 encoder/pool 配置即用, 需先 `scripts/download_qwen3_models.sh` 拉模型):
 
 ```bash
-# 干净法 (走 config.json 默认 port/log, 推荐)
-FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+# 干净法 (走 config.json 默认 port/log)
+FUNASR_DEFAULT_ENGINE=qwen3 venv/bin/python run_server.py
 
-# 套餐 + 覆盖法 (沿用 profile 的 port/log, 只改引擎)
-FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+# 套餐 + 覆盖法 (沿用 mac profile 的 port/log/encoder, 只改引擎)
+FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=qwen3 venv/bin/python run_server.py
 ```
 
 注: FunASR 不支持 CUDA, Linux 上自动走 CPU (MPS 仅 Mac).
@@ -243,9 +253,9 @@ FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.p
    ```
    FUNASR_PROFILE=mac_dev   # 或 cuda_dev
    ```
-2. **临时换引擎调试** — 命令行 cover:
+2. **临时换引擎调试** (Mac 默认 funasr, 临时切 qwen3 追准确度) — 命令行 cover:
    ```bash
-   FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=funasr venv/bin/python run_server.py
+   FUNASR_PROFILE=mac_dev FUNASR_DEFAULT_ENGINE=qwen3 venv/bin/python run_server.py
    ```
 3. **加新部署目标** (新机器 / 新硬件配置) — 改 `src/core/config.py:PROFILES`:
    ```python
