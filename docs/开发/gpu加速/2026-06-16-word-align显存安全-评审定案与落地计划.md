@@ -26,11 +26,23 @@
 
 全 unit 682 passed（6 失败为既有 `.env` 污染，与本课题无关）。
 
-**剩余（需 3060 真机，见 §4 [E2E 3060]）**：
-- [ ] sidecar idle TTL 到点退出后整卡显存回落主服务 idle 基线（#18 核心价值）。
-- [ ] word_align=true 经 sidecar 出词，与进程内 CUDA parity 一致。
-- [ ] preflight 阈值标定（记录加载前/后 free，改准默认值）。
-- [ ] sidecar 挂掉 → 降级 CPU/无词，主请求不挂（真机）。
+**3060 真机 E2E 验收（2026-06-16 实测，全通过 ✅）**
+
+dev box `100.103.92.95`（cuda_dev，funasr + CapsWriter 2864MiB 共驻 12GB 卡）：
+
+| 验收项 | 结果 |
+|---|---|
+| sidecar idle TTL 退出**真释放 VRAM** | ✅ 日志 `idle 90.0s 无请求, 退出释放 VRAM`；整卡 used **9780→6579（释放 3201 ≈ sidecar 持有的 3198）** |
+| word_align 经 sidecar 出词 parity | ✅ 359-360 词，`metadata.word_align=true`，无 `word_align_error`，RTF 0.11；probe 5 场景（A-E）全过 |
+| 主服务 baseline 不被 word_align 永久顶高 | ✅ word_align 的 ~3198MiB **全在独立 sidecar 进程**（`python -m src.core.qwen3.word_align_sidecar`），主 funasr 进程仅 3704（ASR/diarize 工作集）。**对比**：落地前进程内 CUDA word_align 会把主进程顶到 5956-6212MiB 且只有重启才回落 |
+| 生命周期：lazy spawn / idle 退出 / 重启 | ✅ 首请求 lazy spawn；idle 90s 自退；下次请求 `poll()` reap 旧进程 + 重启新 sidecar |
+| preflight 放行 + 无 OOM | ✅ free 6936 > 4608 阈值放行；CapsWriter 毫发无损 |
+
+**阈值标定**：3060+CapsWriter 上 sidecar word_align CUDA session ~3198MiB，idle 基线 funasr 2110MiB。起步阈值 `word_align_preflight_free_mib=4608`（~session+1.4GB 余量）真机**既不误杀也没放过 OOM**，保留为验证值（可按需 env 收紧到 ~3700）。
+
+**已知小行为（可接受）**：sidecar idle 自退后短暂变僵尸进程（`Z <defunct>`，**不占 GPU/内存**），下次 word_align 请求经 `_alive()→poll()` reap + respawn；"自退后再无请求"会留一个无资源僵尸到主进程退出（atexit 兜底）。不加 reaper 线程（无资源、下次请求即清，over-engineering）。
+
+剩余（未在本轮真机覆盖，低优先）：sidecar 主动杀（超时/OOM 退休）路径的真机触发——单测已覆盖（mock），真机靠自然 OOM 难构造，留观测。
 
 ---
 
