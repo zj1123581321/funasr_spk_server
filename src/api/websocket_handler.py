@@ -8,7 +8,15 @@ from datetime import datetime
 import websockets
 from websockets.server import WebSocketServerProtocol
 from loguru import logger
-from src.models.schemas import WebSocketMessage, FileUploadRequest, TaskStatusResponse, ErrorResponse
+from src.models.schemas import (
+    WebSocketMessage,
+    FileUploadRequest,
+    TaskStatusResponse,
+    TaskStatusBatchItem,
+    TaskStatusBatchResponse,
+    TaskStatus,
+    ErrorResponse,
+)
 from src.core.config import config
 from src.utils.auth import verify_token
 import base64
@@ -17,6 +25,12 @@ import tempfile
 import os
 import time
 import uuid
+
+
+# 批量状态查询的 task_ids 硬上限（控帧大小）。超出截断 + warn。
+# 长音频 JSON 50 份单帧可能数 MB，靠"client 把已完成 id 移出轮询集、每 result 只发一次"摊平。
+# 50 是起步硬上限，实测帧过大再降。
+TASK_STATUS_BATCH_MAX = 50
 
 
 class WebSocketHandler:
@@ -145,7 +159,12 @@ class WebSocketHandler:
                 await self._send_task_status(websocket, task_id)
             else:
                 await self._send_error(websocket, "missing_task_id", "缺少task_id参数")
-                
+
+        elif msg_type == "task_status_batch":
+            # 批量查询任务状态（异步轮询契约 TODOS #20）：一帧拿全集，完成项内联 result，
+            # 防 per-task N+1 拉取风暴 + TTL race。
+            await self._handle_task_status_batch(websocket, msg_data.get("task_ids"))
+
         elif msg_type == "cancel_task":
             # 取消任务
             task_id = msg_data.get("task_id")
@@ -371,6 +390,61 @@ class WebSocketHandler:
             logger.error(f"获取任务状态失败: {e}")
             await self._send_error(websocket, "status_error", str(e))
     
+    async def _handle_task_status_batch(self, websocket: WebSocketServerProtocol, task_ids):
+        """批量查询任务状态（异步轮询契约 TODOS #20）。
+
+        客户端批量场景必须用此单条消息（禁 per-task 各自轮询），完成项 result 随响应内联。
+        - task_ids 上限 TASK_STATUS_BATCH_MAX（50）：超出截断 + warn，控帧大小。
+        - 逐 id 复用 _build_task_status_batch_item 组装（DRY：result/SRT/expired 形态收拢一处）。
+        - **逐 id 组装是同步循环、中间不 await**：避免撞 task_manager.py:499-500 注释的
+          "COMPLETED 翻转在 result 组装后"窗口，否则会返回 status=completed 但 result=null。
+        """
+        if not isinstance(task_ids, list) or not task_ids:
+            await self._send_error(websocket, "missing_task_ids", "缺少task_ids参数（应为非空列表）")
+            return
+
+        if len(task_ids) > TASK_STATUS_BATCH_MAX:
+            logger.warning(
+                f"task_status_batch 请求 {len(task_ids)} 个 id 超上限 "
+                f"{TASK_STATUS_BATCH_MAX}，截断（控帧大小）"
+            )
+            task_ids = task_ids[:TASK_STATUS_BATCH_MAX]
+
+        from src.core.task_manager import task_manager
+        # 同步组装全部 item（无 await → 不可能跨协程切换 → 状态-结果读取原子）
+        items = [self._build_task_status_batch_item(task_manager, tid) for tid in task_ids]
+
+        response = TaskStatusBatchResponse(items=items)
+        await self._send_message(websocket, "task_status_batch", response.dict())
+
+    def _build_task_status_batch_item(self, task_manager, task_id: str) -> TaskStatusBatchItem:
+        """组装单个 batch 项（**同步**，绝不能 await：钉 task_manager.py:499-500 原子性不变量）。
+
+        - 不存在：was_evicted → task_expired（曾存在被清），否则 task_not_found（从未存在），
+          status=None（不整批失败，client 据 error 凭 file_hash 重投）。
+        - COMPLETED：JSON 内联 result；SRT 内联 srt_content（codex #11：result 装不下 SRT）。
+        - failed/timed_out/cancelled：终态 + error（codex #10：client 据此停轮询）。
+        - PENDING/PROCESSING：result/srt_content/error 全 None（小帧）。
+        """
+        task = task_manager.get_task(task_id)
+        if not task:
+            err = "task_expired" if task_manager.was_evicted(task_id) else "task_not_found"
+            return TaskStatusBatchItem(task_id=task_id, status=None, error=err)
+
+        # 读 status 后据其决定挂 result/srt/error，全程同步
+        status = task.status
+        item = TaskStatusBatchItem(task_id=task_id, status=status, progress=task.progress)
+        if status == TaskStatus.COMPLETED:
+            if task.output_format == "srt":
+                # SRT 走 srt_content（非 result 字段）
+                item.srt_content = task.srt_content
+            else:
+                item.result = task.result
+        elif status in (TaskStatus.FAILED, TaskStatus.TIMED_OUT, TaskStatus.CANCELLED):
+            item.error = task.error
+        # PENDING/PROCESSING → 小帧（result/srt_content/error 保持 None）
+        return item
+
     async def _handle_cancel_task(self, websocket: WebSocketServerProtocol, task_id: str):
         """处理取消任务请求"""
         try:
