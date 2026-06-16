@@ -1,6 +1,8 @@
-# FunASR Speaker Recognition Server
+# FunASR SPK Server — 多引擎语音转录 + 说话人识别服务
 
-基于FunASR的音视频转录服务器，支持说话人识别和时间戳标注，提供JSON和SRT两种输出格式。
+多引擎（FunASR / Qwen3）音视频转录服务器，支持说话人识别（diarization）、词级时间戳，提供 JSON 和 SRT 两种输出格式。**引擎与各项转录选项均通过 WebSocket `upload_request` 字段按部署 / 请求指定**（见下方字段说明）。
+
+> 项目代号 `funasr_spk_server` 源于初代单引擎（FunASR）实现，现已演进为多引擎架构——**代号保留，不代表仅支持 FunASR**。架构权威细节见 [CLAUDE.md](CLAUDE.md) ASR 引擎章节。
 
 ## 功能特性
 
@@ -14,13 +16,11 @@
 - ✅ 原始结果保存，支持格式转换
 - ✅ 企微机器人通知
 - ✅ JWT认证机制
-- ✅ **双 ASR 引擎可选**(全局唯一引擎模式, PR2 落地):
-  - `funasr`: Paraformer-zh + cam++ 说话人识别(生产默认, 高准确率, MPS 加速, multi-process pool N=2)
-  - `qwen3`: Qwen3-ASR 1.7B GGUF + sherpa-onnx speaker diarization(RTF 0.118, 自适应聚类, multi-process pool N=3, PR3 落地)
-    - **多人场景支持** (PR4 落地, 2026-05-16): cluster centroid merge + short-segment guard 后处理
-    - 验证: PoC eval_set 1/2/3+/4/6 speaker 全场景 detected speakers 与真值 ±1
-    - 默认全开, 可用 `FUNASR_QWEN3_CLUSTER_MERGE_ENABLED=false` / `FUNASR_QWEN3_SHORT_GUARD_ENABLED=false` 关闭
-    - **真生产路径 e2e 兜底** (`tests/integration/test_qwen3_server_websocket_e2e.py`): 真 subprocess server + websocket client + 真模型 + 真 cache (1255x 加速验证 + N=2 并发不串台), `FUNASR_RUN_INTEGRATION=1` 启用
+- ✅ **双 ASR 引擎**（全局唯一引擎模式：部署时由 `transcription.default_engine` 选定，运行时唯一）:
+  - `qwen3`: Qwen3-ASR GGUF/ONNX + speaker diarization——**所有 prod/dev profile 的默认引擎**。runtime-aware：Mac 走 sherpa diarize backend，CUDA 走自建 ort_cuda backend；支持词级时间戳、多人聚类 + short-segment guard 后处理（默认全开，env 可关）。
+  - `funasr`: Paraformer-zh + cam++ 说话人识别，高准确率、MPS 加速——**裸 config（无 profile）时的兜底默认**。
+  - **引擎选择优先级**：`upload_request.engine`（须等于 server 引擎，否则立即 reject 不入队）> `FUNASR_DEFAULT_ENGINE` env > profile 默认。
+  - **并发**：pool 默认 1（单 GPU 显存约束），按机器显存用 `FUNASR_QWEN3_POOL_SIZE` 调。
 - 🍎 **macOS(Apple Silicon)专属**:依赖 MPS GPU 加速, 详见 [docs/部署.md](docs/部署.md)
 
 ## 架构说明
@@ -29,9 +29,9 @@
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   WebSocket     │───▶│  Task Manager   │───▶│ FunASR Engine   │
-│   Handler       │    │                 │    │                 │
-│  (接收请求)      │    │  (队列管理)      │    │  (AI转录)       │
+│   WebSocket     │───▶│  Task Manager   │───▶│   ASR Engine    │
+│   Handler       │    │                 │    │  (dispatch:     │
+│  (接收请求)      │    │  (队列管理)      │    │ FunASR / Qwen3) │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          ▼                       ▼                       ▼
@@ -54,7 +54,7 @@
    - 缓存策略和重试机制
 
 3. **FunASR Transcriber** (`src/core/funasr_transcriber.py`)
-   - 基于FunASR的AI转录引擎
+   - FunASR 引擎实现（多引擎之一；引擎路由见组件 6 Dispatch，Qwen3 见组件 7）
    - 支持双格式输出（JSON/SRT）
    - 说话人识别和时间戳标注
 
@@ -72,10 +72,10 @@
    - upload_request.engine 字段严格 validate, 跨引擎请求立即 reject(不入队)
    - 引擎注册表式扩展, 见 `CLAUDE.md` ASR 引擎章节
 
-7. **Qwen3-Diarize Transcriber** (`src/core/qwen3_transcriber.py`) — PR2 落地
+7. **Qwen3-Diarize Transcriber** (`src/core/qwen3_transcriber.py`)
    - GGUF/ONNX 混合 ASR(vendor: `src/core/vendor/qwen_asr_gguf/`)
-   - sherpa-onnx Speaker Diarization(pyannote-segmentation-3.0 + NeMo TitaNet)
-   - ASR + Diarize 真并行(asyncio.gather), 单任务 wall RTF 0.118 实测
+   - Speaker Diarization：Mac/CPU 走 sherpa-onnx(pyannote-segmentation-3.0 + NeMo TitaNet)，CUDA 走自建 ort_cuda backend
+   - ASR + Diarize 真并行(asyncio.gather)；runtime-aware 池 dispatch + 多人聚类 / 词级时间戳等后处理（细节见 CLAUDE.md）
    - 模型权重落地脚本: `scripts/download_qwen3_models.sh`
 
 ## 快速开始
@@ -113,8 +113,8 @@ bash scripts/download_qwen3_models.sh
 # 仅 --verify 校验文件就绪
 bash scripts/download_qwen3_models.sh --verify
 ```
-落地后, 在 `.env` 或 `config.json` 设 `FUNASR_DEFAULT_ENGINE=qwen3` 启用 Qwen3 引擎.
-默认仍是 FunASR.
+落地后, 在 `.env` / `config.json` 设 `FUNASR_DEFAULT_ENGINE=qwen3`, 或用 `FUNASR_PROFILE=mac_prod`(profile 默认即 qwen3)启用.
+> **裸启动(无 profile、无 env)兜底默认 FunASR**; 生产用 profile, 默认就是 qwen3.
 
 5. 配置环境变量
 复制 `.env.example` 为 `.env` 并编辑:
@@ -215,8 +215,7 @@ const ws = new WebSocket('ws://localhost:8767');
     "file_size": 1024000,
     "file_hash": "md5-hash",
     "force_refresh": false,
-    "output_format": "json",
-    "engine": "funasr"
+    "output_format": "json"
   }
 }
 ```
@@ -230,9 +229,10 @@ const ws = new WebSocket('ws://localhost:8767');
 | `file_hash` | string | 是 | 文件 MD5（用于缓存命中检查） |
 | `force_refresh` | bool | 否 | 强制刷新缓存（默认 false） |
 | `output_format` | string | 否 | `"json"`（默认） 或 `"srt"` |
-| `engine` | string | 否 | **PR1 新增**：ASR 引擎名。`"funasr"`（默认）或 `"qwen3"`（PR1 占位）。**省略 = 走 `FUNASR_DEFAULT_ENGINE`。**不带此字段的旧 client 行为零变化。 |
+| `engine` | string | 否 | ASR 引擎名（`"funasr"` / `"qwen3"`）。**须等于 server 当前引擎，否则被 reject 不入队**。省略 = 走 server 引擎（**prod/dev profile 默认 `qwen3`**，裸 config 兜底 `funasr`）。不带此字段的旧 client 行为不变。 |
 | `diarize` | bool | 否 | 是否输出说话人区分（默认 `true`）。`false` 时 JSON `speaker=null`、SRT 无 `SpeakerN:` 前缀。 |
 | `word_align` | bool | 否 | **词级时间戳**（qwen3 引擎，JSON-only）。省略=跟随 server 默认（默认关）。`true` 时每个 `segment.words` 挂词级绝对秒时间戳。CUDA 显存不足会自动降级到 CPU；交付情况见响应 `metadata.word_align` / `word_align_error`。 |
+| `language` | string | 否 | 识别语言 ISO 码（chi/eng/jpn/kor…），驱动 `word_align` 词级时间戳的语言；省略走 server 兜底。 |
 
 #### 4. 上传文件数据
 ```json
