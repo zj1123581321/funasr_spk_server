@@ -249,7 +249,13 @@ const ws = new WebSocket('ws://localhost:8767');
 服务器会发送以下类型的消息：
 - `task_progress`: 转录进度更新
 - `task_complete`: 转录完成
-- `error`: 错误信息
+- `task_queued`: 任务已排队（含 `queue_position` + `estimated_wait_seconds`）
+- `queue_full`: **队列已满（高负载准入控制）**。含 `retry_after`（建议重试秒数）、`queue_size`、`max_queue_size`。客户端应在 `retry_after` + 抖动后重试：分片上传发 `finalize_upload`（不重传分片），单文件整包重传。
+- `error`: 错误信息（`task_not_found`=任务从未存在；`task_expired`=任务结果已过期清理，可用 file_hash 重新提交命中缓存秒回）
+
+客户端可发送的消息：
+- `finalize_upload`: `{task_id}` — 分片收齐后或 `queue_full` 后重试入队（幂等：已提交则回 `task_status`，不重传分片）
+- `task_status`: `{task_id}` — 轮询任务进度/结果（长任务/高负载推荐轮询而非同步等待）
 
 ## 输出格式对比
 
@@ -473,6 +479,18 @@ FUNASR_DEVICE_PRIORITY=mps,cpu
 - **智能调度**：队列化处理，避免资源竞争
 - **文件管理**：同一文件多任务时智能文件生命周期管理
 - **错误重试**：自动重试机制，提高成功率
+
+#### 高负载健壮性（2026-06-16 止血，详见 `docs/开发/2026-06-16-高负载队列机制-止血修复计划.md`）
+
+队列是**准入控制**：满了返回可重试的 `queue_full` 信号（429 语义），而非泛化错误。配套保障让服务在批量高负载下不崩、不爆、拒绝得体面：
+
+- **内存有界**：完成/失败/取消/超时的终态任务按 TTL（`task_retention_ttl_seconds`，默认 1h，≥ 轮询窗口）+ 硬数量上限（`task_max_retained`，默认 500）双保险清理；非终态永不清。后台维护循环周期执行。
+- **卡死检测**：超 `task_max_processing_seconds`（默认 1h）仍 PROCESSING 的任务被看门狗强制终态化为 `timed_out`，可被正常回收。
+- **队列上限**：`max_queue_size`（config.json 默认 20）压到“超时窗可消化”，避免“被接受却必超时”的假承诺；`FUNASR_MAX_QUEUE_SIZE` 可调。
+- **重试不重传**：分片上传遇 `queue_full` 保留 session + 已落地文件，客户端发 `finalize_upload` 重试，不重传分片；遗弃 session 按 `upload_session_ttl_seconds` 清理 + `upload_session_max_count` 硬上限防磁盘泄漏。
+- **轮询语义**：被清理任务轮询返回 `task_expired`（区别于 `task_not_found`），客户端可用 file_hash 重提命中缓存。
+
+> ⚠️ 这是**止血**：修了崩溃/内存/拒绝体面性。客户端**同步死等**导致的 `接收消息超时(300s)` 根治需异步轮询契约（TODOS #20），客户端应改用 `task_status` 轮询而非同步等 `task_complete`。
 
 ### 并发测试
 

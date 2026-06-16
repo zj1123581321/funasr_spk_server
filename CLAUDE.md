@@ -278,6 +278,29 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 4. 如有平台/环境 profile 差异 → 加到 `PROFILES[<profile_name>]`
 5. unit test 覆盖默认值 / env override / profile / "auto" 解析 (mock detect_runtime)
 
+# 任务队列与高负载健壮性（2026-06-16 止血）
+
+定案: `docs/开发/2026-06-16-高负载队列机制-止血修复计划.md`。背景: 批量提交 100+ 任务报 `任务队列已满` + 客户端 `接收消息超时(300s)`。根因三叠加(队列硬拒+泛化错误 / `self.tasks` 内存无限增长 / 客户端同步死等×pool=1 深队列)。本轮走**止血(决策 C)**,异步轮询契约推迟(TODOS #20)。
+
+## 队列 = 准入控制,不是缓冲池
+`TaskManager.task_queue` 是 `asyncio.Queue(maxsize=max_queue_size)`。**真实并发 = qwen3_pool_size(默认 1)**,2 个 task_manager worker 阻塞在池上。队列满 = 准入控制拒绝,抛 **`QueueFullError`**(`src/core/task_manager.py`,携 `retry_after`/`queue_size`/`max_queue_size`),websocket 层映射成 **`queue_full`** 消息(429 语义 + 兼容 error 字段),客户端退避重投。`config.json` `max_queue_size` 默认压到 20(超时窗可消化,避免"被接受却必超时"的假承诺),`FUNASR_MAX_QUEUE_SIZE` 可调。
+
+## self.tasks 内存清理(TTL + size-cap 双保险)
+- `_evict_terminal_tasks()`: 终态任务(completed/failed/cancelled/timed_out)按 `task_retention_ttl_seconds`(默认 1h,**必须 ≥ 客户端轮询窗口**)+ 硬数量上限 `task_max_retained`(默认 500)清理;**非终态(PENDING/PROCESSING)永不清**。
+- `_terminalize_stale_processing()`: 看门狗,超 `task_max_processing_seconds`(默认 1h)仍 PROCESSING → 强制 `TaskStatus.TIMED_OUT`(只改状态,不强杀在途 worker await — 真卡死 worker 槽位回收超止血范围)。
+- `_maintenance_loop()`: `start()` 拉起的周期协程(`task_cleanup_interval_seconds`,默认 60s),跑看门狗 + 清理,`stop()` 取消。
+- **⚠️ codex 窟窿**: `create_task` 先写 `self.tasks`,`submit_task` 才查容量;队列满**必须 `self.tasks.pop(task_id)` 回滚**,否则被拒 PENDING 永不终态 → 永久泄漏。学习: [[见 task_create_before_queue_check_leak]]。
+- `was_evicted(task_id)`(有界 LRU)让轮询区分 `task_expired`(清过) vs `task_not_found`(从未有)。
+
+## 分片 session 资源处理(`websocket_handler.py`)
+- session 有状态机(`state`: uploading→ready→submitted)+ `created_at`(TTL)+ `finalized_file_path`(重试复用)。
+- `queue_full` → 保留 session + 已落地文件,客户端发 **`finalize_upload`** 重试(**不重传分片**,幂等: 已提交回 task_status 不二次入队)。
+- 错误分级: 提交成功后(submitted)**绝不删最终文件**(task 要用);提交前真错误才清 session(含 temp + 已落地)。`_cleanup_upload_session(delete_finalized=)` 控制。
+- `_sweep_upload_sessions()`(新建 session 时机会式调用)+ `upload_session_max_count` 硬上限,防遗弃 session 堆满磁盘。
+
+## EMA 处理时长
+`_record_processing_seconds`/`_estimate_task_seconds`(EMA,抗长音频离群)替代硬编码 2min。`retry_after`≈槽位释放时间(est/并发),`estimated_wait`≈位置/并发×est(**单位改秒**,消息键 `estimated_wait_seconds`)。
+
 # 部署约定（macOS only）
 
 本项目仅在 macOS Apple Silicon 上运行（依赖 MPS GPU 加速）。**不要调用全局 `docker-deploy` skill**。
