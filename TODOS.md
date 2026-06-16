@@ -164,6 +164,24 @@
 - **触发条件**：止血 PR 上线后，若高负载批量场景仍频繁 300s 超时（预期会）
 - **依赖**：本轮止血 PR（self.tasks TTL + queue_full 信号 + session TTL）落地
 - 优先级：P1（300s 超时是用户可见的核心症状，止血后应尽快接手）
+- **🔒 评审定案（2026-06-16 /plan-ceo-review + 对抗 spec 子代理 + codex 外部声音）**：见 `docs/开发/2026-06-16-异步轮询契约-设计定案与落地计划.md`。锁定：**无 `wait` 开关、无 `task_accepted` 新消息**（codex 战略简化——服务端入队后今天就回 `task_queued{position}`，客户端在此 ack 后转轮询即可，上传协议零改动 ⇒ 无 flag day）；服务端真新代码只有 `task_status_batch`（**内联 result**，含终态 failed/timed_out/cancelled + SRT 走 srt_content，上限 50/批，无 live position）+ **正经 in-flight 去重 index**（非扫 self.tasks，只含已入队任务避占位死等，锁内原子查-插 + 连接迁移 + ack 回 canonical task_id，key 含 output_format）；跳过确定性 task_id；poll-miss 凭 file_hash 重投（重启分片需重传）。
+
+### 22. in-flight file_hash 去重（独立 PR，从异步轮询契约拆出）
+- 来源：`/plan-eng-review`（2026-06-16，异步轮询契约评审，问题1 定案拆出）
+- **What**：`submit_task` 入队前查同 `(file_hash, 折维tag, output_format)` 的在途任务，命中则折叠到已有 task_id 不二次入队。
+- **Why**：双客户端撞同一文件时，pool=1 上白跑一个槽（第二次命中第一次缓存或幂等覆写，无正确性 bug，仅浪费算力）。
+- **落地（避坑版，codex #2-6）**：**自愈 index**（`(file_hash,折维tag,output_format)→task_id`，命中后校验 `self.tasks[tid]` 仍在且非终态，脏条目当 miss + 删——杀掉「6+ 终态点漏删」整类 bug）；锁内原子查-插（防 race）；**只含已入队任务**（不含 upload_request 阶段未上传占位，避占位死等）；命中折叠要**迁移连接映射**到 canonical + ack 回 canonical task_id（client 改轮询它）。
+- **Cons / 为何独立**：真实耦合跨 task_manager/websocket_handler 两层 + 6+ 终态落地点，blast radius 比「超时根治」大；去重 bug（轮询死 task_id）比它解决的「白跑一个槽」更糟，不与超时根治绑发。
+- **依赖**：本轮薄轮询 + batch 落地。
+- 优先级：P2
+
+### 21. per-连接/客户端并发限流（防单客户端霸占 pool=1 队列）
+- 来源：`/plan-ceo-review`（2026-06-16，异步轮询契约评审，SELECTIVE EXPANSION 推迟项）
+- **What**：给 ws 连接/客户端加在队并发上限，防一个客户端甩满队列饿死另一个。
+- **Why**：真实并发=pool=1，队列是准入控制。现 `queue_full` 已提供背压（被拒退避重投），但无 per-连接配额——理论上单客户端可长期占满队列。
+- **Cons / 为何延期**：当前仅 2 个可信自控客户端，恶意/失控占用非现实威胁；加准入配额 + 公平调度有复杂度。
+- **触发条件**：接入不可信客户端 / 客户端数增多 / 实测出现互饿。
+- 优先级：P3
 
 ---
 
