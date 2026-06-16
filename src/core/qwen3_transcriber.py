@@ -68,6 +68,24 @@ from src.utils.silence_detect import ffmpeg_speech_regions
 MAX_EXTRACTOR_SEGMENT_SEC = 120.0
 
 
+def _gpu_mem_used_mib() -> Optional[int]:
+    """best-effort 读当前 GPU 已用显存 (MiB), 仅给 word_align poison 时打 dispose delta.
+
+    ⚠️ 这不是 VRAM preflight 探针 (那是推迟的 TODO #17), 只是个观测日志. nvidia-smi
+    不可用 (非 CUDA 机 / 无 nvidia-smi) → 返回 None, 调用方降级成"未测". 不抛错.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        return int(out.stdout.strip().splitlines()[0])
+    except Exception:
+        return None
+
+
 def _cap_extractor_fn(raw_fn, max_segment_sec: float = MAX_EXTRACTOR_SEGMENT_SEC):
     """把 raw extractor 包成段长受限版, 底层永远收到 <= max_segment_sec 的段.
 
@@ -346,6 +364,13 @@ class Qwen3DiarizeTranscriber:
     参数注入式: 模型路径 / preset 由调用方传入(典型从 config 读), 类本身不绑 config.
     """
 
+    # CUDA word_align poison flag — **class attr (进程/pool 级共享, codex #8)**:
+    # 第一次 CUDA word_align 资源错误 (OOM/CUBLAS) 后置 True, 该进程内所有实例的 word_align
+    # 余生走 CPU, 不再赌 CUDA (避免反复 thrash + 不健康 CUDA 上下文). in-proc CUDA pool 的
+    # N 个实例共享同一进程 → 共享此 flag = pool 级 poison. 重启服务恢复 CUDA.
+    # (Mac file-based pool 每 task 一进程, poison 无意义, codex #9 — class attr 各进程独立.)
+    _cuda_word_align_poisoned: bool = False
+
     def __init__(
         self,
         asr_model_dir: str,
@@ -390,6 +415,7 @@ class Qwen3DiarizeTranscriber:
         word_align_model_path: str = "./models/qwen3_diarize/ctc_forced_aligner/model.onnx",
         word_align_provider: str = "auto",
         word_align_batch_size: int = 16,
+        word_align_cuda_batch_size: int = 1,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -426,6 +452,7 @@ class Qwen3DiarizeTranscriber:
         self.word_align_model_path = word_align_model_path
         self.word_align_provider = word_align_provider
         self.word_align_batch_size = word_align_batch_size
+        self.word_align_cuda_batch_size = word_align_cuda_batch_size
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -433,6 +460,8 @@ class Qwen3DiarizeTranscriber:
         self._embedding_extractor_fn = None
         # word_align MMS aligner 单例 — 同 worker 多 task 复用 MMS ONNX session
         self._word_aligner = None
+        # CPU fallback aligner (lazy) — CUDA poison 后或资源不足时走它
+        self._word_aligner_cpu = None
 
     # ==================== 引擎管理 ====================
 
@@ -466,8 +495,122 @@ class Qwen3DiarizeTranscriber:
                 provider=self.word_align_provider,
                 language=self.word_align_language,
                 batch_size=self.word_align_batch_size,
+                cuda_batch_size=self.word_align_cuda_batch_size,
             )
         return self._word_aligner
+
+    def _ensure_word_aligner_cpu(self):
+        """惰性构造 CPU word_align aligner (per-worker 单例) — CUDA poison / fallback 用.
+
+        显式 provider="cpu" + batch_size=word_align_batch_size (16), 与 primary (可能 CUDA)
+        互不影响. CPU session 独立于 CUDA 上下文, OOM 后仍可用.
+        """
+        if self._word_aligner_cpu is None:
+            from src.core.qwen3.word_align import WordAligner
+
+            logger.info("构造 CPU word_align aligner (CUDA fallback/poison 路径)")
+            self._word_aligner_cpu = WordAligner(
+                model_path=self.word_align_model_path,
+                provider="cpu",
+                language=self.word_align_language,
+                batch_size=self.word_align_batch_size,
+                cuda_batch_size=self.word_align_cuda_batch_size,
+            )
+        return self._word_aligner_cpu
+
+    def _poison_cuda_word_align(self, task_id: str):
+        """OOM 后 poison pool 级 CUDA word_align (决策 2A-CQ + 4A).
+
+        - 置 class flag (进程/pool 内所有实例后续走 CPU)
+        - dispose CUDA aligner session 尝试回收显存 (决策 4A, ORT 未必真还, 打 nvidia-smi delta 观测)
+        """
+        Qwen3DiarizeTranscriber._cuda_word_align_poisoned = True
+        before = _gpu_mem_used_mib()
+        try:
+            if self._word_aligner is not None:
+                self._word_aligner.close()
+                self._word_aligner = None
+        except Exception as exc:  # dispose 失败不致命
+            logger.warning(f"[{task_id}] dispose CUDA word_align session 失败: {exc}")
+        after = _gpu_mem_used_mib()
+        if before is not None and after is not None:
+            logger.warning(
+                f"[{task_id}] CUDA word_align POISONED — 该 worker 余生走 CPU. "
+                f"dispose 显存 delta: {before}→{after} MiB (回收 {before - after} MiB; "
+                f"ORT BFCArena 未必真还, 仅观测)"
+            )
+        else:
+            logger.warning(
+                f"[{task_id}] CUDA word_align POISONED — 该 worker 余生走 CPU "
+                f"(已 dispose session; nvidia-smi 不可用, 显存回收量未测)"
+            )
+
+    def _word_align_segments(self, audio_path, asr_chunks, merged_segments, effective_lang, task_id):
+        """词级时间戳挂段 + CUDA→CPU fallback + OOM poison. 同步, 在 executor 跑.
+
+        返回 (merged_segments, stats). 流程:
+          1. 已 poison → 直接 CPU aligner, 不赌 CUDA
+          2. 否则试 primary aligner (provider=auto, 可能 CUDA)
+          3. primary 抛 CUDA 资源错误 (is_resource_error) 且 primary 是 CUDA → poison + dispose + CPU 重试
+          4. CPU 也失败 / 非资源错误 → 段不带词 + error, 整请求不挂 (decisions A/2A-CQ)
+        """
+        from src.core.qwen3.word_align import is_resource_error
+
+        audio_16k, _sr = _load_audio_mono_16k(audio_path)
+        cls = Qwen3DiarizeTranscriber
+
+        def _run(aligner, provider_label, extra=None):
+            words, stats = aligner.align_chunks(audio_16k, asr_chunks, language=effective_lang)
+            segs = attach_words_to_segments(merged_segments, words)
+            stats = {
+                **stats, "enabled": True, "language": effective_lang,
+                "provider": provider_label, **(extra or {}),
+            }
+            if stats.get("failed_windows"):
+                logger.warning(
+                    f"[{task_id}] word_align 部分 window 失败 "
+                    f"({stats['failed_windows']}/{stats.get('total_windows', 0)}), 该段不带词"
+                )
+            logger.info(
+                f"[{task_id}] word_align: provider={provider_label} "
+                f"windows={stats.get('total_windows', 0)} failed={stats.get('failed_windows', 0)} "
+                f"words={stats.get('total_words', 0)} lang={effective_lang}"
+            )
+            return segs, stats
+
+        # 1) 已 poison → 直走 CPU
+        if cls._cuda_word_align_poisoned:
+            try:
+                return _run(self._ensure_word_aligner_cpu(), "cpu", {"cuda_poisoned": True})
+            except Exception as exc:
+                logger.warning(f"[{task_id}] word_align CPU 失败 (CUDA 已 poison), 段不带词: {exc}")
+                return merged_segments, {
+                    "enabled": True, "error": f"cpu_fail: {exc}",
+                    "language": effective_lang, "provider": "cpu",
+                }
+
+        # 2) 试 primary (可能 CUDA)
+        aligner = None
+        try:
+            aligner = self._ensure_word_aligner()
+            return _run(aligner, aligner.effective_provider)
+        except Exception as exc:
+            # 3) CUDA 资源错误 → poison + 转 CPU (用返回的 aligner 引用判 is_cuda,
+            #    不靠 self._word_aligner: 测试可能 patch _ensure_word_aligner 不写实例字段)
+            if is_resource_error(exc) and aligner is not None and aligner.is_cuda:
+                logger.warning(f"[{task_id}] word_align CUDA 资源错误, poison + 转 CPU: {exc}")
+                self._poison_cuda_word_align(task_id)
+                try:
+                    return _run(self._ensure_word_aligner_cpu(), "cpu", {"cuda_oom_fallback": True})
+                except Exception as cpu_exc:
+                    logger.warning(f"[{task_id}] word_align CPU fallback 也失败, 段不带词: {cpu_exc}")
+                    return merged_segments, {
+                        "enabled": True, "error": f"cuda_oom+cpu_fail: {cpu_exc}",
+                        "language": effective_lang, "provider": "cpu",
+                    }
+            # 4) 非资源错误 / primary 非 CUDA → 段不带词
+            logger.warning(f"[{task_id}] word_align 失败, 段不带词: {exc}")
+            return merged_segments, {"enabled": True, "error": str(exc), "language": effective_lang}
 
     def _ensure_engine(self):
         """惰性构造 ASR 引擎(libllama + Metal context 加载耗时, 进程内复用)"""
@@ -692,46 +835,20 @@ class Qwen3DiarizeTranscriber:
                 )
 
         # 词级时间戳 (word_align, MMS-300M CTC-FA): 在干净段上增量挂词, 不替换段边界.
-        # 挂在 silence_align 之后、relabel 之前 (段已干净). flag 关 → 段 words 恒 None
-        # (向后兼容). 任何失败 (aligner build / audio 读 / 对齐抛错) 不阻塞转录: 段照常出.
-        # JSON-only (SRT 不带词, 跳过省 RTF). 逐 window fallback 在 align_chunks 内.
+        # 挂在 silence_align 之后、relabel 之前 (段已干净). 决策 1A: 读 options.word_align
+        # (effective 值, enqueue 已解析 请求>config). 关 → 段 words 恒 None (向后兼容).
+        # JSON-only (SRT 不带词, 跳过省 RTF). CUDA OOM → poison + CPU fallback (决策 A/2A-CQ),
+        # 任何失败都不阻塞转录: 段照常出. 全部封装在 _word_align_segments (executor 跑).
+        do_word_align = options.word_align
         word_align_stats: dict = {"enabled": False}
-        if self.word_align_enabled and output_format == "json":
+        if do_word_align and output_format == "json":
             await self._report_progress(progress_callback, 85, task_id)
             effective_lang = language or self.word_align_language
-            try:
-                aligner = await loop.run_in_executor(None, self._ensure_word_aligner)
-                audio_16k, _sr = await loop.run_in_executor(
-                    None, _load_audio_mono_16k, audio_path
-                )
-                words, word_align_stats = await loop.run_in_executor(
-                    None,
-                    lambda: aligner.align_chunks(
-                        audio_16k, asr_result.chunks, language=effective_lang
-                    ),
-                )
-                merged_segments = attach_words_to_segments(merged_segments, words)
-                word_align_stats = {
-                    **word_align_stats,
-                    "enabled": True,
-                    "language": effective_lang,
-                }
-                logger.info(
-                    f"[{task_id}] word_align: "
-                    f"windows={word_align_stats.get('total_windows', 0)} "
-                    f"failed={word_align_stats.get('failed_windows', 0)} "
-                    f"words={word_align_stats.get('total_words', 0)} "
-                    f"lang={effective_lang}"
-                )
-                if word_align_stats.get("failed_windows"):
-                    logger.warning(
-                        f"[{task_id}] word_align 部分 window 对齐失败 "
-                        f"({word_align_stats['failed_windows']}/{word_align_stats.get('total_windows', 0)}), "
-                        f"该段不带词: {word_align_stats.get('failures')}"
-                    )
-            except Exception as exc:
-                word_align_stats = {"enabled": True, "error": str(exc), "language": effective_lang}
-                logger.warning(f"[{task_id}] word_align 失败, 段不带词: {exc}")
+            merged_segments, word_align_stats = await loop.run_in_executor(
+                None,
+                self._word_align_segments,
+                audio_path, asr_result.chunks, merged_segments, effective_lang, task_id,
+            )
 
         # nospk 分层切段 (D5+T1, 仅 diarize=False): 超长 chunk 段切成字幕可用粒度.
         # 挂在 word_align 之后 — JSON 路径段上已挂 words 可词隙精确切;
@@ -918,6 +1035,7 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         word_align_model_path=q.word_align_model_path,
         word_align_provider=q.word_align_provider,
         word_align_batch_size=q.word_align_batch_size,
+        word_align_cuda_batch_size=q.word_align_cuda_batch_size,
     )
     # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
     _qwen3_singleton.embedding_model = q.embedding_model
