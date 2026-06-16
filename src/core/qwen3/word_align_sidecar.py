@@ -427,3 +427,55 @@ def reset_word_align_sidecar_client() -> None:
             except Exception:
                 pass
         _client_singleton = None
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 4. entry point (sidecar 子进程入口 — 瘦入口, codex #9)
+# ════════════════════════════════════════════════════════════════════════
+def run_sidecar(argv: Optional[List[str]] = None) -> None:
+    """sidecar 进程主入口: 解析 argv → 组 CUDA aligner factory + lean audio_loader → serve.
+
+    **瘦入口** (codex #9): 只 import word_align.py (aligner) + audio_io.py (加载),
+    **不碰 qwen3_transcriber / diarize / sherpa**, 避免拖进 ASR/diarize 机器 + 多占显存.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="word_align CUDA sidecar")
+    parser.add_argument("--socket", required=True, help="UDS socket 路径")
+    parser.add_argument("--model-path", required=True, help="MMS CTC-FA ONNX 路径")
+    parser.add_argument("--language", default="chi", help="兜底语言 ISO 码")
+    parser.add_argument("--cuda-batch-size", type=int, default=1)
+    parser.add_argument("--idle-ttl", type=float, default=90.0, help="空闲 TTL 秒, 到点退出释放 VRAM")
+    args = parser.parse_args(argv)
+
+    def aligner_factory():
+        # CUDA aligner: provider 锁 cuda (sidecar 只做 CUDA, A3)
+        from src.core.qwen3.word_align import WordAligner
+
+        return WordAligner(
+            model_path=args.model_path,
+            provider="cuda",
+            language=args.language,
+            cuda_batch_size=args.cuda_batch_size,
+        )
+
+    def audio_loader(path: str):
+        from src.core.qwen3.audio_io import load_audio_mono_16k
+
+        audio_16k, _sr = load_audio_mono_16k(path)
+        return audio_16k  # 1D 波形, 剥掉 sample_rate
+
+    logger.info(
+        f"word_align sidecar 进程启动 pid={os.getpid()} socket={args.socket} "
+        f"model={args.model_path} lang={args.language} idle_ttl={args.idle_ttl}s"
+    )
+    serve(
+        args.socket,
+        aligner_factory=aligner_factory,
+        audio_loader=audio_loader,
+        idle_ttl_sec=args.idle_ttl,
+    )
+
+
+if __name__ == "__main__":
+    run_sidecar()

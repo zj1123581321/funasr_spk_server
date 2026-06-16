@@ -17,36 +17,14 @@ from typing import Optional
 
 import numpy as np
 import sherpa_onnx
-import soundfile as sf
 from loguru import logger
 
 TARGET_SAMPLE_RATE = 16000
 
 
-def _load_audio_mono_16k(audio_path: str) -> tuple[np.ndarray, int]:
-    """读音频并归一为 16kHz 单声道 float32.
-
-    PR3: 优先 soundfile (wav/flac/ogg); soundfile 不支持的格式 (m4a/aac 等)
-    fallback 到 librosa.load (会自动调 ffmpeg/audioread 解码).
-    """
-    try:
-        audio, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
-        audio = audio[:, 0]  # 仅取第一通道
-    except Exception:
-        # m4a/aac/mp3 等 soundfile 不支持的格式
-        import librosa
-        audio, _sr = librosa.load(audio_path, sr=TARGET_SAMPLE_RATE, mono=True)
-        return audio.astype(np.float32), TARGET_SAMPLE_RATE
-
-    if sample_rate != TARGET_SAMPLE_RATE:
-        # 延迟 import, 只在需要重采样时加载 librosa
-        import librosa
-
-        audio = librosa.resample(
-            audio, orig_sr=sample_rate, target_sr=TARGET_SAMPLE_RATE
-        )
-        sample_rate = TARGET_SAMPLE_RATE
-    return audio, sample_rate
+# 音频加载抽到 audio_io.py (DRY, 共享给 word_align sidecar 瘦入口). 保留本名
+# 作向后兼容别名 (diarize_ort / qwen3_transcriber 仍 from .diarize import _load_audio_mono_16k).
+from src.core.qwen3.audio_io import load_audio_mono_16k as _load_audio_mono_16k  # noqa: E402,F401
 
 
 def _build_pipeline(
