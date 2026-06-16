@@ -346,6 +346,26 @@ class LoggingConfig(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
+class ObservabilityConfig(BaseModel):
+    """可观测性仪表盘配置 (P1, 设计定案 2026-06-16).
+
+    服务通过 websockets 同端口 process_request 钩子暴露 /health + /metrics:
+    - /health: liveness (维护循环活 + 能接任务), JSON, 裸放 (只是死活无敏感信息)
+    - /metrics: Prometheus 文本格式, 只出聚合计数
+
+    A5 安全 (codex #16): server.host 默认 0.0.0.0 (不是 LAN 限定). 故
+    metrics_token 未设 + 0.0.0.0 时 /metrics 拒绝服务 (在端点层判定), 强制
+    要么设 token 要么显式绑 LAN/loopback. /metrics 响应绝不回显 token / secret.
+    """
+    # /health + /metrics 端点总开关. 关掉则 process_request 不拦这些路径 (退回纯 ws).
+    metrics_enabled: bool = True
+    # /metrics 访问 token (config 字段, env 覆盖). 设了则校验 Authorization header
+    # 或 ?token= query; 未设 + host=0.0.0.0 → /metrics 拒绝 (A5). None = 未设.
+    metrics_token: Optional[str] = None
+
+    model_config = {"protected_namespaces": ()}
+
+
 class Config(BaseModel):
     """总配置 - 支持环境变量覆盖"""
     server: ServerConfig = ServerConfig()
@@ -356,6 +376,7 @@ class Config(BaseModel):
     notification: NotificationConfig = NotificationConfig()
     auth: AuthConfig = AuthConfig()
     logging: LoggingConfig = LoggingConfig()
+    observability: ObservabilityConfig = ObservabilityConfig()
 
     @classmethod
     def load_from_file(cls, config_path: str = "config.json") -> "Config":
@@ -521,6 +542,8 @@ class Config(BaseModel):
             config_data["logging"] = {}
         if "qwen3" not in config_data:
             config_data["qwen3"] = {}
+        if "observability" not in config_data:
+            config_data["observability"] = {}
 
         # ==================== 服务器配置 ====================
         cls._override_if_set(config_data["server"], "host", "FUNASR_SERVER_HOST")
@@ -634,6 +657,10 @@ class Config(BaseModel):
         # ==================== 日志配置 ====================
         cls._override_if_set(config_data["logging"], "level", "FUNASR_LOG_LEVEL")
         cls._override_if_set(config_data["logging"], "log_dir", "FUNASR_LOG_DIR")
+
+        # ==================== 可观测性配置 (P1) ====================
+        cls._override_if_set(config_data["observability"], "metrics_enabled", "FUNASR_METRICS_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["observability"], "metrics_token", "FUNASR_METRICS_TOKEN")
 
         return config_data
 
