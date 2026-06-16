@@ -1,0 +1,34 @@
+"""
+Unit 测试专属 fixtures。
+
+仅作用于 tests/unit/（integration 真机路径不受影响——它可能需要 dev .env 里的
+硬件 provider 值，如 FUNASR_QWEN3_ASR_ENCODER_PROVIDER=coreml_ane_full）。
+"""
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(monkeypatch):
+    """Unit 测试 hermetic: 隔离 dev .env 对「默认值 / 无 env」类断言的污染。
+
+    根因（dev 机 6 个 config 测试误挂，CI/纯净环境本不挂）：
+      1. config.py 模块级 `config = Config.load_from_file()` 在 import 时调
+         load_dotenv()，把 dev .env 的 FUNASR_QWEN3_ASR_ENCODER_PROVIDER=coreml_ane_full
+         等塞进 os.environ，并建好一个「带 .env」的全局单例。
+      2. 即便测试 monkeypatch.delenv，Config.load_from_file 内部又 load_dotenv() 读回。
+
+    两步净化（走 monkeypatch，测试结束自动复原，零泄漏到 integration）：
+      1. load_dotenv → no-op：杜绝 .env 被读回，修「自建 Config + delenv」类测试
+         （test_no_env_*）。
+      2. 把 import 时已被 .env 污染、单元测试关心的单例字段重置回默认态：修「读全局
+         单例」类测试（build_engine_config → config.qwen3.asr_encoder_provider）。
+
+    注：不重建整个 Config（其校验依赖 .env 提供的 webhook 等密钥，重建会误触
+    notification 校验 sys.exit），只精准重置受测字段。需要别的 env 的测试仍可 setenv。
+    """
+    import src.core.config as config_mod
+
+    monkeypatch.setattr(config_mod, "load_dotenv", lambda *args, **kwargs: None)
+    # asr_encoder_provider 的 Pydantic 默认是 "auto"（runtime 感知 sentinel）；dev .env
+    # 把它污染成 coreml_ane_full，令 build_engine_config 的平台默认断言误挂。重置回默认。
+    monkeypatch.setattr(config_mod.config.qwen3, "asr_encoder_provider", "auto")
