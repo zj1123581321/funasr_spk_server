@@ -152,6 +152,15 @@ def test_singleton_is_process_global():
     assert c1 is c2
 
 
+def test_get_client_registers_atexit_cleanup():
+    """首次创建单例 → 注册 atexit 杀 sidecar (主进程退出清孤儿)."""
+    import atexit
+    with patch.object(sc, "_build_default_client", side_effect=lambda: _make_client()), \
+         patch.object(atexit, "register") as reg:
+        sc.get_word_align_sidecar_client()
+    reg.assert_called_once_with(sc.reset_word_align_sidecar_client)
+
+
 def test_shutdown_kills_proc():
     """shutdown → 杀 sidecar 进程 (服务停时清理)."""
     client = _make_client()

@@ -409,11 +409,18 @@ def _build_default_client() -> WordAlignSidecarClient:
 
 
 def get_word_align_sidecar_client() -> WordAlignSidecarClient:
-    """进程全局单例 (codex #6): pool>1 多 worker 共用一个 CUDA sidecar."""
+    """进程全局单例 (codex #6): pool>1 多 worker 共用一个 CUDA sidecar.
+
+    首次创建时注册 atexit: 主进程退出 → 杀 sidecar 子进程 (避免孤儿占 VRAM;
+    idle TTL 已兜底 ≤TTL 秒, atexit 让正常退出立即清). 无 sidecar 时 no-op.
+    """
     global _client_singleton
     with _client_lock:
         if _client_singleton is None:
+            import atexit
+
             _client_singleton = _build_default_client()
+            atexit.register(reset_word_align_sidecar_client)
         return _client_singleton
 
 
