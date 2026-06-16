@@ -40,6 +40,11 @@ class TestWordAlignDefaults:
     def test_default_batch_size_is_16(self) -> None:
         assert Qwen3Config().word_align_batch_size == 16
 
+    def test_default_cuda_batch_size_is_1(self) -> None:
+        # 显存落地 (2026-06-16): CUDA batch>=2 在 3060 撞 OOM, 锁死 1.
+        # CPU/默认仍走 word_align_batch_size=16.
+        assert Qwen3Config().word_align_cuda_batch_size == 1
+
 
 class TestWordAlignEnvOverride:
     def test_env_override_enabled(self, monkeypatch, tmp_path) -> None:
@@ -77,3 +82,11 @@ class TestWordAlignEnvOverride:
         cfg = Config.load_from_file(str(config_file))
         assert cfg.qwen3.word_align_batch_size == 8
         assert isinstance(cfg.qwen3.word_align_batch_size, int)
+
+    def test_env_override_cuda_batch_size(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("FUNASR_QWEN3_WORD_ALIGN_CUDA_BATCH_SIZE", "2")
+        config_file = tmp_path / "config.json"
+        config_file.write_text("{}")
+        cfg = Config.load_from_file(str(config_file))
+        assert cfg.qwen3.word_align_cuda_batch_size == 2
+        assert isinstance(cfg.qwen3.word_align_cuda_batch_size, int)

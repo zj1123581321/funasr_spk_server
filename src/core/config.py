@@ -31,19 +31,20 @@ PROFILES: Dict[str, Dict[str, Any]] = {
         "qwen3": {"asr_encoder_provider": "coreml_ane_full"},
         "logging": {"level": "DEBUG"},
     },
-    # CUDA word_align 仅 +1% RTF (3060 实测, spikes/qwen3_word_timestamp/SUMMARY.md),
-    # 几乎免费, profile 默认开词级时间戳 (provider="auto" 在 cuda runtime 自动走 CUDA EP).
-    # Mac profile 不开 (CPU 上 +17% RTF). env FUNASR_QWEN3_WORD_ALIGN_ENABLED 仍可覆盖.
-    # 前提: CUDA 机器须预下 MMS 模型 (scripts/download_qwen3_models.sh --word-align) +
-    #       修 onnxruntime-gpu 被覆盖 (见 docs/部署.md 五节).
+    # word_align (词级时间戳) 改 per-request API 开关 (2026-06-16 显存落地评审), profile
+    # 不再强开. 原因: CUDA word_align session 显存高水位常驻 (batch>=2 在 3060 12GB 撞
+    # BFCArena OOM, 见 docs/开发/gpu加速/2026-06-16-Qwen3-word-align显存PoC与落地计划.md),
+    # 全局强开让每个请求都被迫吃 ~6GB 显存. 现默认关 (config 兜底显式 False everywhere,
+    # codex #13: 否则 per-request 默认不是真 OFF), 要词的请求才按 request word_align=true 开,
+    # CUDA 锁死 batch=1. 想全局默认开仍可走 env FUNASR_QWEN3_WORD_ALIGN_ENABLED=true (兜底层).
     "cuda_prod": {
         "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
+        "qwen3": {"asr_encoder_provider": "cuda"},
     },
     "cuda_dev": {
         "server": {"port": 8867},
         "transcription": {"default_engine": "qwen3", "qwen3_pool_size": 1},
-        "qwen3": {"asr_encoder_provider": "cuda", "word_align_enabled": True},
+        "qwen3": {"asr_encoder_provider": "cuda"},
         "logging": {"level": "DEBUG"},
     },
 }
@@ -186,12 +187,16 @@ class Qwen3Config(BaseModel):
     #   - word_align_provider: "auto" → runtime.recommend_word_align_provider()
     #     (Mac/Cpu → CPUExecutionProvider, Cuda → CUDAExecutionProvider). 显式 EP
     #     字符串不被覆盖. 解析在 word_align wrapper 做 (不在 Pydantic, 区别于 sherpa provider).
-    #   - word_align_batch_size: generate_emissions ONNX 推理 batch.
+    #   - word_align_batch_size: generate_emissions ONNX 推理 batch (CPU/默认).
+    #   - word_align_cuda_batch_size: CUDA EP 专用 batch. 显存落地 (2026-06-16):
+    #     CUDA batch>=2 在 3060 12GB 撞 BFCArena OOM, 锁死 1. WordAligner 在 provider
+    #     解析成 CUDA 时取此值, 否则取 word_align_batch_size. CPU fallback 仍用 16.
     word_align_enabled: bool = False
     word_align_language: str = "chi"
     word_align_model_path: str = "./models/qwen3_diarize/ctc_forced_aligner/model.onnx"
     word_align_provider: str = "auto"
     word_align_batch_size: int = 16
+    word_align_cuda_batch_size: int = 1
 
     # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
     # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
@@ -538,6 +543,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "word_align_model_path", "FUNASR_QWEN3_WORD_ALIGN_MODEL_PATH")
         cls._override_if_set(config_data["qwen3"], "word_align_provider", "FUNASR_QWEN3_WORD_ALIGN_PROVIDER")
         cls._override_if_set(config_data["qwen3"], "word_align_batch_size", "FUNASR_QWEN3_WORD_ALIGN_BATCH_SIZE", int)
+        cls._override_if_set(config_data["qwen3"], "word_align_cuda_batch_size", "FUNASR_QWEN3_WORD_ALIGN_CUDA_BATCH_SIZE", int)
         # A2 治理: vendor 字段 (D4)
         cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
         cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)
