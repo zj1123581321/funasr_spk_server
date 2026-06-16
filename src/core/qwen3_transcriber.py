@@ -58,6 +58,7 @@ from src.models.schemas import (
     WordTimestamp,
 )
 from src.core.gpu_mem import free_vram_mib, has_headroom, used_vram_mib
+from src.core.qwen3.word_align_sidecar import get_word_align_sidecar_client
 from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
 
@@ -403,6 +404,7 @@ class Qwen3DiarizeTranscriber:
         word_align_cuda_batch_size: int = 1,
         word_align_preflight_enabled: bool = True,
         word_align_preflight_free_mib: int = 4608,
+        word_align_sidecar_enabled: bool = True,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -442,6 +444,7 @@ class Qwen3DiarizeTranscriber:
         self.word_align_cuda_batch_size = word_align_cuda_batch_size
         self.word_align_preflight_enabled = word_align_preflight_enabled
         self.word_align_preflight_free_mib = word_align_preflight_free_mib
+        self.word_align_sidecar_enabled = word_align_sidecar_enabled
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -545,11 +548,18 @@ class Qwen3DiarizeTranscriber:
         """
         from src.core.qwen3.word_align import is_resource_error
 
-        audio_16k, _sr = _load_audio_mono_16k(audio_path)
         cls = Qwen3DiarizeTranscriber
+        # 音频惰性加载: sidecar 命中路径主进程不需要 (sidecar 自读文件), 仅进程内对齐
+        # (CPU 兜底 / 非 CUDA / sidecar 关) 才加载, 避免 sidecar happy path 白读一遍.
+        _audio_cache: dict = {}
+
+        def _audio():
+            if "a" not in _audio_cache:
+                _audio_cache["a"], _ = _load_audio_mono_16k(audio_path)
+            return _audio_cache["a"]
 
         def _run(aligner, provider_label, extra=None):
-            words, stats = aligner.align_chunks(audio_16k, asr_chunks, language=effective_lang)
+            words, stats = aligner.align_chunks(_audio(), asr_chunks, language=effective_lang)
             segs = attach_words_to_segments(merged_segments, words)
             stats = {
                 **stats, "enabled": True, "language": effective_lang,
@@ -566,6 +576,15 @@ class Qwen3DiarizeTranscriber:
                 f"words={stats.get('total_words', 0)} lang={effective_lang}"
             )
             return segs, stats
+
+        # 0) Lane 2 (#18): cuda runtime + sidecar 启用 → CUDA word_align 走独立 sidecar 进程
+        #    (进程内永不建 CUDA session, codex #7 硬切; sidecar 用完 idle TTL 自杀释放 VRAM).
+        #    非 CUDA (Mac/CPU) 落到下面进程内路径 (A4 作用域). 主进程 in-proc poison 在此分支
+        #    无意义 (CUDA 不在主进程跑), sidecar 自己退休 (codex #8).
+        if self.word_align_sidecar_enabled and self._word_align_primary_is_cuda():
+            return self._word_align_via_sidecar(
+                audio_path, asr_chunks, merged_segments, effective_lang, task_id, _run,
+            )
 
         # 1) 已 poison → 直走 CPU
         if cls._cuda_word_align_poisoned:
@@ -620,6 +639,95 @@ class Qwen3DiarizeTranscriber:
             # 4) 非资源错误 / primary 非 CUDA → 段不带词
             logger.warning(f"[{task_id}] word_align 失败, 段不带词: {exc}")
             return merged_segments, {"enabled": True, "error": str(exc), "language": effective_lang}
+
+    def _word_align_primary_is_cuda(self) -> bool:
+        """primary word_align provider 是否解析成 CUDA (决定走 sidecar 还是进程内).
+
+        不构造 WordAligner (省), 直接解析 provider="auto" → runtime EP. cuda runtime
+        → True (走 sidecar); Mac/Cpu → False (进程内 CPU, A4 作用域).
+        """
+        from src.core.qwen3.word_align import resolve_word_align_providers
+
+        providers = resolve_word_align_providers(self.word_align_provider)
+        return any("CUDA" in p for p in providers)
+
+    @staticmethod
+    def _chunk_to_dict(c) -> dict:
+        """ASRChunkItem / dict → {start, end, text} (sidecar JSON 传输, 不传对象)."""
+        if isinstance(c, dict):
+            return {"start": c.get("start"), "end": c.get("end"), "text": c.get("text")}
+        return {"start": getattr(c, "start", None), "end": getattr(c, "end", None),
+                "text": getattr(c, "text", None)}
+
+    def _word_align_via_sidecar(
+        self, audio_path, asr_chunks, merged_segments, effective_lang, task_id, _run,
+    ):
+        """Lane 2: CUDA word_align 经独立 sidecar 进程出词 + 降级链 (A3).
+
+        preflight 不足 → 主进程 CPU (连 sidecar 都不拉, 省启动). sidecar
+        超时/资源错误/不可用 → 主进程 CPU 兜底; 普通对齐错误 → 无词 (sidecar 健康).
+        进程内永不建 CUDA session (codex #7). _run 用于 CPU 兜底 (复用进程内 CPU aligner).
+        """
+        from src.core.qwen3.word_align_sidecar import (
+            SidecarAlignError,
+            SidecarResourceError,
+            SidecarTimeout,
+            SidecarUnavailable,
+        )
+
+        # preflight (#17 复用): 显存不足 → 主进程 CPU, 不拉 CUDA sidecar (codex #11 TOCTOU:
+        # 仍非保证, sidecar 内 OOM 退休 + CPU 兜底兜住).
+        if self.word_align_preflight_enabled:
+            free = free_vram_mib()
+            if not has_headroom(free, self.word_align_preflight_free_mib):
+                logger.warning(
+                    f"[{task_id}] word_align CUDA preflight 显存不足 "
+                    f"(free={free} MiB < {self.word_align_preflight_free_mib} MiB), "
+                    f"走主进程 CPU (不拉 sidecar)"
+                )
+                return _run(
+                    self._ensure_word_aligner_cpu(), "cpu",
+                    {"preflight_skipped_cuda": True, "free_vram_mib": free},
+                )
+
+        client = get_word_align_sidecar_client()
+        chunks_json = [self._chunk_to_dict(c) for c in asr_chunks]
+        try:
+            words, stats = client.align(audio_path, chunks_json, effective_lang)
+        except (SidecarTimeout, SidecarResourceError, SidecarUnavailable) as exc:
+            # sidecar 不可用/超时/退休 → 主进程 CPU 兜底 (A3)
+            logger.warning(
+                f"[{task_id}] word_align sidecar 失败 ({type(exc).__name__}), 转主进程 CPU: {exc}"
+            )
+            try:
+                return _run(
+                    self._ensure_word_aligner_cpu(), "cpu",
+                    {"sidecar_fallback": type(exc).__name__},
+                )
+            except Exception as cpu_exc:
+                logger.warning(f"[{task_id}] word_align sidecar→CPU 兜底也失败, 段不带词: {cpu_exc}")
+                return merged_segments, {
+                    "enabled": True, "error": f"sidecar+cpu_fail: {cpu_exc}",
+                    "language": effective_lang, "provider": "cpu",
+                }
+        except SidecarAlignError as exc:
+            # sidecar 健康但普通对齐失败 → 无词 (不必 CPU 兜底)
+            logger.warning(f"[{task_id}] word_align sidecar 对齐失败 (非资源), 段不带词: {exc}")
+            return merged_segments, {
+                "enabled": True, "error": str(exc),
+                "language": effective_lang, "provider": "cuda_sidecar",
+            }
+
+        segs = attach_words_to_segments(merged_segments, words)
+        stats = {
+            **stats, "enabled": True, "language": effective_lang, "provider": "cuda_sidecar",
+        }
+        logger.info(
+            f"[{task_id}] word_align via sidecar: "
+            f"windows={stats.get('total_windows', 0)} failed={stats.get('failed_windows', 0)} "
+            f"words={stats.get('total_words', 0)} lang={effective_lang}"
+        )
+        return segs, stats
 
     def _ensure_engine(self):
         """惰性构造 ASR 引擎(libllama + Metal context 加载耗时, 进程内复用)"""
@@ -1047,6 +1155,7 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         word_align_cuda_batch_size=q.word_align_cuda_batch_size,
         word_align_preflight_enabled=q.word_align_preflight_enabled,
         word_align_preflight_free_mib=q.word_align_preflight_free_mib,
+        word_align_sidecar_enabled=q.word_align_sidecar_enabled,
     )
     # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
     _qwen3_singleton.embedding_model = q.embedding_model
