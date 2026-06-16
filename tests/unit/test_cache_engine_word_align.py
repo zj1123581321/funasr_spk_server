@@ -152,6 +152,38 @@ class TestCrossEngineExcludesFoldedRows:
             config.transcription.cache_cross_engine = original
 
 
+class TestCacheSaveEngineDecisionB:
+    """决策 B (codex #5): 请求 word_align 但实际无词 (对齐全失败) → 写入降 +wa, 存 base tag,
+    避免无词结果 exact-hit 永久毒化该文件的 +wa 缓存."""
+
+    def _task(self, word_align, diarize=True, language="chi", output_format="json"):
+        from src.models.schemas import TranscriptionTask, TranscribeOptions
+        return TranscriptionTask(
+            task_id="t", file_name="a.wav", file_path="", file_size=1, file_hash="h",
+            engine="qwen3", output_format=output_format,
+            options=TranscribeOptions(language=language, diarize=diarize, word_align=word_align),
+        )
+
+    def test_has_words_keeps_wa_tag(self):
+        from src.core.database import cache_save_engine_for
+        assert cache_save_engine_for(self._task(word_align=True), has_words=True) == "qwen3+wa:chi"
+
+    def test_no_words_demotes_wa_tag(self):
+        from src.core.database import cache_save_engine_for
+        # 请求 +wa 但无词 → 降回 base qwen3 (不毒化)
+        assert cache_save_engine_for(self._task(word_align=True), has_words=False) == "qwen3"
+
+    def test_no_words_keeps_other_dims(self):
+        from src.core.database import cache_save_engine_for
+        # diarize=false + 无词 → 只降 +wa, 保留 +nospk
+        tag = cache_save_engine_for(self._task(word_align=True, diarize=False), has_words=False)
+        assert tag == "qwen3+nospk"
+
+    def test_non_wa_request_unaffected(self):
+        from src.core.database import cache_save_engine_for
+        assert cache_save_engine_for(self._task(word_align=False), has_words=False) == "qwen3"
+
+
 class TestCacheLookupParams:
     def test_word_align_tag_forces_strict_cross_engine(self):
         engine, allow_cross = cache_lookup_params(

@@ -123,6 +123,19 @@ def cache_params_for(task) -> tuple:
     return cache_params(task.engine, task.options, task.output_format)
 
 
+def cache_save_engine_for(task, has_words: bool) -> str:
+    """写入用 cache tag — 决策 B (codex #5): 请求 word_align 但实际无词 (CUDA+CPU 都失败)
+    时降 +wa 维, 存 base/其它维 tag, 避免无词结果 exact-hit 永久毒化该文件的 +wa 缓存.
+
+    其它折维 (+nospk 等) 不受影响. 非 +wa 请求原样.
+    """
+    tag = cache_params_for(task)[0]
+    if not has_words and "+wa:" in tag:
+        demoted = task.options.model_copy(update={"word_align": False})
+        tag = cache_params(task.engine, demoted, task.output_format)[0]
+    return tag
+
+
 class DatabaseManager:
     """数据库管理器"""
 

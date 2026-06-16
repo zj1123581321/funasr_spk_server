@@ -51,9 +51,10 @@ def wa_off():
 
 
 class TestBuildResultMetadata:
-    def test_full_block_fields(self, wa_on):
+    def test_full_block_fields(self):
         md = build_result_metadata(
-            engine="qwen3", options=TranscribeOptions(language="eng", diarize=False),
+            engine="qwen3",
+            options=TranscribeOptions(language="eng", diarize=False, word_align=True),
             projected=True,
         )
         assert md == {
@@ -61,19 +62,58 @@ class TestBuildResultMetadata:
             "language": "eng", "projected": True,
         }
 
-    def test_request_language_wins_over_config(self, wa_on):
+    def test_word_align_reads_options_not_config(self, wa_off):
+        """决策 1A: metadata.word_align 读 options.word_align (effective), 不读全局 config.
+        config 关 (wa_off) 但请求显式开 → metadata True."""
+        md = build_result_metadata(engine="qwen3", options=TranscribeOptions(word_align=True))
+        assert md["word_align"] is True
+
+    def test_word_align_config_on_but_options_off(self, wa_on):
+        """config 开但 options 关 (显式) → metadata False (options 胜)."""
+        md = build_result_metadata(engine="qwen3", options=TranscribeOptions(word_align=False))
+        assert md["word_align"] is False
+
+    def test_srt_word_align_false_delivered(self):
+        """决策 2A: SRT 不挂词, 即使请求 word_align=true, delivered=false."""
         md = build_result_metadata(
-            engine="qwen3", options=TranscribeOptions(language=" jpn "),
+            engine="qwen3", options=TranscribeOptions(word_align=True), output_format="srt",
+        )
+        assert md["word_align"] is False
+
+    def test_failed_alignment_word_align_false_with_error(self):
+        """codex #12: 请求 word_align 但实际无词 (has_words=False) → delivered=false + word_align_error."""
+        md = build_result_metadata(
+            engine="qwen3", options=TranscribeOptions(word_align=True),
+            has_words=False, word_align_error="cuda_oom+cpu_fail: boom",
+        )
+        assert md["word_align"] is False
+        assert md["word_align_error"] == "cuda_oom+cpu_fail: boom"
+
+    def test_partial_words_still_delivered_true(self):
+        """has_words=True (哪怕部分窗口失败) → delivered True."""
+        md = build_result_metadata(
+            engine="qwen3", options=TranscribeOptions(word_align=True), has_words=True,
+        )
+        assert md["word_align"] is True
+        assert "word_align_error" not in md
+
+    def test_request_language_wins_over_config(self):
+        md = build_result_metadata(
+            engine="qwen3", options=TranscribeOptions(language=" jpn ", word_align=True),
         )
         assert md["language"] == "jpn"  # request 优先 + strip 规范化
 
-    def test_config_fallback_language_when_word_align_on(self, wa_on):
+    def test_config_fallback_language_when_word_align_on(self):
         from src.core.config import config
-        md = build_result_metadata(engine="qwen3", options=TranscribeOptions())
+        md = build_result_metadata(
+            engine="qwen3", options=TranscribeOptions(word_align=True),
+        )
         assert md["language"] == config.qwen3.word_align_language
 
-    def test_funasr_word_align_always_false(self, wa_on):
-        md = build_result_metadata(engine="funasr", options=TranscribeOptions())
+    def test_funasr_word_align_always_false(self):
+        md = build_result_metadata(
+            engine="funasr", options=TranscribeOptions(word_align=True),
+        )
         assert md["word_align"] is False
 
     def test_defaults(self, wa_off):
@@ -81,6 +121,7 @@ class TestBuildResultMetadata:
         assert md["diarize"] is True
         assert md["word_align"] is False
         assert md["projected"] is False
+        assert "word_align_error" not in md
 
 
 # ==================== fresh 出口组装 ====================

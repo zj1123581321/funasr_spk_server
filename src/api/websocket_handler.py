@@ -211,7 +211,8 @@ class WebSocketHandler:
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
                             _proj = bool(cached_result.pop("projected", False))
                             cached_result["metadata"] = build_result_metadata(
-                                engine=task.engine, options=task.options, projected=_proj,
+                                engine=task.engine, options=task.options,
+                                output_format="srt", projected=_proj,
                             )
                             result_data = cached_result
                         else:
@@ -222,7 +223,8 @@ class WebSocketHandler:
                         # JSON格式
                         _proj = bool((cached_result.metadata or {}).get("projected"))
                         cached_result.metadata = build_result_metadata(
-                            engine=task.engine, options=task.options, projected=_proj,
+                            engine=task.engine, options=task.options,
+                            output_format="json", projected=_proj,
                         )
                         result_data = cached_result.dict() if cached_result else None
                     
@@ -614,7 +616,8 @@ class WebSocketHandler:
                         if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
                             _proj = bool(cached_result.pop("projected", False))
                             cached_result["metadata"] = build_result_metadata(
-                                engine=_engine_for_cache, options=_session_options, projected=_proj,
+                                engine=_engine_for_cache, options=_session_options,
+                                output_format="srt", projected=_proj,
                             )
                             result_data = cached_result
                         else:
@@ -622,7 +625,8 @@ class WebSocketHandler:
                     else:
                         _proj = bool((cached_result.metadata or {}).get("projected"))
                         cached_result.metadata = build_result_metadata(
-                            engine=_engine_for_cache, options=_session_options, projected=_proj,
+                            engine=_engine_for_cache, options=_session_options,
+                            output_format="json", projected=_proj,
                         )
                         result_data = cached_result.dict() if cached_result else None
                     

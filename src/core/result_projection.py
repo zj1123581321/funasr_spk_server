@@ -18,33 +18,49 @@ from typing import Iterable, List
 from src.models.schemas import TranscriptionResult, TranscriptionSegment
 
 
-def build_result_metadata(*, engine: str, options, projected: bool = False) -> dict:
+def build_result_metadata(
+    *,
+    engine: str,
+    options,
+    output_format: str = "json",
+    projected: bool = False,
+    has_words: bool = None,
+    word_align_error: str = None,
+) -> dict:
     """E2 effective options 回显块 (serve 层组装, 不入库).
 
-    字段: engine / diarize / word_align / language / projected.
+    字段: engine / diarize / word_align / language / projected (+ 可选 word_align_error).
     合并优先级 (E2 定义): request > 分片 session 回填 > config > 引擎默认 —
-    request 与 session 回填已在 TranscribeOptions 收拢 (session 值在
-    FileUploadRequest 构造时回填), 本函数只做 options 与 config / 引擎默认的合并:
+    request 与 session 回填已在 TranscribeOptions 收拢 (resolve_word_align 在构造 options
+    时解析 effective word_align), 本函数只做 options 与引擎默认的合并:
 
-    - word_align: 仅 qwen3 引擎且 server config 开启时为 True (funasr 无此能力)
-    - language: request 值 strip 规范化优先; word_align 开启时空值回退
+    - word_align (决策 1A + 2A + codex #12): 反映本响应**实际交付**的词级时间戳, 而非"请求想要".
+      delivered = qwen3 引擎 AND options.word_align (effective) AND output_format=='json'
+                  AND words 实际挂上. funasr 无此能力恒 False; SRT 不挂词恒 False.
+      · has_words=None (缓存命中等无法判时): 按 requested 推 (决策 B 保证 +wa 缓存行必有词).
+      · has_words=False (fresh 对齐失败): delivered=False, 另附 word_align_error 说明原因.
+    - language: request 值 strip 规范化优先; word_align 请求时空值回退
       config.qwen3.word_align_language (与缓存折维同一规范化规则)
     - projected: 请求级属性 — 本响应是否由 diarized 结果投影而来
-      (缓存投影回退命中 / funasr 照算出口投影)
+    - word_align_error: 仅当请求词级但失败时附上 (fresh 出口; 缓存命中无此键)
     """
     from src.core.config import config
 
-    word_align = engine == "qwen3" and config.qwen3.word_align_enabled
+    requested = engine == "qwen3" and bool(options.word_align) and output_format == "json"
+    delivered = requested if has_words is None else (requested and bool(has_words))
     language = (options.language or "").strip() or None
-    if word_align and language is None:
+    if requested and language is None:
         language = config.qwen3.word_align_language
-    return {
+    md = {
         "engine": engine,
         "diarize": options.diarize,
-        "word_align": word_align,
+        "word_align": delivered,
         "language": language,
         "projected": projected,
     }
+    if word_align_error:
+        md["word_align_error"] = word_align_error
+    return md
 
 
 def project_result_nospk(result: TranscriptionResult) -> TranscriptionResult:
