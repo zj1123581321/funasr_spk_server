@@ -19,6 +19,16 @@ from src.models.schemas import (
 )
 
 
+# 终态状态集合：内存清理只清这些；非终态（PENDING/PROCESSING）永不被清。
+_TERMINAL_STATUSES = frozenset({
+    TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT,
+})
+# 处理时长 EMA 冷启动默认值（秒）。无历史样本时用它估 retry_after / estimated_wait。
+_COLD_START_TASK_SECONDS = 90.0
+# EMA 平滑系数（新样本权重）。0.3 = 适度跟随近期，抗长音频离群点污染。
+_EMA_ALPHA = 0.3
+
+
 class QueueFullError(Exception):
     """任务队列已满（准入控制拒绝）。
 
@@ -48,6 +58,10 @@ class TaskManager:
         self.is_running = False
         self.processing_tasks = 0  # 当前正在处理的任务数
         self._queue_lock = asyncio.Lock()  # 队列操作锁
+        # 处理时长 EMA（None=冷启动，用 _COLD_START_TASK_SECONDS）。驱动 retry_after / estimated_wait。
+        self._processing_seconds_ema: Optional[float] = None
+        # 后台维护循环（内存清理 + 看门狗）句柄
+        self._maintenance_task: Optional[asyncio.Task] = None
     
     async def start(self):
         """启动任务管理器"""
@@ -62,16 +76,23 @@ class TaskManager:
             worker = asyncio.create_task(self._worker(i))
             self.workers.append(worker)
         
+        # 启动后台维护循环（self.tasks 内存清理 + processing 看门狗）
+        self._maintenance_task = asyncio.create_task(self._maintenance_loop())
+
         logger.info(f"任务管理器已启动，{config.transcription.max_concurrent_tasks}个工作线程，队列最大容量: {config.transcription.max_queue_size}")
-    
+
     async def stop(self):
         """停止任务管理器"""
         self.is_running = False
-        
+
         # 取消所有工作线程
         for worker in self.workers:
             worker.cancel()
-        
+        # 取消维护循环
+        if self._maintenance_task is not None:
+            self._maintenance_task.cancel()
+            self.workers.append(self._maintenance_task)
+
         # 等待所有工作线程结束
         await asyncio.gather(*self.workers, return_exceptions=True)
         
@@ -192,36 +213,182 @@ class TaskManager:
                 await self._notify_task_complete(task)
                 return None
         
-        # 检查队列是否已满
+        # 检查队列是否已满（准入控制）
         async with self._queue_lock:
             queue_size = self.task_queue.qsize()
-            if queue_size >= config.transcription.max_queue_size:
-                raise Exception(f"任务队列已满，最大容量: {config.transcription.max_queue_size}")
-            
+            max_size = config.transcription.max_queue_size
+            if queue_size >= max_size:
+                # codex 窟窿修复：create_task 已把任务写进 self.tasks，队列满拒绝时
+                # 必须回滚该插入，否则被拒的 PENDING 任务永不终态 → 永久内存泄漏。
+                self.tasks.pop(task_id, None)
+                logger.warning(f"队列已满拒绝任务并回滚: {task_id} (queue={queue_size}/{max_size})")
+                raise QueueFullError(
+                    retry_after=self._compute_retry_after(),
+                    queue_size=queue_size,
+                    max_queue_size=max_size,
+                )
+
             # 将任务加入队列
             try:
                 self.task_queue.put_nowait(task_id)
                 logger.info(f"任务已加入队列: {task_id}")
-                
+
                 # 返回排队信息
                 queue_info = None
                 if config.transcription.queue_status_enabled:
-                    # 计算排队位置和预估等待时间
+                    # 排队位置 + 预估等待（用实际处理时长 EMA，非硬编码 2 分钟）
                     position = queue_size + 1
-                    # 预估每个任务平均处理时间为2分钟
-                    estimated_wait = max(0, (position - self.processing_tasks) * 2)
-                    
+                    estimated_wait = self._estimate_wait_seconds(position)
+
                     queue_info = {
                         "queued": position > config.transcription.max_concurrent_tasks,
                         "position": position,
-                        "estimated_wait": estimated_wait
+                        "estimated_wait": estimated_wait,  # 单位: 秒
                     }
-                
+
                 return queue_info
-                
+
             except asyncio.QueueFull:
-                raise Exception("任务队列已满")
+                # 极少数竞态：锁内仍被塞满。同样回滚 self.tasks 插入。
+                self.tasks.pop(task_id, None)
+                raise QueueFullError(
+                    retry_after=self._compute_retry_after(),
+                    queue_size=self.task_queue.qsize(),
+                    max_queue_size=config.transcription.max_queue_size,
+                )
     
+    # ===== 处理时长估算（EMA）+ 重试退避 =====
+
+    def _estimate_task_seconds(self) -> float:
+        """估算单任务处理时长（秒）。无历史样本走冷启动默认值。
+
+        用 EMA 而非简单均值：抗长音频离群点污染（一个 60min 文件不会把估值带飞）。
+        """
+        return self._processing_seconds_ema or _COLD_START_TASK_SECONDS
+
+    def _record_processing_seconds(self, seconds: float):
+        """记录一次真实处理时长，更新 EMA。"""
+        if seconds is None or seconds <= 0:
+            return
+        if self._processing_seconds_ema is None:
+            self._processing_seconds_ema = float(seconds)
+        else:
+            self._processing_seconds_ema = (
+                _EMA_ALPHA * float(seconds) + (1 - _EMA_ALPHA) * self._processing_seconds_ema
+            )
+
+    def _effective_concurrency(self) -> int:
+        """有效并发度（队列排空速率代理）。
+
+        qwen3 真实并发 = qwen3_pool_size（worker 阻塞在池上）；funasr = max_concurrent_tasks。
+        """
+        if config.transcription.default_engine == "qwen3":
+            c = config.transcription.qwen3_pool_size
+        else:
+            c = config.transcription.max_concurrent_tasks
+        return max(1, int(c))
+
+    def _compute_retry_after(self) -> int:
+        """队列满时的建议重试秒数：约等于"一个队列槽位释放"的时间。
+
+        一个槽位在一个在途任务完成时释放，平均每 est/并发 秒释放一个。
+        客户端应在此基础上加抖动避免惊群。
+        """
+        est = self._estimate_task_seconds()
+        return max(1, int(est / self._effective_concurrency()))
+
+    def _estimate_wait_seconds(self, position: int) -> int:
+        """排在 position 位的任务预估完成等待（秒）= 前面任务数 / 并发 × 单任务时长。"""
+        est = self._estimate_task_seconds()
+        ahead = max(0, position - 1)
+        return int(ahead / self._effective_concurrency() * est)
+
+    # ===== 内存清理（TTL + size-cap）+ 看门狗 =====
+
+    def _evict_terminal_tasks(self) -> int:
+        """清理 self.tasks 中的终态任务（TTL + size-cap 双保险），非终态永不清。
+
+        - TTL：终态任务 completed_at 超 task_retention_ttl_seconds → 清。
+        - size-cap：清完 TTL 后若仍超 task_max_retained，从最老终态任务继续挤。
+        返回清理数量。
+        """
+        ttl = config.transcription.task_retention_ttl_seconds
+        cap = config.transcription.task_max_retained
+        now = datetime.now()
+        evicted = 0
+
+        def _terminal_age(task) -> float:
+            """终态任务的"年龄"（秒），以 completed_at 为准，缺失回退 created_at。"""
+            ref = task.completed_at or task.created_at
+            return (now - ref).total_seconds()
+
+        # 1) TTL 清理
+        for tid in list(self.tasks.keys()):
+            task = self.tasks[tid]
+            if task.status in _TERMINAL_STATUSES and _terminal_age(task) > ttl:
+                del self.tasks[tid]
+                evicted += 1
+
+        # 2) size-cap：仍超上限则挤最老终态（非终态不计入挤出对象）
+        if len(self.tasks) > cap:
+            terminal = [
+                (tid, _terminal_age(self.tasks[tid]))
+                for tid in self.tasks
+                if self.tasks[tid].status in _TERMINAL_STATUSES
+            ]
+            # 最老（age 大）优先挤
+            terminal.sort(key=lambda x: x[1], reverse=True)
+            overflow = len(self.tasks) - cap
+            for tid, _ in terminal[:overflow]:
+                del self.tasks[tid]
+                evicted += 1
+
+        if evicted:
+            logger.debug(f"内存清理: 清除 {evicted} 个终态任务, 剩余 {len(self.tasks)}")
+        return evicted
+
+    def _terminalize_stale_processing(self) -> int:
+        """看门狗：把卡死的 PROCESSING 任务强制终态化为 TIMED_OUT。
+
+        防 ASR 卡死 / worker 异常逃逸导致任务永远 PROCESSING → 永不被清 + 客户端轮询
+        永远看到 processing。终态化后该任务能被 _evict_terminal_tasks 正常回收，
+        客户端轮询也能拿到明确的 timed_out 状态。
+
+        注：本方法只改任务状态（内存 + 客户端可见性），不强杀在途的 worker await
+        （真正卡死的 worker 槽位回收需 worker 级取消，超本轮止血范围）。
+        返回终态化数量。
+        """
+        limit = config.transcription.task_max_processing_seconds
+        now = datetime.now()
+        n = 0
+        for task in self.tasks.values():
+            if task.status != TaskStatus.PROCESSING:
+                continue
+            started = task.started_at or task.created_at
+            if (now - started).total_seconds() > limit:
+                task.status = TaskStatus.TIMED_OUT
+                task.error = f"任务处理超时（>{limit}s），被看门狗强制终止"
+                task.completed_at = now
+                n += 1
+                logger.warning(f"看门狗终态化卡死任务: {task.task_id}")
+        return n
+
+    async def _maintenance_loop(self):
+        """后台维护循环：周期跑内存清理 + 看门狗。"""
+        interval = config.transcription.task_cleanup_interval_seconds
+        logger.info(f"任务维护循环已启动（间隔 {interval}s）")
+        while self.is_running:
+            try:
+                await asyncio.sleep(interval)
+                async with self._queue_lock:
+                    self._terminalize_stale_processing()
+                    self._evict_terminal_tasks()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"维护循环错误: {e}")
+        logger.info("任务维护循环已停止")
+
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
         task = self.get_task(task_id)
@@ -391,7 +558,13 @@ class TaskManager:
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
             task.progress = 100
-            
+
+            # 记录真实处理时长（wall）→ EMA，供 retry_after / estimated_wait 估算
+            if task.started_at:
+                self._record_processing_seconds(
+                    (task.completed_at - task.started_at).total_seconds()
+                )
+
             # 通知完成
             await self._notify_task_complete(task)
             
