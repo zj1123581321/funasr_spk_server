@@ -151,22 +151,24 @@ async def test_create_task_builds_options_from_request():
 
 @pytest.mark.asyncio
 async def test_cache_lookup_uses_options_language(tmp_path):
-    """submit_task 的 cache lookup engine tag 要折 options.language (word_align 开时)"""
+    """submit_task 的 cache lookup engine tag 要折 options.language (word_align 开时).
+
+    决策 1A: word_align 经请求显式开 (request.word_align=True) → create_task 解析进
+    options.word_align → cache 折维读 options (非 config), tag 含 +wa:<lang>.
+    """
     from src.core.task_manager import TaskManager
     from src.core.config import config
 
     tm = TaskManager()
     req = FileUploadRequest(
         file_name="a.wav", file_size=1, file_hash="h-opt", language="eng",
-        engine=config.transcription.default_engine,
+        engine=config.transcription.default_engine, word_align=True,
     )
     await tm.create_task(req, task_id="t-cache")
     fake_file = tmp_path / "x.wav"
     fake_file.write_bytes(b"\x00" * 10)
 
-    original_wa = config.qwen3.word_align_enabled
     original_engine = config.transcription.default_engine
-    config.qwen3.word_align_enabled = True
     try:
         tm.tasks["t-cache"].engine = "qwen3"
         with patch("src.core.task_manager.db_manager") as mock_db:
@@ -175,5 +177,4 @@ async def test_cache_lookup_uses_options_language(tmp_path):
             engine_arg = mock_db.get_cached_result.call_args.kwargs.get("engine")
             assert engine_arg == "qwen3+wa:eng", f"cache tag 应折 options.language: {engine_arg}"
     finally:
-        config.qwen3.word_align_enabled = original_wa
         config.transcription.default_engine = original_engine

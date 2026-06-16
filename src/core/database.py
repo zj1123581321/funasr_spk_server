@@ -31,6 +31,7 @@ def compute_cache_engine(
     language: Optional[str],
     word_align_language: str,
     diarize: bool = True,
+    output_format: str = "json",
 ) -> str:
     """把 word_align / diarize 状态折进缓存用的 engine tag (D9 字符串折维).
 
@@ -45,12 +46,19 @@ def compute_cache_engine(
     - qwen3+wa:<lang>+nospk  (两者叠加, 顺序固定 +wa 在前)
     - 非 qwen3 → 原样 (funasr 免折维, D4: 存一行 diarized, serve 层按需投影)
 
+    ⚠️ 决策 2A (2026-06-16): word_align 是 JSON-only (SRT 不挂词, transcribe :699 写死).
+    SRT 请求即使 word_align=true, 产出的行实际无词, 故 **缓存维度有效 word_align =
+    word_align_enabled AND output_format=='json'**: SRT 降回纯 tag (无 +wa), 避免无词行
+    被未来 JSON +wa 请求误命中 (codex #5 同向). output_format 默认 json 向后兼容老调用.
+
     ⚠️ 触发条件写死: 折维维度 >3 时升级结构化 variant 列, 不再加字符串后缀.
     """
     if engine != "qwen3":
         return engine
     tag = engine
-    if word_align_enabled:
+    # 决策 2A: SRT 行无词, 缓存维度上强制视 word_align 为关
+    effective_wa = word_align_enabled and output_format == "json"
+    if effective_wa:
         # language 规范化 (T-D #8): strip() 后非空才生效, 否则 config 兜底
         lang = (language or "").strip() or word_align_language
         tag += f"+wa:{lang}"
@@ -66,6 +74,7 @@ def cache_lookup_params(
     language: Optional[str],
     word_align_language: str,
     diarize: bool = True,
+    output_format: str = "json",
 ):
     """返回 (cache_engine, allow_cross_engine) 给 get_cached_result.
 
@@ -79,33 +88,39 @@ def cache_lookup_params(
         language=language,
         word_align_language=word_align_language,
         diarize=diarize,
+        output_format=output_format,
     )
     allow_cross = False if cache_engine != engine else None
     return cache_engine, allow_cross
 
 
-def cache_params(engine: str, options) -> tuple:
+def cache_params(engine: str, options, output_format: str = "json") -> tuple:
     """(cache_engine_tag, allow_cross_engine) — 查询与写入共用的统一入口 (D4 收拢).
 
-    word_align 状态从全局 config 读 (server 级开关), language / diarize 从
-    per-request options 读. 写入只用第一个元素 (tag), 查询两个都用.
+    决策 1A (2026-06-16): word_align 改读 per-request options.word_align (已在
+    create_task / 分片 session 由 resolve_word_align 解析成 effective bool), 不再读
+    全局 config. language / diarize 同样从 options 读. 写入只用第一个元素 (tag), 查询两个都用.
+
+    output_format 透传给 compute_cache_engine 做 2A 的 SRT 降 +wa.
 
     Args:
         engine: ASR 引擎名 (task.engine 或 session 回退 default_engine 后的值).
-        options: TranscribeOptions (language / diarize).
+        options: TranscribeOptions (language / diarize / word_align).
+        output_format: json / srt (SRT 时 +wa 折维降级, 决策 2A).
     """
     return cache_lookup_params(
         engine,
-        word_align_enabled=config.qwen3.word_align_enabled,
+        word_align_enabled=options.word_align,
         language=options.language,
         word_align_language=config.qwen3.word_align_language,
         diarize=options.diarize,
+        output_format=output_format,
     )
 
 
 def cache_params_for(task) -> tuple:
     """cache_params 的 TranscriptionTask 便捷入口 — 消灭各处手写折维参数."""
-    return cache_params(task.engine, task.options)
+    return cache_params(task.engine, task.options, task.output_format)
 
 
 class DatabaseManager:
@@ -306,10 +321,15 @@ class DatabaseManager:
                         )
 
                 # 2) miss 时按 file_hash 回退到任意 engine 最新一行(若开启跨引擎共享)
+                #    决策 C (codex #4): 只回退到"裸 engine"行 (engine NOT LIKE '%+%'),
+                #    排除 +wa / +nospk 折维行. 否则 base 请求 (无 tag, allow_cross=None
+                #    跟随 config) 可能跨引擎命中 +wa 行 → 没要词却返回带词 (反向污染).
+                #    折维形态的 strict 隔离由此双向对称.
                 if row is None and effective_cross:
                     cursor = await db.execute(
                         "SELECT result, raw_result, file_name, duration, engine "
                         "FROM transcription_cache WHERE file_hash = ? "
+                        "AND engine NOT LIKE '%+%' "
                         "ORDER BY created_at DESC LIMIT 1",
                         (file_hash,),
                     )
