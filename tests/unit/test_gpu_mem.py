@@ -121,6 +121,22 @@ def test_free_vram_mib_takes_first_of_csv_cuda_visible_devices(monkeypatch):
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# used_vram_mib(): 同源, 给 poison dispose delta 观测
+# ──────────────────────────────────────────────────────────────────────────
+def test_used_vram_mib_parses(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", _fake_run("2864\n"))
+    assert gpu_mem.used_vram_mib() == 2864
+
+
+def test_used_vram_mib_none_on_failure(monkeypatch):
+    def _raise(*a, **k):
+        raise FileNotFoundError("nvidia-smi")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+    assert gpu_mem.used_vram_mib() is None
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # has_headroom(): 纯函数门控 (None→不误杀)
 # ──────────────────────────────────────────────────────────────────────────
 def test_has_headroom_none_probe_does_not_block():

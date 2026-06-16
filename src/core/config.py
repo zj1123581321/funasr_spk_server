@@ -198,6 +198,17 @@ class Qwen3Config(BaseModel):
     word_align_batch_size: int = 16
     word_align_cuda_batch_size: int = 1
 
+    # VRAM preflight (TODOS #17, 评审定案 P1): 加载 CUDA word_align session 前探显存,
+    # 不够直接走 CPU (事前预防, 不等 OOM). 探针 src/core/gpu_mem.py: free_vram_mib().
+    #   - word_align_preflight_enabled: 关掉则回到「撞了 OOM 才 fallback」的旧行为.
+    #   - word_align_preflight_free_mib: 加载 CUDA session 要求的最小空闲显存 (MiB).
+    #     保守起点 4608 (~4.5GB: session ~3.4GB + 余量), 3060 真机标定后改准.
+    #     换卡 / 调 pool_size 用 FUNASR_QWEN3_WORD_ALIGN_PREFLIGHT_FREE_MIB env 覆盖.
+    #   ⚠️ preflight 不替代 OOM fallback (codex #11, TOCTOU): 探完到建 session 之间
+    #     同卡其它进程仍可能吃掉显存, poison + CPU 兜底永远保留.
+    word_align_preflight_enabled: bool = True
+    word_align_preflight_free_mib: int = 4608
+
     # A2 治理 (D4): vendor encoder.py 原本直接读 os.environ.get(...) 这两个 env, 提升进 Pydantic
     # backend_mlpackage_units: COREML_ANE_FULL 时 backend mlpackage 跑在哪个芯片
     #   - CPU_AND_NE: 默认, frontend ANE + backend mlpackage ANE
@@ -544,6 +555,8 @@ class Config(BaseModel):
         cls._override_if_set(config_data["qwen3"], "word_align_provider", "FUNASR_QWEN3_WORD_ALIGN_PROVIDER")
         cls._override_if_set(config_data["qwen3"], "word_align_batch_size", "FUNASR_QWEN3_WORD_ALIGN_BATCH_SIZE", int)
         cls._override_if_set(config_data["qwen3"], "word_align_cuda_batch_size", "FUNASR_QWEN3_WORD_ALIGN_CUDA_BATCH_SIZE", int)
+        cls._override_if_set(config_data["qwen3"], "word_align_preflight_enabled", "FUNASR_QWEN3_WORD_ALIGN_PREFLIGHT_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["qwen3"], "word_align_preflight_free_mib", "FUNASR_QWEN3_WORD_ALIGN_PREFLIGHT_FREE_MIB", int)
         # A2 治理: vendor 字段 (D4)
         cls._override_if_set(config_data["qwen3"], "backend_mlpackage_units", "FUNASR_QWEN3_BACKEND_MLPACKAGE_UNITS")
         cls._override_if_set(config_data["qwen3"], "encoder_timing_enabled", "FUNASR_QWEN3_ENCODER_TIMING", cls._parse_bool)

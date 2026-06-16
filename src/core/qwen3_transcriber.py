@@ -57,6 +57,7 @@ from src.models.schemas import (
     TranscriptionSegment,
     WordTimestamp,
 )
+from src.core.gpu_mem import free_vram_mib, has_headroom, used_vram_mib
 from src.utils.file_utils import calculate_file_hash
 from src.utils.silence_detect import ffmpeg_speech_regions
 
@@ -68,22 +69,6 @@ from src.utils.silence_detect import ffmpeg_speech_regions
 MAX_EXTRACTOR_SEGMENT_SEC = 120.0
 
 
-def _gpu_mem_used_mib() -> Optional[int]:
-    """best-effort 读当前 GPU 已用显存 (MiB), 仅给 word_align poison 时打 dispose delta.
-
-    ⚠️ 这不是 VRAM preflight 探针 (那是推迟的 TODO #17), 只是个观测日志. nvidia-smi
-    不可用 (非 CUDA 机 / 无 nvidia-smi) → 返回 None, 调用方降级成"未测". 不抛错.
-    """
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5, check=True,
-        )
-        return int(out.stdout.strip().splitlines()[0])
-    except Exception:
-        return None
 
 
 def _cap_extractor_fn(raw_fn, max_segment_sec: float = MAX_EXTRACTOR_SEGMENT_SEC):
@@ -416,6 +401,8 @@ class Qwen3DiarizeTranscriber:
         word_align_provider: str = "auto",
         word_align_batch_size: int = 16,
         word_align_cuda_batch_size: int = 1,
+        word_align_preflight_enabled: bool = True,
+        word_align_preflight_free_mib: int = 4608,
     ):
         self.asr_model_dir = asr_model_dir
         self.segmentation_model = segmentation_model
@@ -453,6 +440,8 @@ class Qwen3DiarizeTranscriber:
         self.word_align_provider = word_align_provider
         self.word_align_batch_size = word_align_batch_size
         self.word_align_cuda_batch_size = word_align_cuda_batch_size
+        self.word_align_preflight_enabled = word_align_preflight_enabled
+        self.word_align_preflight_free_mib = word_align_preflight_free_mib
 
         # 引擎单例 — 第一次 transcribe 时构造, 后续复用
         self._asr_engine = None
@@ -525,14 +514,14 @@ class Qwen3DiarizeTranscriber:
         - dispose CUDA aligner session 尝试回收显存 (决策 4A, ORT 未必真还, 打 nvidia-smi delta 观测)
         """
         Qwen3DiarizeTranscriber._cuda_word_align_poisoned = True
-        before = _gpu_mem_used_mib()
+        before = used_vram_mib()
         try:
             if self._word_aligner is not None:
                 self._word_aligner.close()
                 self._word_aligner = None
         except Exception as exc:  # dispose 失败不致命
             logger.warning(f"[{task_id}] dispose CUDA word_align session 失败: {exc}")
-        after = _gpu_mem_used_mib()
+        after = used_vram_mib()
         if before is not None and after is not None:
             logger.warning(
                 f"[{task_id}] CUDA word_align POISONED — 该 worker 余生走 CPU. "
@@ -592,7 +581,23 @@ class Qwen3DiarizeTranscriber:
         # 2) 试 primary (可能 CUDA)
         aligner = None
         try:
-            aligner = self._ensure_word_aligner()
+            aligner = self._ensure_word_aligner()  # 构造便宜, session 在 align 时才 build
+            # 2.5) VRAM preflight (#17): primary 解析成 CUDA 且显存不足 → 直走 CPU,
+            #      不等 CUDA OOM (OOM 后 CUDA 上下文可能已不健康). 探不到/preflight 关
+            #      → 不误杀, 照走 CUDA 交给 OOM fallback (codex #11, TOCTOU).
+            #      primary 非 CUDA (Mac/CPU) 跳过, 省一次 nvidia-smi.
+            if self.word_align_preflight_enabled and aligner.is_cuda:
+                free = free_vram_mib()
+                if not has_headroom(free, self.word_align_preflight_free_mib):
+                    logger.warning(
+                        f"[{task_id}] word_align CUDA preflight 显存不足 "
+                        f"(free={free} MiB < {self.word_align_preflight_free_mib} MiB), "
+                        f"走 CPU (不等 OOM)"
+                    )
+                    return _run(
+                        self._ensure_word_aligner_cpu(), "cpu",
+                        {"preflight_skipped_cuda": True, "free_vram_mib": free},
+                    )
             return _run(aligner, aligner.effective_provider)
         except Exception as exc:
             # 3) CUDA 资源错误 → poison + 转 CPU (用返回的 aligner 引用判 is_cuda,
@@ -1036,6 +1041,8 @@ def get_qwen3_transcriber() -> Qwen3DiarizeTranscriber:
         word_align_provider=q.word_align_provider,
         word_align_batch_size=q.word_align_batch_size,
         word_align_cuda_batch_size=q.word_align_cuda_batch_size,
+        word_align_preflight_enabled=q.word_align_preflight_enabled,
+        word_align_preflight_free_mib=q.word_align_preflight_free_mib,
     )
     # transcriber 需要 embedding_model 字段 (build_embedding_extractor_fn 鸭子类型读)
     _qwen3_singleton.embedding_model = q.embedding_model

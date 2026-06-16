@@ -81,6 +81,33 @@ def free_vram_mib(device: Optional[str] = None) -> Optional[int]:
         return None
 
 
+def used_vram_mib(device: Optional[str] = None) -> Optional[int]:
+    """读当前进程使用的 CUDA 卡已用显存 (MiB); 探不到返回 None (不抛).
+
+    与 free_vram_mib 同源 (nvidia-smi + 设备选择), 只查 memory.used. 给
+    word_align poison 时 dispose 前后打 VRAM delta 观测用 (不当显存回收保证).
+    """
+    idx = device if device is not None else _resolve_device_index()
+    try:
+        out = subprocess.run(
+            [
+                "nvidia-smi",
+                "-i",
+                str(idx),
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_NVIDIA_SMI_TIMEOUT_SEC,
+            check=True,
+        )
+        return int(out.stdout.strip().splitlines()[0].strip())
+    except Exception as exc:
+        logger.debug(f"used_vram_mib 探测失败 (返回 None): {exc}")
+        return None
+
+
 def has_headroom(free_mib: Optional[int], required_mib: int) -> bool:
     """门控: 当前显存是否够加载/路由一个 CUDA word_align session.
 
