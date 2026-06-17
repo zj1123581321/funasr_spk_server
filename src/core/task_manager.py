@@ -2,10 +2,12 @@
 任务队列管理模块
 """
 import asyncio
+import re
 import uuid
 from collections import Counter, OrderedDict
-from typing import Dict, Optional, List
 from datetime import datetime
+from enum import Enum
+from typing import Dict, Optional, List
 from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 from src.core.config import config
@@ -48,6 +50,64 @@ class QueueFullError(Exception):
             f"任务队列已满，最大容量: {max_queue_size}（当前 {queue_size}），"
             f"建议 {retry_after}s 后重试"
         )
+
+
+class ErrorKind(str, Enum):
+    """错误分类(#3 接收端): record_error kind + 重试决策的单一来源。
+
+    替代散落的 _should_retry_error(中文子串匹配)+ _is_model_error(正则)。
+    websocket 层软错误 kind(invalid_format / file_too_large / ...)本轮不纳入(范围二);
+    底层引擎类型化异常(EngineInitError 等)= TODOS #3 完整版发送端, 本轮靠字符串兜底过渡。
+    """
+    QUEUE_FULL = "queue_full"
+    TIMEOUT = "timeout"
+    NON_RETRYABLE_INPUT = "non_retryable_input"  # 音频太短/格式/文件不存在/太大/认证 — 不重试
+    MODEL_ERROR = "model_error"                   # VAD/index/dimension — 可重试 + 重置模型
+    ENGINE_ERROR = "engine_error"                 # 其它转录异常 — 可重试
+
+    @property
+    def retryable(self) -> bool:
+        """codex #11: 显式集合判定, 非 "not NON_RETRYABLE_INPUT" 取反 —
+        否则 QUEUE_FULL / TIMEOUT 会被误判可重试, 坑下一个 caller。"""
+        return self in _RETRYABLE_KINDS
+
+    @property
+    def is_model(self) -> bool:
+        """模型相关错误: 触发 _try_reset_model(仅 funasr, 见 _process_task)。"""
+        return self is ErrorKind.MODEL_ERROR
+
+
+# 可重试 kind(显式集合, codex #11 防取反误判)
+_RETRYABLE_KINDS = frozenset({ErrorKind.MODEL_ERROR, ErrorKind.ENGINE_ERROR})
+
+# 不可重试: 文件/输入本身的问题, 重试无意义(沿用原 _should_retry_error 列表)
+_NON_RETRYABLE_MARKERS = (
+    "音频时长过短", "文件不存在", "不支持的文件格式", "文件太大", "认证失败",
+)
+
+# 模型相关错误: 可重试 + 触发模型重置(沿用原 _is_model_error 正则)
+_MODEL_ERROR_RE = re.compile(
+    r"VAD algorithm|index .* out of bounds|list index out of range|window size|dimension",
+    re.IGNORECASE,
+)
+
+
+def classify_error(exc: Exception) -> ErrorKind:
+    """单一错误分类入口: isinstance 优先(类型化异常), 字符串兜底(底层裸 Exception)。
+
+    底层 funasr/qwen3 仍抛裸 Exception+中文 message(范围一不改底层), 故字符串兜底是过渡;
+    待发送端类型化(TODOS #3 完整版)后, 此处加 isinstance 分支即可, 调用方无需改。
+    注: classify_error(QueueFullError) 在 worker catch 里 dead(QueueFullError 在 submit_task
+    抛, 不进 worker catch), 保留是为分类入口完整 + submit 复用其 kind(codex #12)。
+    """
+    if isinstance(exc, QueueFullError):
+        return ErrorKind.QUEUE_FULL
+    msg = str(exc)
+    if any(m in msg for m in _NON_RETRYABLE_MARKERS):
+        return ErrorKind.NON_RETRYABLE_INPUT
+    if _MODEL_ERROR_RE.search(msg):
+        return ErrorKind.MODEL_ERROR
+    return ErrorKind.ENGINE_ERROR
 
 
 class TaskManager:
