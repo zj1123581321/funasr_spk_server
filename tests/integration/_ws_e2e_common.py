@@ -119,3 +119,95 @@ async def client_upload_and_wait(
             if msg["type"] == "error":
                 return {"ok": False, "task_id": task_id, "error": msg["data"]["message"],
                         "wall_time": time.time() - t0}
+
+
+def _split_chunks(data: bytes, chunk_size: int) -> list[bytes]:
+    return [data[i:i + chunk_size] for i in range(0, len(data), chunk_size)] or [b""]
+
+
+async def client_chunked_upload_and_wait(
+    ws_url: str,
+    audio: Path,
+    *,
+    chunk_size: int = 512 * 1024,
+    force_refresh: bool = True,
+    output_format: str = "json",
+    extra_request: dict | None = None,
+) -> dict:
+    """完整分片 client 流程: connect → chunked_upload_request → 逐帧 upload_chunk →
+    (收齐自动 finalize) → 等 task_complete。
+
+    走真 server 的**分片重组 + offset 写盘 + finalize → task_manager → _process_task**
+    全链路 (单文件 upload_data 路径覆盖不到分片重组那段)。
+
+    Returns dict: {ok, task_id, wall_time, cached, num_chunks, result, error?}。
+    """
+    t0 = time.time()
+    data = audio.read_bytes()
+    digest = file_hash_md5(audio)
+    chunks = _split_chunks(data, chunk_size)
+    total_chunks = len(chunks)
+
+    # 分片上传走 upload_request + upload_mode=chunked (非独立消息类型),
+    # server 据此路由到 _handle_chunked_upload_request, 回 upload_ready
+    request_data = {
+        "file_name": audio.name,
+        "file_size": len(data),
+        "file_hash": digest,
+        "upload_mode": "chunked",
+        "chunk_size": chunk_size,
+        "total_chunks": total_chunks,
+        "force_refresh": force_refresh,
+        "output_format": output_format,
+    }
+    if extra_request:
+        request_data.update(extra_request)
+
+    async with websockets.connect(ws_url, max_size=200 * 1024 * 1024) as ws:
+        connected = json.loads(await ws.recv())
+        assert connected.get("type") == "connected", f"unexpected: {connected}"
+
+        # 1. 发起分片会话 (upload_request + upload_mode=chunked)
+        await ws.send(json.dumps({"type": "upload_request", "data": request_data}))
+        resp = json.loads(await ws.recv())
+        if resp["type"] == "error":
+            return {"ok": False, "error": resp["data"]["message"],
+                    "wall_time": time.time() - t0}
+        assert resp["type"] == "upload_ready", f"期待 upload_ready, 实得: {resp}"
+        task_id = resp["data"]["task_id"]
+
+        # 2. 逐帧发分片 (带 md5 chunk_hash); 每帧读一条响应 (通常 chunk_received)
+        for idx, chunk in enumerate(chunks):
+            await ws.send(json.dumps({
+                "type": "upload_chunk",
+                "data": {
+                    "task_id": task_id,
+                    "chunk_index": idx,
+                    "chunk_data": base64.b64encode(chunk).decode("utf-8"),
+                    "chunk_hash": hashlib.md5(chunk).hexdigest(),
+                },
+            }))
+            ack = json.loads(await ws.recv())  # 逐片 ack, 一般是 chunk_received
+            if ack["type"] == "error":
+                return {"ok": False, "task_id": task_id, "error": ack["data"]["message"],
+                        "num_chunks": total_chunks, "wall_time": time.time() - t0}
+
+        # 3. 收齐后等终态。cached 判定: finalize 命中缓存时直发 task_complete,
+        #    不经 upload_complete/task_queued; fresh 则先有 upload_complete/task_queued
+        #    再(稍后)推 task_complete。据此区分 (chunk_received 是逐片 ack, 忽略)。
+        saw_progress = False
+        while True:
+            msg = json.loads(await ws.recv())
+            mtype = msg["type"]
+            if mtype == "chunk_received" or mtype == "task_progress":
+                continue
+            if mtype in ("upload_complete", "task_queued"):
+                saw_progress = True
+                continue
+            if mtype == "task_complete":
+                return {"ok": True, "cached": not saw_progress, "task_id": task_id,
+                        "num_chunks": total_chunks, "wall_time": time.time() - t0,
+                        "result": msg["data"]["result"]}
+            if mtype == "error":
+                return {"ok": False, "task_id": task_id, "error": msg["data"]["message"],
+                        "num_chunks": total_chunks, "wall_time": time.time() - t0}
