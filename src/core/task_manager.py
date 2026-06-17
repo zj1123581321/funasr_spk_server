@@ -841,7 +841,7 @@ class TaskManager:
                     "metadata": task.result.metadata if task.result else None,
                 }
             else:
-                result_data = task.result.dict() if task.result else None
+                result_data = task.result.model_dump() if task.result else None
             
             await ws_handler.notify_task_complete(
                 task_id=task.task_id,

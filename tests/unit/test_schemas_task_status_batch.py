@@ -63,7 +63,7 @@ class TestBatchResponse:
             TaskStatusBatchItem(task_id="a", status=TaskStatus.PROCESSING, progress=10.0),
             TaskStatusBatchItem(task_id="b", status=None, error="task_not_found"),
         ])
-        d = resp.dict()
+        d = resp.model_dump()
         assert len(d["items"]) == 2
         assert d["items"][0]["task_id"] == "a"
         assert d["items"][1]["error"] == "task_not_found"

@@ -253,7 +253,7 @@ class WebSocketHandler:
                     else:
                         # JSON格式
                         cached_result.metadata = _md
-                        result_data = cached_result.dict()
+                        result_data = cached_result.model_dump()
                     
                     if result_data:
                         # 直接返回缓存结果
@@ -382,7 +382,7 @@ class WebSocketHandler:
                 error=task.error
             )
             
-            await self._send_message(websocket, "task_status", response.dict())
+            await self._send_message(websocket, "task_status", response.model_dump())
             
         except Exception as e:
             logger.error(f"获取任务状态失败: {e}")
@@ -413,7 +413,7 @@ class WebSocketHandler:
         items = [self._build_task_status_batch_item(task_manager, tid) for tid in task_ids]
 
         response = TaskStatusBatchResponse(items=items)
-        await self._send_message(websocket, "task_status_batch", response.dict())
+        await self._send_message(websocket, "task_status_batch", response.model_dump())
 
     def _build_task_status_batch_item(self, task_manager, task_id: str) -> TaskStatusBatchItem:
         """组装单个 batch 项（**同步**，绝不能 await：钉 task_manager.py:499-500 原子性不变量）。
@@ -525,12 +525,12 @@ class WebSocketHandler:
     async def _send_message(self, websocket: WebSocketServerProtocol, msg_type: str, data: dict):
         """发送消息"""
         message = WebSocketMessage(type=msg_type, data=data)
-        await websocket.send(message.json())
+        await websocket.send(message.model_dump_json())
     
     async def _send_error(self, websocket: WebSocketServerProtocol, error_type: str, message: str):
         """发送错误消息"""
         error = ErrorResponse(error=error_type, message=message)
-        await self._send_message(websocket, "error", error.dict())
+        await self._send_message(websocket, "error", error.model_dump())
     
     def _cleanup_connection(self, connection_id: str):
         """清理连接"""
@@ -748,7 +748,7 @@ class WebSocketHandler:
                             result_data = None
                     else:
                         cached_result.metadata = _md
-                        result_data = cached_result.dict()
+                        result_data = cached_result.model_dump()
                     
                     if result_data:
                         # 清理临时文件和会话
