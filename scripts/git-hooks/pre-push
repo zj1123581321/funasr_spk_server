@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Pre-push 质量闸 (P4 A4 / P3 质量闸门)
+# ───────────────────────────────────────────────────────────────────────────
+# 把"改 FunASR 路径必跑 parity"从口头约定变成 push 前自动门禁:
+#   - 始终跑 unit (毫秒级)
+#   - 本次 push 若碰 FunASR 核心路径 → 追加跑 parity (真模型, ~3min)
+# dep 升级 / 换模型 / 动 FunASR 路径导致质量退化时, push 前本地自动红, 不到生产。
+#
+# 安装:  bash scripts/install-git-hooks.sh   (设 core.hooksPath=scripts/git-hooks)
+# 跳过:  FUNASR_SKIP_PREPUSH=1 git push       (紧急放行, 慎用)
+# ───────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+if [ "${FUNASR_SKIP_PREPUSH:-}" = "1" ]; then
+  echo "[pre-push] FUNASR_SKIP_PREPUSH=1 → 跳过本地质量闸"
+  exit 0
+fi
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [ ! -x "venv/bin/python" ]; then
+  echo "[pre-push] venv/bin/python 缺失 → 跳过 (无法本地验证, 非阻断)"
+  exit 0
+fi
+
+# FunASR 核心路径 (CLAUDE.md: 改这些必跑 parity) + 依赖清单 (dep 升级也要验)
+FUNASR_PATHS_RE='src/models/schemas|src/core/database|src/core/task_manager|src/api/websocket_handler|src/core/funasr_transcriber|src/core/transcriber_dispatch|src/core/qwen3|requirements.txt'
+
+ZERO="0000000000000000000000000000000000000000"
+changed=""
+# git 给 pre-push 经 stdin 传: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue          # 删远端分支, 无内容可验
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # 新分支: 用与 origin/main 的 merge-base 起算, 否则只算这一条 commit
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+    range="${base:+$base..}$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  changed+=$'\n'"$(git diff --name-only "$range" 2>/dev/null || true)"
+done
+
+echo "==> [pre-push] 本地质量闸"
+if printf '%s' "$changed" | grep -qE "$FUNASR_PATHS_RE"; then
+  echo "[pre-push] 检测到 FunASR 核心路径改动 → unit + parity"
+  bash scripts/run_checks.sh --parity
+else
+  echo "[pre-push] 未碰 FunASR 核心路径 → 仅 unit (改了再跑 --parity)"
+  bash scripts/run_checks.sh
+fi
+echo "==> [pre-push] 质量闸通过, 放行 push"
