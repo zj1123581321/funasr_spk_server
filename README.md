@@ -110,4 +110,8 @@ FUNASR_RUN_INTEGRATION=1 venv/bin/python -m pytest tests/integration/
 
 ## License
 
-内部项目，暂未声明开源协议。
+本项目以 **MIT** 协议开源，见 [LICENSE](LICENSE)。
+
+集成的第三方源码(`src/core/vendor/qwen_asr_gguf/`,来自 [CapsWriter-Offline](https://github.com/HaujetZhao/CapsWriter-Offline),MIT)、依赖库与**模型权重**的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+> ⚠️ 模型权重许可证与本仓库代码相互独立:其中 word_align 用的 **MMS-300M 为 CC-BY-NC-4.0(禁商用)**。本项目定位个人/非商业自用;商用前请逐一复核各模型卡条款。
