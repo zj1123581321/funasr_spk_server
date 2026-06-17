@@ -33,6 +33,7 @@
   - `EngineTimeoutError`
   - `EngineExecutionError(original_exception)`
 - 范围：`src/core/funasr_transcriber.py:354+`、`src/core/task_manager.py:296+`、`src/core/qwen3_transcriber.py`
+- **✅ 本轮接收端落地（2026-06-17，/plan-eng-review + codex）**：`task_manager` 建 `ErrorKind` 枚举 + `classify_error`（isinstance 优先、字符串兜底），替代 `_should_retry_error`/`_is_model_error` 字符串匹配；`errors_total{kind}` 分类变细（+non_retryable_input/model_error）+ 多引擎 reset 安全（仅 funasr）。**剩余 = 发送端类型化异常**（`EngineInitError`/`EngineTimeoutError`/`EngineExecutionError`，碰 funasr_transcriber/qwen3_transcriber 两引擎核心，blast radius 大）；落地后 `classify_error` 可去字符串兜底走纯 isinstance。设计：`docs/开发/2026-06-17-#22去重-#3异常分类-计划.md`。
 
 ### 4. Engine-level 资源配额（codex T10）
 - 现状：FunASR pool 按 `max_concurrent_tasks` 启 worker；Qwen3 启用后无资源协调
@@ -179,6 +180,7 @@
 - **落地（避坑版，codex #2-6）**：**自愈 index**（`(file_hash,折维tag,output_format)→task_id`，命中后校验 `self.tasks[tid]` 仍在且非终态，脏条目当 miss + 删——杀掉「6+ 终态点漏删」整类 bug）；锁内原子查-插（防 race）；**只含已入队任务**（不含 upload_request 阶段未上传占位，避占位死等）；命中折叠要**迁移连接映射**到 canonical + ack 回 canonical task_id（client 改轮询它）。
 - **Cons / 为何独立**：真实耦合跨 task_manager/websocket_handler 两层 + 6+ 终态落地点，blast radius 比「超时根治」大；去重 bug（轮询死 task_id）比它解决的「白跑一个槽」更糟，不与超时根治绑发。
 - **依赖**：本轮薄轮询 + batch 落地 → ✅ 已满足（#20 服务端 2026-06-16 落地），可随时接手。
+- **🩹 本轮已落地「修法一」（2026-06-17，/plan-eng-review + codex）**：`_process_task` 开工前二次查缓存（不建 index、不碰 6+ 终态点），堵**错开到达**的重复转录。**仍待做 = 「几乎同时到达」+ 本条完整去重 index**（自愈 index + 连接迁移 + canonical-id）。另记 **codex#6**：`INSERT OR REPLACE` 在并发同时启动下仍 last-writer-wins 覆盖缓存行（已有问题，去重 index 落地后一并解决）。
 - 优先级：P2
 
 ### 21. per-连接/客户端并发限流（防单客户端霸占 pool=1 队列）

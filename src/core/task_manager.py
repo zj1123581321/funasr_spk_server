@@ -944,9 +944,10 @@ class TaskManager:
     def record_error(self, kind: str):
         """累加错误计数（单调，按 kind 分）。catch 点 / 软错误点调用。
 
-        kind 约定（codex #13 边界）：engine_error（转录异常）/ queue_full（准入拒绝）/
-        timeout（看门狗）/ 以及 websocket 层软错误（invalid_format / file_too_large /
-        bad_hash / task_not_found / auth_failed），由各调用点传入。
+        kind 约定（#3 错误分类纪律）：转录失败经 classify_error 分 engine_error /
+        model_error / non_retryable_input；queue_full（准入拒绝）/ timeout（看门狗）走
+        ErrorKind 枚举值；websocket 层软错误（invalid_format / file_too_large / bad_hash /
+        task_not_found / auth_failed）暂传字符串（范围二待并入 ErrorKind），由各调用点传入。
         """
         self._error_counter[kind] += 1
 
