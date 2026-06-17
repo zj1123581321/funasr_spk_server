@@ -400,8 +400,64 @@ class TaskManager:
                 logger.warning(f"看门狗终态化卡死任务: {task.task_id}")
         return n
 
+    async def _sweep_orphan_upload_files(self) -> int:
+        """孤儿上传文件 sweeper(P4 A2):删 upload_dir 里 mtime 超宽限期 且 无 live 引用的文件。
+
+        孤儿来源:看门狗标 TIMED_OUT 不删文件 / 删失败 / 进程重启前未删的终态文件。
+        文件系统 sweeper(非内存 task 兜底):扛进程重启(文件系统为准)+ 删失败下轮重试,
+        宽限期 >> task_max_processing 规避 unlink-under-worker(codex 二审定案)。
+
+        live 引用 = 任一 PENDING/PROCESSING 任务的 file_path, 或任一 upload session 的
+        finalized_file_path。delete_after_transcription off 时整体不跑(尊重"用户要留文件")。
+        返回实际回收数。本方法在 _queue_lock 外调:引用集快照无 await(原子), 文件 I/O 不占锁。
+        """
+        if not config.transcription.delete_after_transcription:
+            return 0
+        import os
+        import time
+        from pathlib import Path
+
+        upload_dir = Path(config.server.upload_dir)
+        if not upload_dir.is_dir():
+            return 0
+
+        # ① 快照 live 引用集(无 await, 单线程原子, 不会撞 dict 改动)
+        referenced = set()
+        for t in self.tasks.values():
+            if t.status in (TaskStatus.PENDING, TaskStatus.PROCESSING) and t.file_path:
+                referenced.add(os.path.abspath(t.file_path))
+        try:
+            from src.api.websocket_handler import ws_handler
+            for sess in ws_handler.upload_sessions.values():
+                fp = sess.get("finalized_file_path")
+                if fp:
+                    referenced.add(os.path.abspath(fp))
+        except Exception as e:  # ws_handler 不可用不阻断清理
+            logger.debug(f"sweeper 读 upload_sessions 失败(忽略): {e}")
+
+        # ② 遍历 upload_dir, 删超宽限期且无引用的文件(文件 I/O, 有 await)
+        grace = config.transcription.orphan_file_grace_seconds
+        now = time.time()
+        from src.utils.file_utils import delete_file
+        deleted = 0
+        for entry in upload_dir.iterdir():
+            if not entry.is_file():
+                continue
+            try:
+                if now - entry.stat().st_mtime <= grace:
+                    continue  # 宽限期内(可能在途上传), 跳过
+            except OSError:
+                continue
+            if os.path.abspath(str(entry)) in referenced:
+                continue  # live 引用, 保留
+            if await delete_file(str(entry)):
+                deleted += 1
+        if deleted:
+            logger.info(f"孤儿文件 sweeper: 回收 {deleted} 个无引用旧上传文件(>{grace}s)")
+        return deleted
+
     async def _maintenance_loop(self):
-        """后台维护循环：周期跑内存清理 + 看门狗。"""
+        """后台维护循环：周期跑内存清理 + 看门狗 + 孤儿文件 sweeper。"""
         interval = config.transcription.task_cleanup_interval_seconds
         logger.info(f"任务维护循环已启动（间隔 {interval}s）")
         while self.is_running:
@@ -410,6 +466,8 @@ class TaskManager:
                 async with self._queue_lock:
                     self._terminalize_stale_processing()
                     self._evict_terminal_tasks()
+                # 孤儿 sweeper 在锁外做文件 I/O(引用集内部快照即可一致), 不阻塞队列
+                await self._sweep_orphan_upload_files()
             except asyncio.CancelledError:
                 break
             except Exception as e:

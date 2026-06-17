@@ -303,6 +303,10 @@ class TranscriptionConfig(BaseModel):
     upload_session_ttl_seconds: int = 1800
     # 并发 session 硬上限：超限拒新 session（防恶意/坏客户端堆满磁盘）。
     upload_session_max_count: int = 200
+    # 孤儿上传文件 sweeper 宽限期（秒）：upload_dir 里 mtime 超此值 且 无 live 任务/session
+    # 引用的文件才删。必须 >> task_max_processing_seconds(确保 worker 早读完, 避 unlink-under-worker)。
+    # 默认 7200(2h)。delete_after_transcription off 时 sweeper 整体不跑。
+    orphan_file_grace_seconds: int = 7200
 
     model_config = {"protected_namespaces": ()}
 
@@ -583,6 +587,7 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "task_max_processing_seconds", "FUNASR_TASK_MAX_PROCESSING_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_ttl_seconds", "FUNASR_UPLOAD_SESSION_TTL_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_max_count", "FUNASR_UPLOAD_SESSION_MAX_COUNT", int)
+        cls._override_if_set(config_data["transcription"], "orphan_file_grace_seconds", "FUNASR_ORPHAN_FILE_GRACE_SECONDS", int)
 
         # ==================== Database 配置 ====================
         cls._override_if_set(config_data["database"], "max_cache_days", "FUNASR_MAX_CACHE_DAYS", int)

@@ -56,14 +56,20 @@ async def save_uploaded_file(file_data: bytes, filename: str) -> Tuple[str, str]
     return file_path, file_hash
 
 
-async def delete_file(file_path: str):
-    """删除文件"""
+async def delete_file(file_path: str) -> bool:
+    """删除文件。返回是否真正删除了文件(文件不存在 / 删除失败 → False)。
+
+    返回 bool 让调用方(如孤儿 sweeper)能诚实统计实际回收数(codex 二审)。
+    """
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.debug(f"文件已删除: {file_path}")
+            return True
+        return False
     except Exception as e:
         logger.error(f"删除文件失败 {file_path}: {e}")
+        return False
 
 
 def convert_to_wav(input_path: str, output_path: Optional[str] = None) -> str:
