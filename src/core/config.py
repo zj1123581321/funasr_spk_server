@@ -311,6 +311,10 @@ class DatabaseConfig(BaseModel):
     """数据库配置"""
     path: str = "./data/transcription_cache.db"
     max_cache_days: int = 30
+    # 缓存数量软上限(size-cap):clean_old_cache 在 TTL 清理后, 若 COUNT > 此值,
+    # 按 accessed_at LRU 挤到上限。防 30 天内高频转录无限堆积。<=0 关闭(防误配清空)。
+    # 软上限:每小时随 _periodic_cleanup 跑, 非实时硬 cap。
+    max_cache_count: int = 5000
 
     model_config = {"protected_namespaces": ()}
 
@@ -579,6 +583,10 @@ class Config(BaseModel):
         cls._override_if_set(config_data["transcription"], "task_max_processing_seconds", "FUNASR_TASK_MAX_PROCESSING_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_ttl_seconds", "FUNASR_UPLOAD_SESSION_TTL_SECONDS", int)
         cls._override_if_set(config_data["transcription"], "upload_session_max_count", "FUNASR_UPLOAD_SESSION_MAX_COUNT", int)
+
+        # ==================== Database 配置 ====================
+        cls._override_if_set(config_data["database"], "max_cache_days", "FUNASR_MAX_CACHE_DAYS", int)
+        cls._override_if_set(config_data["database"], "max_cache_count", "FUNASR_MAX_CACHE_COUNT", int)
 
         # ==================== Qwen3-Diarize 配置 ====================
         cls._override_if_set(config_data["qwen3"], "asr_model_dir", "FUNASR_QWEN3_ASR_MODEL_DIR")

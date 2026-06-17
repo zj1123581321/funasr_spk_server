@@ -234,6 +234,10 @@ class DatabaseManager:
             await db.execute("""
                 CREATE INDEX IF NOT EXISTS idx_created_at ON transcription_cache(created_at)
             """)
+            # P4 A1: size-cap 按 accessed_at LRU 挤, 加索引避免 ORDER BY 全表扫
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_accessed_at ON transcription_cache(accessed_at)
+            """)
 
             await db.commit()
             logger.info("数据库初始化完成")
@@ -480,20 +484,53 @@ class DatabaseManager:
             logger.error(f"保存缓存结果失败: {e}")
 
     async def clean_old_cache(self):
-        """清理过期的缓存"""
+        """清理缓存:① TTL 过期清理 ② size-cap 数量上限挤出(LRU)。
+
+        每小时随 main._periodic_cleanup 调一次, 是防无限增长的兜底, 非实时硬限。
+
+        ⚠️ 时间戳格式:DB 的 created_at/accessed_at 由 SQLite CURRENT_TIMESTAMP 写入,
+        格式是空格分隔(`2026-06-17 12:00:00`)。比较 cutoff 必须用同格式
+        (`strftime("%Y-%m-%d %H:%M:%S")`), 不能用 Python isoformat() 的 `T` 分隔——
+        字符串比较下 `'T'(0x54) > ' '(0x20)` 会把 cutoff 同日、时间更晚(应保留)的行误删。
+        """
         try:
             cutoff_date = datetime.now() - timedelta(days=config.database.max_cache_days)
+            # 与 DB CURRENT_TIMESTAMP 同格式(空格分隔), 见上方 docstring
+            cutoff_str = cutoff_date.strftime("%Y-%m-%d %H:%M:%S")
+            max_count = config.database.max_cache_count
 
             async with aiosqlite.connect(self.db_path) as db:
+                # ① TTL 清理
                 cursor = await db.execute(
                     "DELETE FROM transcription_cache WHERE created_at < ?",
-                    (cutoff_date.isoformat(),),
+                    (cutoff_str,),
                 )
-                deleted_count = cursor.rowcount
+                ttl_deleted = cursor.rowcount
                 await db.commit()
+                if ttl_deleted > 0:
+                    logger.info(f"清理了 {ttl_deleted} 条过期缓存(TTL>{config.database.max_cache_days}天)")
 
-                if deleted_count > 0:
-                    logger.info(f"清理了 {deleted_count} 条过期缓存")
+                # ② size-cap:仍超数量上限则按 accessed_at LRU 挤(max_count<=0 关闭)
+                size_deleted = 0
+                if max_count and max_count > 0:
+                    cur = await db.execute("SELECT COUNT(*) FROM transcription_cache")
+                    total = (await cur.fetchone())[0]
+                    overflow = total - max_count
+                    if overflow > 0:
+                        # accessed_at 读缓存时更新(true LRU), id ASC 做确定性 tie-breaker
+                        cursor = await db.execute(
+                            """DELETE FROM transcription_cache WHERE id IN (
+                                   SELECT id FROM transcription_cache
+                                   ORDER BY accessed_at ASC, id ASC
+                                   LIMIT ?
+                               )""",
+                            (overflow,),
+                        )
+                        size_deleted = cursor.rowcount
+                        await db.commit()
+                        logger.info(
+                            f"缓存数量超上限({total}>{max_count}), 按 LRU 挤出 {size_deleted} 条"
+                        )
         except Exception as e:
             logger.error(f"清理缓存失败: {e}")
 
