@@ -246,7 +246,7 @@ class TaskManager:
                 # 必须回滚该插入，否则被拒的 PENDING 任务永不终态 → 永久内存泄漏。
                 self.tasks.pop(task_id, None)
                 logger.warning(f"队列已满拒绝任务并回滚: {task_id} (queue={queue_size}/{max_size})")
-                self.record_error("queue_full")
+                self.record_error(ErrorKind.QUEUE_FULL.value)
                 raise QueueFullError(
                     retry_after=self._compute_retry_after(),
                     queue_size=queue_size,
@@ -276,7 +276,7 @@ class TaskManager:
             except asyncio.QueueFull:
                 # 极少数竞态：锁内仍被塞满。同样回滚 self.tasks 插入。
                 self.tasks.pop(task_id, None)
-                self.record_error("queue_full")
+                self.record_error(ErrorKind.QUEUE_FULL.value)
                 raise QueueFullError(
                     retry_after=self._compute_retry_after(),
                     queue_size=self.task_queue.qsize(),
@@ -466,7 +466,7 @@ class TaskManager:
                 task.error = f"任务处理超时（>{limit}s），被看门狗强制终止"
                 task.completed_at = now
                 self._record_terminal(TaskStatus.TIMED_OUT)  # 终态化点 5: 看门狗
-                self.record_error("timeout")
+                self.record_error(ErrorKind.TIMEOUT.value)
                 n += 1
                 logger.warning(f"看门狗终态化卡死任务: {task.task_id}")
         return n
@@ -769,35 +769,34 @@ class TaskManager:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"任务处理失败 {task_id}: {error_msg}")
-            # 错误计数（每次异常都记，含重试中的失败；与终态 FAILED 解耦）
-            self.record_error("engine_error")
+            # #3: 单一分类入口替代字符串匹配。错误计数按 kind 分(每次异常都记, 与终态 FAILED 解耦)
+            kind = classify_error(e)
+            self.record_error(kind.value)
 
             # 更新任务状态
             task.status = TaskStatus.FAILED
             task.error = error_msg
             task.completed_at = datetime.now()
-            
-            # 判断是否需要重试（某些错误不应重试）
-            should_retry = self._should_retry_error(error_msg)
-            
-            # 重试逻辑
-            if should_retry and task.retry_count < config.transcription.retry_times:
+
+            # 重试逻辑(kind.retryable 替代 _should_retry_error 字符串匹配)
+            if kind.retryable and task.retry_count < config.transcription.retry_times:
                 task.retry_count += 1
                 task.status = TaskStatus.PENDING
                 logger.info(f"任务重试 {task_id}: 第{task.retry_count}次")
-                
-                # 对于模型相关错误，尝试重置模型状态
-                if self._is_model_error(error_msg):
+
+                # 模型相关错误尝试重置模型状态。codex #13: 仅 funasr 任务才 reset funasr —
+                # 多引擎下 qwen3 错误判 MODEL_ERROR 不该去 reset 无关引擎(白重启)。
+                if kind.is_model and task.engine == "funasr":
                     await self._try_reset_model()
                     # 添加短暂延迟，让模型有时间恢复
                     await asyncio.sleep(2)
-                
+
                 await self.task_queue.put(task_id)
             else:
                 # 不重试或重试次数已达上限 → 真终态 FAILED（终态化点 3）
                 self._record_terminal(TaskStatus.FAILED)
-                if not should_retry:
-                    logger.warning(f"任务 {task_id} 遇到不可重试的错误: {error_msg}")
+                if not kind.retryable:
+                    logger.warning(f"任务 {task_id} 遇到不可重试的错误({kind.value}): {error_msg}")
                 # 通知失败
                 await self._notify_task_failed(task)
                 
@@ -904,40 +903,6 @@ class TaskManager:
             await send_wework_notification(task, event_type)
         except Exception as e:
             logger.error(f"发送企微通知失败: {e}")
-    
-    def _should_retry_error(self, error_msg: str) -> bool:
-        """判断错误是否应该重试"""
-        # 不应重试的错误类型
-        non_retryable_errors = [
-            "音频时长过短",  # 音频文件本身的问题
-            "文件不存在",
-            "不支持的文件格式",
-            "文件太大",
-            "认证失败",
-        ]
-        
-        for error in non_retryable_errors:
-            if error in error_msg:
-                return False
-        
-        # VAD和索引错误可能是临时问题，允许重试
-        return True
-    
-    def _is_model_error(self, error_msg: str) -> bool:
-        """判断是否是模型相关错误"""
-        model_errors = [
-            "VAD algorithm",
-            "index .* out of bounds",
-            "list index out of range",
-            "window size",
-            "dimension",
-        ]
-        
-        import re
-        for error_pattern in model_errors:
-            if re.search(error_pattern, error_msg, re.IGNORECASE):
-                return True
-        return False
     
     async def _try_reset_model(self):
         """尝试重置模型状态"""
