@@ -172,26 +172,10 @@ class TaskManager:
         # 更新文件路径
         task.file_path = file_path
         
-        # 检查缓存（cache key 含 engine; word_align / diarize 状态折进 engine tag,
-        # 折维逻辑收拢在 database.cache_params_for, D4）
-        if not task.force_refresh:
-            from src.core.database import cache_params_for
-            cache_engine, allow_cross = cache_params_for(task)
-            cached_result = await db_manager.get_cached_result(
-                task.file_hash, task.output_format,
-                engine=cache_engine, allow_cross_engine=allow_cross,
-                options=task.options,
-            )
-            if cached_result:
-                logger.info(f"使用缓存结果: {task_id}")
-                task.status = TaskStatus.COMPLETED
-                self._populate_task_from_cache(task, cached_result)
-                task.completed_at = datetime.now()
-                self._record_terminal(TaskStatus.COMPLETED)  # 终态化点 1: 缓存命中
-
-                # 通知完成
-                await self._notify_task_complete(task)
-                return None
+        # 检查缓存（命中即秒返回不入队）。force_refresh / 折维 key(word_align/diarize,
+        # 折维逻辑收拢在 database.cache_params_for, D4)均在 _try_complete_from_cache 内处理。
+        if await self._try_complete_from_cache(task):
+            return None
         
         # 检查队列是否已满（准入控制）
         async with self._queue_lock:
@@ -270,6 +254,32 @@ class TaskManager:
             # JSON格式缓存结果
             task.result = cached_result
             task.result.metadata = md
+
+    async def _try_complete_from_cache(self, task) -> bool:
+        """查缓存; 命中则组装结果 + 终态化 + 通知, 返回 True。force_refresh 跳过。
+
+        submit_task(提交时)+ #22 _process_task(开工前二次查, 堵错开到达重复转录)共用。
+        折维 key(word_align/diarize)收拢在 cache_params_for(D4)。
+        """
+        if task.force_refresh:
+            return False
+        from src.core.database import cache_params_for
+        cache_engine, allow_cross = cache_params_for(task)
+        cached_result = await db_manager.get_cached_result(
+            task.file_hash, task.output_format,
+            engine=cache_engine, allow_cross_engine=allow_cross, options=task.options,
+        )
+        if not cached_result:
+            return False
+        logger.info(f"使用缓存结果: {task.task_id}")
+        task.status = TaskStatus.COMPLETED
+        self._populate_task_from_cache(task, cached_result)
+        task.progress = 100   # codex #2: 终态化也 set progress, 否则轮询见 completed+progress=0
+        task.error = None     # codex #3: 清失败重试残留 error
+        task.completed_at = datetime.now()
+        self._record_terminal(TaskStatus.COMPLETED)  # 终态化点 1: 缓存命中
+        await self._notify_task_complete(task)
+        return True
 
     # ===== 处理时长估算（EMA）+ 重试退避 =====
 
@@ -556,8 +566,19 @@ class TaskManager:
         # 增加处理任务计数
         async with self._queue_lock:
             self.processing_tasks += 1
-        
+
         try:
+            # #22 in-flight 去重(只堵错开传): 同 hash 前序任务在本任务排队期间已转完写缓存,
+            # 开工前再查一次命中即秒返回, 免重复转录(submit 时查那次还是空的)。必须在 try 内:
+            # 查缓存自身抛错绝不逃逸到 _worker(否则任务卡 PENDING / 不再入队 / 看门狗不管 →
+            # 永久泄漏, codex #1)。"几乎同时到达"(多 worker 并发取出)堵不住 — 已知局限。
+            try:
+                if await self._try_complete_from_cache(task):
+                    await self._maybe_delete_task_file(task)  # 命中即终态, 与正常完成一致删文件
+                    return
+            except Exception as e:
+                logger.warning(f"开工前查缓存失败, 降级继续转录 {task_id}: {e}")
+
             # 更新任务状态
             task.status = TaskStatus.PROCESSING
             task.started_at = datetime.now()
