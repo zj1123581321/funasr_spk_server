@@ -189,6 +189,18 @@
 - **触发条件**：接入不可信客户端 / 客户端数增多 / 实测出现互饿。
 - 优先级：P3
 
+### 24. 分片上传 + 单文件错误分支的端到端测试补全
+- 来源：`2026-06-17 根路径 ws 事故 retro` 的同型盲区排查（`docs/开发/2026-06-17-根路径ws握手被HTML状态页劫持-事故retro.md`）
+- **What**：
+  1. 写一个**真逐帧 `upload_chunk` ws 帧序列**的 e2e 测试，走 `_handle_chunked_upload_request` → 多帧 `upload_chunk` → 收齐自动 `_finalize_chunked_upload` 真实累积路径。
+  2. 给单文件 `_handle_upload_data` 的错误分支（size_mismatch / hash_mismatch / missing_file_data / 单文件 queue_full）补 unit 覆盖（现在只有默认 skip 的 e2e）。
+  3. 顺手：`test_single_client_full_chunked_upload`（`test_qwen3_server_websocket_e2e.py:245`）实为单帧，改名或补真 chunked 版。
+- **Why**：与根路径事故**同型**——测试用便利桩（单帧 / 手搓 session dict）避开了生产真实路径（逐帧累积）。`_handle_chunk_upload` 的分片计数/去重/收齐/乱序重复逻辑**零端到端覆盖**，而长音频/大批量正是它的主场景（背景里的 300s 超时、批量 100+ 都是 chunked 客户端）。
+- **现状/起点**：`_ws_e2e_common.py:103-106` 全走单帧 `upload_data`；`test_websocket_finalize_resilience.py` 手搓已收齐 session 绕过累积；全套无真 `upload_chunk` 帧。
+- **Cons / 为何独立**：要构造真实分片帧序列 + 起真 server，是一块完整测试工作，适合新 session 专注做。
+- **触发条件**：随时可做（纯测试补强，无依赖）；建议在动任何分片上传代码前先补，作为安全网。
+- 优先级：P2（事故同型盲区，长音频主场景零覆盖）
+
 ### 23. 冷启动 /health 可观测性（启动序改造）
 - 来源：`codex` 外部声音 #5/#6（2026-06-16，可观测性仪表盘评审）
 - **What**：让 /health 在服务冷启动期（模型加载中/加载卡死/失败）也能应答，报 `starting`/`loading`/`degraded`。
