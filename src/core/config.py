@@ -371,6 +371,17 @@ class ObservabilityConfig(BaseModel):
     # 或 ?token= query; 未设 + host=0.0.0.0 → /metrics 拒绝 (A5). None = 未设.
     metrics_token: Optional[str] = None
 
+    # ---- 告警 (A: scripts/metrics_alert.py 用, 与 server 进程解耦) ----
+    # 告警总开关. server 进程本身不读这些字段, 仅外部告警脚本读 (放这里复用
+    # config 体系 + env 覆盖 + metrics_token 共享, 单一 source of truth)。默认关。
+    alert_enabled: bool = False
+    # 队列饱和告警阈值: queue_size/queue_max >= 该比例则告警 (默认 0.8)。
+    alert_queue_saturation_ratio: float = 0.8
+    # 错误激增告警阈值: errors_total 单轮增量 >= 该值则告警 (默认 5)。
+    alert_error_surge_threshold: int = 5
+    # 同一状态型告警的去抖窗口 (秒): 该窗口内不重复通知 (默认 900=15min)。
+    alert_cooldown_seconds: int = 900
+
     model_config = {"protected_namespaces": ()}
 
 
@@ -674,6 +685,10 @@ class Config(BaseModel):
         # ==================== 可观测性配置 (P1) ====================
         cls._override_if_set(config_data["observability"], "metrics_enabled", "FUNASR_METRICS_ENABLED", cls._parse_bool)
         cls._override_if_set(config_data["observability"], "metrics_token", "FUNASR_METRICS_TOKEN")
+        cls._override_if_set(config_data["observability"], "alert_enabled", "FUNASR_ALERT_ENABLED", cls._parse_bool)
+        cls._override_if_set(config_data["observability"], "alert_queue_saturation_ratio", "FUNASR_ALERT_QUEUE_SATURATION_RATIO", float)
+        cls._override_if_set(config_data["observability"], "alert_error_surge_threshold", "FUNASR_ALERT_ERROR_SURGE_THRESHOLD", int)
+        cls._override_if_set(config_data["observability"], "alert_cooldown_seconds", "FUNASR_ALERT_COOLDOWN_SECONDS", int)
 
         return config_data
 
