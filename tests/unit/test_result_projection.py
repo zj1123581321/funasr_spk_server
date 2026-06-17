@@ -17,7 +17,11 @@ import aiosqlite
 import pytest
 
 from src.core.database import DatabaseManager
-from src.core.result_projection import project_result_nospk, segments_to_srt_text
+from src.core.result_projection import (
+    cache_hit_metadata,
+    project_result_nospk,
+    segments_to_srt_text,
+)
 from src.models.schemas import (
     TranscribeOptions,
     TranscriptionResult,
@@ -79,6 +83,64 @@ class TestProjectResultNospk:
     def test_segments_to_srt_text_with_speaker(self):
         srt = segments_to_srt_text(make_diarized_result().segments)
         assert "Speaker1:你好" in srt
+
+
+# ==================== 共享纯函数: cache_hit_metadata (3 处出口去重) ====================
+
+
+class TestCacheHitMetadata:
+    """缓存命中出口共享纯逻辑: projected 提取 + metadata 构建 + SRT-dict 校验.
+    codex #7/#8: 统一用 get 不 pop (不改 cached_result); SRT 无副作用; 控制流各出口自理.
+    """
+
+    def test_json_extracts_projected_and_builds_metadata(self):
+        r = make_diarized_result("h")
+        r.metadata = {"projected": True}
+        md, projected, srt_ok = cache_hit_metadata(
+            r, engine="qwen3", options=SPK, output_format="json"
+        )
+        assert srt_ok is True
+        assert projected is True
+        assert md["projected"] is True
+        assert md["engine"] == "qwen3"
+        assert md["diarize"] is True
+
+    def test_json_projected_absent_defaults_false(self):
+        r = make_diarized_result("h")  # metadata=None
+        md, projected, srt_ok = cache_hit_metadata(
+            r, engine="qwen3", options=SPK, output_format="json"
+        )
+        assert projected is False
+        assert md["projected"] is False
+
+    def test_srt_dict_valid_extracts_projected_without_mutating(self):
+        cached = {"format": "srt", "content": "1\n...\n你好\n",
+                  "file_hash": "h", "projected": True, "duration": 10.0}
+        md, projected, srt_ok = cache_hit_metadata(
+            cached, engine="funasr", options=NOSPK, output_format="srt"
+        )
+        assert srt_ok is True
+        assert projected is True
+        assert md["projected"] is True and md["diarize"] is False
+        # codex #7/#8: 不 pop, 原 dict 的 projected 仍在 (调用方负责出口时排除)
+        assert cached.get("projected") is True
+
+    def test_srt_non_dict_is_invalid(self):
+        """SRT 请求但缓存是 TranscriptionResult (非 srt-dict) → srt_ok=False, 调用方跳过缓存"""
+        r = make_diarized_result("h")
+        md, projected, srt_ok = cache_hit_metadata(
+            r, engine="qwen3", options=NOSPK, output_format="srt"
+        )
+        assert srt_ok is False
+        assert md is None
+
+    def test_srt_dict_wrong_format_is_invalid(self):
+        cached = {"format": "json", "content": "x"}
+        md, projected, srt_ok = cache_hit_metadata(
+            cached, engine="qwen3", options=NOSPK, output_format="srt"
+        )
+        assert srt_ok is False
+        assert md is None
 
 
 # ==================== 出口 1: get_cached_result ====================

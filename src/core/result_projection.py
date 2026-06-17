@@ -63,6 +63,31 @@ def build_result_metadata(
     return md
 
 
+def cache_hit_metadata(cached_result, *, engine, options, output_format):
+    """缓存命中出口共享纯逻辑 (3 处去重: ws 整文件 / ws 分片 / task_manager.submit).
+
+    把 "projected 提取 + metadata 构建 + SRT-dict 有效性判断" 这段被抄 3 份的逻辑收拢成
+    一个**无副作用**纯函数. 返回 (metadata, projected, srt_ok):
+    - metadata: build_result_metadata 的结果 (srt_ok=False 时为 None)
+    - projected: 该缓存是否由 diarized 投影而来 (回显用)
+    - srt_ok: SRT 请求时缓存是否为合法 srt-dict; False ⇒ 调用方应跳过缓存继续处理
+
+    codex #7/#8 定的边界: 统一用 get 不 pop (绝不改 cached_result); 控制流 (set task /
+    计数 / 发消息 / 排除 projected key 不泄漏给客户端) 仍由各出口自理, 本函数只组装数据.
+    """
+    if output_format == "srt":
+        srt_ok = isinstance(cached_result, dict) and cached_result.get("format") == "srt"
+        if not srt_ok:
+            return None, False, False
+        projected = bool(cached_result.get("projected", False))  # get 不 pop
+    else:
+        projected = bool((cached_result.metadata or {}).get("projected"))
+    md = build_result_metadata(
+        engine=engine, options=options, output_format=output_format, projected=projected,
+    )
+    return md, projected, True
+
+
 def project_result_nospk(result: TranscriptionResult) -> TranscriptionResult:
     """把 diarized 结果投影成 nospk 形态 (纯函数, 不动入参, 幂等).
 

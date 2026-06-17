@@ -233,29 +233,27 @@ class WebSocketHandler:
                     logger.info(f"使用缓存结果（upload_request阶段）: {task.task_id}")
 
                     # E2: 早返回出口同样组装 effective options 回显
-                    from src.core.result_projection import build_result_metadata
+                    # DRY(commit 1): projected 提取 + metadata 构建走共享纯函数 cache_hit_metadata
+                    from src.core.result_projection import cache_hit_metadata
+                    _md, _proj, _srt_ok = cache_hit_metadata(
+                        cached_result, engine=task.engine, options=task.options,
+                        output_format=output_format,
+                    )
 
                     # 根据输出格式准备结果
                     if output_format == "srt":
-                        if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
-                            _proj = bool(cached_result.pop("projected", False))
-                            cached_result["metadata"] = build_result_metadata(
-                                engine=task.engine, options=task.options,
-                                output_format="srt", projected=_proj,
-                            )
-                            result_data = cached_result
+                        if _srt_ok:
+                            # cache_hit_metadata 用 get 不 pop, 此处排除 projected key 不泄漏给客户端
+                            result_data = {k: v for k, v in cached_result.items() if k != "projected"}
+                            result_data["metadata"] = _md
                         else:
                             # 如果缓存中没有SRT格式，跳过缓存
                             logger.info("缓存中没有SRT格式，继续处理")
                             result_data = None
                     else:
                         # JSON格式
-                        _proj = bool((cached_result.metadata or {}).get("projected"))
-                        cached_result.metadata = build_result_metadata(
-                            engine=task.engine, options=task.options,
-                            output_format="json", projected=_proj,
-                        )
-                        result_data = cached_result.dict() if cached_result else None
+                        cached_result.metadata = _md
+                        result_data = cached_result.dict()
                     
                     if result_data:
                         # 直接返回缓存结果
@@ -733,26 +731,24 @@ class WebSocketHandler:
 
                     # E2: 早返回出口组装 effective options 回显 (session 回填值已在
                     # _session_options 收拢, 优先级 request > session 回填 > config)
-                    from src.core.result_projection import build_result_metadata
+                    # DRY(commit 1): projected 提取 + metadata 构建走共享纯函数 cache_hit_metadata
+                    from src.core.result_projection import cache_hit_metadata
+                    _md, _proj, _srt_ok = cache_hit_metadata(
+                        cached_result, engine=_engine_for_cache, options=_session_options,
+                        output_format=session["output_format"],
+                    )
 
                     # 根据输出格式准备结果
                     if session["output_format"] == "srt":
-                        if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
-                            _proj = bool(cached_result.pop("projected", False))
-                            cached_result["metadata"] = build_result_metadata(
-                                engine=_engine_for_cache, options=_session_options,
-                                output_format="srt", projected=_proj,
-                            )
-                            result_data = cached_result
+                        if _srt_ok:
+                            # cache_hit_metadata 用 get 不 pop, 此处排除 projected key 不泄漏给客户端
+                            result_data = {k: v for k, v in cached_result.items() if k != "projected"}
+                            result_data["metadata"] = _md
                         else:
                             result_data = None
                     else:
-                        _proj = bool((cached_result.metadata or {}).get("projected"))
-                        cached_result.metadata = build_result_metadata(
-                            engine=_engine_for_cache, options=_session_options,
-                            output_format="json", projected=_proj,
-                        )
-                        result_data = cached_result.dict() if cached_result else None
+                        cached_result.metadata = _md
+                        result_data = cached_result.dict()
                     
                     if result_data:
                         # 清理临时文件和会话

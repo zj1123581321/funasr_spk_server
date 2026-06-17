@@ -185,38 +185,7 @@ class TaskManager:
             if cached_result:
                 logger.info(f"使用缓存结果: {task_id}")
                 task.status = TaskStatus.COMPLETED
-
-                cache_projected = False
-                if task.output_format == "srt":
-                    # SRT格式缓存结果
-                    if isinstance(cached_result, dict) and cached_result.get("format") == "srt":
-                        task.srt_content = cached_result["content"]
-                        cache_projected = bool(cached_result.get("projected"))
-                        # 创建简化的结果对象
-                        from src.models.schemas import TranscriptionResult
-                        task.result = TranscriptionResult(
-                            task_id=task_id,
-                            file_name=task.file_name,
-                            file_hash=task.file_hash,
-                            duration=cached_result.get("duration", 0),
-                            segments=[],
-                            speakers=[],
-                            processing_time=0,
-                            error=None
-                        )
-                else:
-                    # JSON格式缓存结果
-                    task.result = cached_result
-                    cache_projected = bool((cached_result.metadata or {}).get("projected"))
-
-                # E2: effective options 回显 (serve 层组装, 不随缓存存取)
-                if task.result is not None:
-                    from src.core.result_projection import build_result_metadata
-                    task.result.metadata = build_result_metadata(
-                        engine=task.engine, options=task.options,
-                        output_format=task.output_format, projected=cache_projected,
-                    )
-
+                self._populate_task_from_cache(task, cached_result)
                 task.completed_at = datetime.now()
                 self._record_terminal(TaskStatus.COMPLETED)  # 终态化点 1: 缓存命中
 
@@ -270,6 +239,38 @@ class TaskManager:
                     max_queue_size=config.transcription.max_queue_size,
                 )
     
+    def _populate_task_from_cache(self, task, cached_result):
+        """缓存命中: 组装 task.result / srt_content / metadata(等价于原 submit 命中分支)。
+
+        DRY(commit 1): submit_task + #22 _process_task 二次查缓存共用。projected 提取 +
+        metadata 构建走 result_projection.cache_hit_metadata(3 处出口同一纯函数)。
+        SRT 非 srt-dict(srt_ok=False)→ 沿用原行为不设 task.result。
+        """
+        from src.core.result_projection import cache_hit_metadata
+        md, _projected, srt_ok = cache_hit_metadata(
+            cached_result, engine=task.engine, options=task.options,
+            output_format=task.output_format,
+        )
+        if task.output_format == "srt":
+            if srt_ok:
+                task.srt_content = cached_result["content"]
+                from src.models.schemas import TranscriptionResult
+                task.result = TranscriptionResult(
+                    task_id=task.task_id,
+                    file_name=task.file_name,
+                    file_hash=task.file_hash,
+                    duration=cached_result.get("duration", 0),
+                    segments=[],
+                    speakers=[],
+                    processing_time=0,
+                    error=None,
+                )
+                task.result.metadata = md
+        else:
+            # JSON格式缓存结果
+            task.result = cached_result
+            task.result.metadata = md
+
     # ===== 处理时长估算（EMA）+ 重试退避 =====
 
     def _estimate_task_seconds(self) -> float:
