@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FunASR 可观测性告警 LaunchAgent 模板。
+
+  作用: 每 StartInterval 秒拉起一次 scripts/metrics_alert.py, 拉 /health + /metrics,
+        超阈值 (队列饱和 / 错误激增 / 服务不可达) 发企微。与 server 进程解耦。
+
+  安装 (见 docs/部署.md「可观测性告警」节):
+    1. 把下面两处 __PROJECT_ROOT__ 改成绝对路径 (prod 通常 /Users/<you>/Production/funasr_spk_server)
+    2. cp 到 ~/Library/LaunchAgents/com.funasr.metrics-alert.plist
+    3. launchctl load -w ~/Library/LaunchAgents/com.funasr.metrics-alert.plist
+    告警开关/阈值/webhook/token 走项目 .env (脚本在 WorkingDirectory 下自动 load_dotenv):
+        FUNASR_ALERT_ENABLED=true
+        FUNASR_WEBHOOK_URL=...        (复用通知 webhook)
+        FUNASR_METRICS_TOKEN=...      (host=0.0.0.0 时 /metrics 鉴权必需)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.funasr.metrics-alert</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PROJECT_ROOT__/venv/bin/python</string>
+        <string>__PROJECT_ROOT__/scripts/metrics_alert.py</string>
+    </array>
+
+    <!-- 关键: 在项目根跑, 让 load_dotenv() 读 .env + 相对 ./data 状态文件落对地方 -->
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_ROOT__</string>
+
+    <!-- 轮询间隔 (秒); 60s 可在一分钟内发现问题, 远小于 cooldown 900s -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- 加载即跑一次 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__PROJECT_ROOT__/logs/metrics-alert.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_ROOT__/logs/metrics-alert.log</string>
+</dict>
+</plist>

@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -67,6 +69,40 @@ def parse_prometheus(text: str) -> dict:
         else:
             flat[name] = value
     return {"flat": flat, "labeled": labeled}
+
+
+def build_probe(*, health_ok: bool, health_body: Optional[dict],
+                metrics_text: Optional[str]) -> dict:
+    """把 /health + /metrics 的 HTTP 结果组装成 evaluate_alerts 的 probe 输入 (纯函数)。
+
+    - health_ok: /health 是否拿到 2xx。False → 服务不可达。
+    - health_body: /health JSON (含 status 字段), 不可达时 None。
+    - metrics_text: /metrics 文本; 拿不到 (鉴权失败/错误) → None → 不评估指标型规则。
+    """
+    return {
+        "reachable": bool(health_ok),
+        "health_status": (health_body or {}).get("status") if health_ok else None,
+        "metrics": parse_prometheus(metrics_text) if metrics_text is not None else None,
+    }
+
+
+def load_state(path: str) -> dict:
+    """读告警 state JSON; 不存在 / 损坏 → 返回 {} (首轮语义, 容错优先)。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_state(path: str, state: dict) -> None:
+    """落盘告警 state (建父目录)。"""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
 
 def _make_alert(key: str, level: str, title: str, body: str) -> dict:

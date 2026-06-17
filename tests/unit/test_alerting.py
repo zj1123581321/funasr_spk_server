@@ -9,6 +9,9 @@ from src.observability.alerting import (
     AlertThresholds,
     parse_prometheus,
     evaluate_alerts,
+    build_probe,
+    load_state,
+    save_state,
 )
 
 
@@ -210,3 +213,83 @@ class TestStateShape:
         keys = {a["key"] for a in res["alerts"]}
         assert "queue_saturation" in keys
         assert "error_surge" in keys
+
+
+# ==================== build_probe (HTTP 响应 → probe) ====================
+
+class TestBuildProbe:
+    def test_healthy_with_metrics(self):
+        p = build_probe(health_ok=True, health_body={"status": "healthy"},
+                        metrics_text=_METRICS_SAMPLE)
+        assert p["reachable"] is True
+        assert p["health_status"] == "healthy"
+        assert p["metrics"]["flat"]["funasr_queue_size"] == 18.0
+
+    def test_unreachable(self):
+        p = build_probe(health_ok=False, health_body=None, metrics_text=None)
+        assert p["reachable"] is False
+        assert p["health_status"] is None
+        assert p["metrics"] is None
+
+    def test_reachable_but_metrics_denied(self):
+        # /health 通但 /metrics 鉴权失败 (None text) → reachable, metrics None
+        p = build_probe(health_ok=True, health_body={"status": "healthy"},
+                        metrics_text=None)
+        assert p["reachable"] is True
+        assert p["metrics"] is None
+
+
+# ==================== state 读写 ====================
+
+class TestStateIO:
+    def test_load_missing_returns_empty(self, tmp_path):
+        assert load_state(str(tmp_path / "nope.json")) == {}
+
+    def test_round_trip(self, tmp_path):
+        path = str(tmp_path / "state.json")
+        state = {"active": {"server_down": {"since": 1.0, "last_notified": 1.0}},
+                 "error_total_seen": 42.0}
+        save_state(path, state)
+        assert load_state(path) == state
+
+    def test_load_corrupt_returns_empty(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text("{not json")
+        assert load_state(str(path)) == {}
+
+    def test_save_creates_parent_dir(self, tmp_path):
+        path = str(tmp_path / "sub" / "dir" / "state.json")
+        save_state(path, {"active": {}})
+        assert load_state(path) == {"active": {}}
+
+
+# ==================== 跨模块: 真渲染器 → 解析器 round-trip ====================
+
+class TestRenderParseRoundTrip:
+    """钉死 parse_prometheus 与 http_endpoints.render_prometheus 输出格式一致,
+    防两模块各演化导致告警脚本静默读不到指标。"""
+
+    def test_real_render_parses(self):
+        from src.api.http_endpoints import render_prometheus
+
+        snapshot = {
+            "queue_size": 18, "max_queue_size": 20, "pending": 3, "processing": 1,
+            "tasks_in_memory": 25, "task_seconds_ema": 42.5, "pool_size": 1,
+            "engine": "funasr",
+            "terminal_total": {"completed": 100, "failed": 4},
+            "errors_total": {"engine_error": 7, "queue_full": 3},
+        }
+        text = render_prometheus(snapshot, cache_stats={"hits": 50}, vram_mib=None)
+        parsed = parse_prometheus(text)
+
+        assert parsed["flat"]["funasr_queue_size"] == 18.0
+        assert parsed["flat"]["funasr_queue_max"] == 20.0
+        assert parsed["labeled"]["funasr_errors_total"]["engine_error"] == 7.0
+        assert parsed["labeled"]["funasr_errors_total"]["queue_full"] == 3.0
+        # 解析结果直接喂 evaluate 不报错且能识别饱和
+        res = evaluate_alerts(
+            probe={"reachable": True, "health_status": "healthy", "metrics": parsed},
+            prev_state={"error_total_seen": 0.0}, thresholds=_thresholds(), now_ts=1.0,
+        )
+        keys = {a["key"] for a in res["alerts"]}
+        assert "queue_saturation" in keys and "error_surge" in keys
