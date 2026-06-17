@@ -301,9 +301,13 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 ## self.tasks 内存清理(TTL + size-cap 双保险)
 - `_evict_terminal_tasks()`: 终态任务(completed/failed/cancelled/timed_out)按 `task_retention_ttl_seconds`(默认 1h,**必须 ≥ 客户端轮询窗口**)+ 硬数量上限 `task_max_retained`(默认 500)清理;**非终态(PENDING/PROCESSING)永不清**。
 - `_terminalize_stale_processing()`: 看门狗,超 `task_max_processing_seconds`(默认 1h)仍 PROCESSING → 强制 `TaskStatus.TIMED_OUT`(只改状态,不强杀在途 worker await — 真卡死 worker 槽位回收超止血范围)。
-- `_maintenance_loop()`: `start()` 拉起的周期协程(`task_cleanup_interval_seconds`,默认 60s),跑看门狗 + 清理,`stop()` 取消。
+- `_maintenance_loop()`: `start()` 拉起的周期协程(`task_cleanup_interval_seconds`,默认 60s),跑看门狗 + 清理 + **孤儿文件 sweeper**,`stop()` 取消。
 - **⚠️ codex 窟窿**: `create_task` 先写 `self.tasks`,`submit_task` 才查容量;队列满**必须 `self.tasks.pop(task_id)` 回滚**,否则被拒 PENDING 永不终态 → 永久泄漏。学习: [[见 task_create_before_queue_check_leak]]。
 - `was_evicted(task_id)`(有界 LRU)让轮询区分 `task_expired`(清过) vs `task_not_found`(从未有)。
+
+## 孤儿上传文件 sweeper(P4 A2,2026-06-17)
+看门狗标 `TIMED_OUT` **只改状态不删文件**;这类(及删失败 / 进程重启前未删的终态)文件成孤儿堆 `upload_dir`。**`_sweep_orphan_upload_files()`**(`task_manager.py`,在 `_maintenance_loop` 锁外跑文件 I/O):删 `upload_dir` 里 mtime 超 `orphan_file_grace_seconds`(默认 7200=2h,env `FUNASR_ORPHAN_FILE_GRACE_SECONDS`)**且** 无 live 引用(PENDING/PROCESSING 任务 `file_path` + upload session `finalized_file_path`,后者经 `ws_handler` 单例读)的文件。**文件系统 sweeper 而非内存 evict 兜底**(codex 二审定案):扛进程重启(文件系统为准)+ 删失败下轮重试,宽限期 >> `task_max_processing_seconds` 规避 unlink-under-worker。`delete_after_transcription=False` 时整体不跑(尊重"用户要留文件")。定案: `docs/开发/2026-06-17-P4小硬化-A1缓存sizecap-A2孤儿文件-落地计划.md`。
+- **DRY**(P4 F1): cancel/complete/failed 三处"无同 hash live 任务则删文件"逻辑统一到 `_maybe_delete_task_file(task, reason=)`。`file_utils.delete_file` 返 `bool`(诚实统计回收数)。
 
 ## 分片 session 资源处理(`websocket_handler.py`)
 - session 有状态机(`state`: uploading→ready→submitted)+ `created_at`(TTL)+ `finalized_file_path`(重试复用)。
@@ -328,6 +332,11 @@ FUNASR_PROFILE=cuda_dev applied. 覆盖字段 (5):
 - **指标源**: `task_manager.get_metrics_snapshot()`。**单调计数器**(A1/codex #14)`tasks_terminal_total{status}`/`errors_total{kind}` 在**全部终态化点**(缓存命中/完成/失败/取消/看门狗)累加，**不扫 self.tasks**(TTL 淘汰会让 Prometheus rate 静默回退)。瞬时 gauge(queue/inflight/pending/cache)读现态。
 - **config**: `ObservabilityConfig`(`metrics_enabled`/`metrics_token`) + env `FUNASR_METRICS_ENABLED`/`FUNASR_METRICS_TOKEN`。
 - **测试便利**: `scripts/run_checks.sh [--parity|--all]`（改 FunASR 路径后跑 `--parity`）。
+- **pre-push 质量闸**(P4 A4,2026-06-17): `scripts/git-hooks/pre-push` + `bash scripts/install-git-hooks.sh`(设 `core.hooksPath=scripts/git-hooks`)。push 前始终跑 unit;本次 push 碰 FunASR 核心路径(schemas/database/task_manager/websocket_handler/funasr_transcriber/transcriber_dispatch/qwen3/requirements.txt)→ 追加 parity。紧急放行 `FUNASR_SKIP_PREPUSH=1 git push`;venv 缺失非阻断跳过。
+
+# DB 缓存清理(P4 A1,2026-06-17)
+
+`database.clean_old_cache()`(`main._periodic_cleanup` 每小时调)两阶段:① TTL 删 `created_at` 超 `max_cache_days`(默认 30);② **size-cap** 仍超 `max_cache_count`(默认 5000,env `FUNASR_MAX_CACHE_COUNT`,`<=0` 关闭)则按 `accessed_at ASC, id ASC`(true LRU,`accessed_at` 读缓存时更新 + 确定性 tie-breaker)挤到上限。软上限兜底非实时硬 cap。`idx_accessed_at` 索引避免全表扫。**⚠️ 时间戳比较铁律**:DB 用 SQLite `CURRENT_TIMESTAMP`(空格分隔),cutoff 必须 `strftime("%Y-%m-%d %H:%M:%S")` 对齐,**禁用 `isoformat()`**(`T` 分隔字符串比较 `'T'>' '` 误删 cutoff 同日晚于 cutoff 时刻的行,旧 regression 已修)。
 
 # 部署约定（macOS only）
 
