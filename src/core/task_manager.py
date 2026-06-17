@@ -416,6 +416,31 @@ class TaskManager:
                 logger.error(f"维护循环错误: {e}")
         logger.info("任务维护循环已停止")
 
+    async def _maybe_delete_task_file(self, task, *, reason: str = "") -> bool:
+        """删上传文件:delete_after_transcription on + 有 file_path + 无其他 live
+        (PENDING/PROCESSING)同 hash 任务 → best-effort 删。返回是否发起删除。
+
+        DRY(F1):cancel / complete / failed 三处终态删除逻辑此前各写一份, 统一到此。
+        注:cancel 删 PROCESSING 任务文件本就有 worker race(既有, 看门狗/取消不杀在途
+        worker 的已知范围);本 helper 仅去重, 不改变该行为。
+        """
+        if not (config.transcription.delete_after_transcription and task.file_path):
+            return False
+        # 同 file_hash 仍有 live(PENDING/PROCESSING)任务 → 别人还要用, 不删
+        has_live_same_hash = any(
+            t.file_hash == task.file_hash
+            and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
+            for t in self.tasks.values()
+            if t.task_id != task.task_id
+        )
+        if has_live_same_hash:
+            logger.debug(f"保留文件，还有其他任务使用: {task.file_path}")
+            return False
+        from src.utils.file_utils import delete_file
+        await delete_file(task.file_path)
+        logger.debug(f"{reason}文件已删除: {task.file_path}")
+        return True
+
     async def cancel_task(self, task_id: str) -> bool:
         """取消任务"""
         task = self.get_task(task_id)
@@ -430,19 +455,9 @@ class TaskManager:
         task.completed_at = datetime.now()
         self._record_terminal(TaskStatus.CANCELLED)  # 终态化点 4: 取消
 
-        # 删除文件（如果配置了且没有其他任务使用）
-        if config.transcription.delete_after_transcription and task.file_path:
-            has_pending_tasks = any(
-                t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
-                for t in self.tasks.values()
-                if t.task_id != task.task_id
-            )
-            
-            if not has_pending_tasks:
-                from src.utils.file_utils import delete_file
-                await delete_file(task.file_path)
-                logger.debug(f"任务取消，文件已删除: {task.file_path}")
-        
+        # 删除文件（F1: 统一走 _maybe_delete_task_file）
+        await self._maybe_delete_task_file(task, reason="任务取消，")
+
         logger.info(f"任务已取消: {task_id}")
         return True
     
@@ -602,21 +617,8 @@ class TaskManager:
             # 通知完成
             await self._notify_task_complete(task)
             
-            # 删除文件（如果配置了），但要检查是否还有其他任务使用这个文件
-            if config.transcription.delete_after_transcription:
-                # 检查是否还有其他任务使用相同的文件哈希
-                has_pending_tasks = any(
-                    t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
-                    for t in self.tasks.values()
-                    if t.task_id != task.task_id
-                )
-                
-                if not has_pending_tasks:
-                    from src.utils.file_utils import delete_file
-                    await delete_file(task.file_path)
-                    logger.debug(f"文件已删除: {task.file_path}")
-                else:
-                    logger.debug(f"保留文件，还有其他任务使用: {task.file_path}")
+            # 删除文件（F1: 统一走 _maybe_delete_task_file）
+            await self._maybe_delete_task_file(task)
             
             # 可观测性: per-task diarize 生效值 + 投影标记 (stats 三维度之一)
             logger.info(
@@ -659,19 +661,9 @@ class TaskManager:
                 # 通知失败
                 await self._notify_task_failed(task)
                 
-                # 删除文件（如果配置了且没有其他任务使用）
-                if config.transcription.delete_after_transcription and task.file_path:
-                    has_pending_tasks = any(
-                        t.file_hash == task.file_hash and t.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]
-                        for t in self.tasks.values()
-                        if t.task_id != task.task_id
-                    )
-                    
-                    if not has_pending_tasks:
-                        from src.utils.file_utils import delete_file
-                        await delete_file(task.file_path)
-                        logger.debug(f"任务失败，文件已删除: {task.file_path}")
-                
+                # 删除文件（F1: 统一走 _maybe_delete_task_file）
+                await self._maybe_delete_task_file(task, reason="任务失败，")
+
                 # 发送企微通知
                 await self._send_wework_notification(task, "failed")
         finally:
